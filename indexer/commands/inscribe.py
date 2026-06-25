@@ -31,10 +31,10 @@ import os
 import random
 import sys
 
-from . import builder, tap
-from .bitcoind import BitcoindClient, BitcoindError
-from .config import Config, RESERVED_ASSETS
-from .counterparty import CounterpartyClient, CounterpartyError
+from .. import builder, tap
+from ..bitcoind import BitcoindClient, BitcoindError
+from ..config import Config, RESERVED_ASSETS
+from ..counterparty import CounterpartyClient, CounterpartyError
 
 COIN = 100_000_000
 DUST = 546                     # conservative dust floor for our outputs

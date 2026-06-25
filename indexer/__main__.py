@@ -10,7 +10,7 @@ import argparse
 import logging
 import sys
 
-from . import commands, inscribe, wallet
+from .commands import inscribe, read, wallet
 from .bitcoind import BitcoindError
 from .config import Config
 from .counterparty import CounterpartyError
@@ -184,18 +184,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "status":
-        return commands.cmd_status(config)
+        return read.cmd_status(config)
 
     if args.command == "info":
-        return commands.cmd_info(
+        return read.cmd_info(
             config, args.identifier, as_json=args.json, raw=args.raw, save=args.save
         )
 
     if args.command == "list":
-        return commands.cmd_list(config, recent=args.recent, owner=args.owner, block=args.block)
+        return read.cmd_list(config, recent=args.recent, owner=args.owner, block=args.block)
 
     if args.command == "validate":
-        return commands.cmd_validate(config, args.txid)
+        return read.cmd_validate(config, args.txid)
 
     if args.command == "wallet":
         if not getattr(args, "wallet_command", None):

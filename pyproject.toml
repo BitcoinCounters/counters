@@ -16,5 +16,5 @@ dependencies = [
 [project.scripts]
 counter = "indexer.__main__:main"
 
-[tool.setuptools]
-packages = ["indexer"]
+[tool.setuptools.packages.find]
+include = ["indexer*"]

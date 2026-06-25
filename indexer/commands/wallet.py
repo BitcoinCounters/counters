@@ -17,11 +17,11 @@ from decimal import Decimal
 
 from mnemonic import Mnemonic
 
-from .bip32 import bip86_account, bip86_descriptors
-from .bitcoind import BitcoindClient, BitcoindError
-from .config import Config
-from .counterparty import CounterpartyClient, CounterpartyError
-from .store import Store
+from ..bip32 import bip86_account, bip86_descriptors
+from ..bitcoind import BitcoindClient, BitcoindError
+from ..config import Config
+from ..counterparty import CounterpartyClient, CounterpartyError
+from ..store import Store
 
 _KEYPOOL = 1000  # addresses Core derives per chain
 
