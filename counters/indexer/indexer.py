@@ -211,7 +211,7 @@ class Indexer:
         self._install_signal_handler()
         resume = self.store.get_last_height(self.config.start_height) + 1
         resume = max(resume, self.config.start_height)
-        log.info(
+        log.debug(
             "starting indexer: resuming from block %d (poll=%.1fs, confirmations=%d)",
             resume,
             self.config.poll_interval,
