@@ -87,11 +87,11 @@ def cmd_info(
         owner = _current_owner(config, row["asset"], row["owner"])
 
         # Inscription cost (commit + reveal) computed on demand and cached.
-        fee, vsize = row["fee"], row["vsize"]
+        fee, tx_size = row["fee"], row["tx_size"]
         if fee is None:
             try:
-                fee, vsize = BitcoindClient(config).get_inscription_cost(row["mint_txid"])
-                store.set_fee(row["number"], fee, vsize)
+                fee, tx_size = BitcoindClient(config).get_inscription_cost(row["mint_txid"])
+                store.set_fee(row["number"], fee, tx_size)
             except (BitcoindError, KeyError, IndexError, TypeError):
                 pass
 
@@ -114,7 +114,7 @@ def cmd_info(
             record = {k: row[k] for k in row.keys()}
             record["current_owner"] = owner
             record["fee"] = fee
-            record["vsize"] = vsize
+            record["tx_size"] = tx_size
             record["xcp_burned"] = xcp_burned
             print(json.dumps(record, indent=2))
             return 0
@@ -129,7 +129,7 @@ def cmd_info(
         print(f"mint_txid    : {row['mint_txid']}")
         print(f"block        : {row['block_index']} (position {row['block_position']})")
         if fee is not None:
-            rate = f" ({fee / vsize:.1f} sat/vB)" if vsize else ""
+            rate = f" ({fee / tx_size:.1f} sat/B)" if tx_size else ""
             print(f"fee          : {fee:,} sats{rate}")
         if xcp_burned is not None:
             print(f"xcp_burned   : {xcp_burned / 1e8:g} XCP")

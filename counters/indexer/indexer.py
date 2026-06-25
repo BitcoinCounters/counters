@@ -142,9 +142,9 @@ class Indexer:
         # Inscription cost (commit + reveal) is enrichment, never a blocker: a
         # fetch failure must not stop a counter from being recorded.
         try:
-            fee, vsize = self.btc.get_inscription_cost(txid, reveal_tx=tx)
+            fee, tx_size = self.btc.get_inscription_cost(txid, reveal_tx=tx)
         except (BitcoindError, KeyError, IndexError, TypeError):
-            fee, vsize = None, None
+            fee, tx_size = None, None
         rec = CounterRecord(
             asset=asset,
             asset_id=str(asset_id) if asset_id is not None else None,
@@ -160,7 +160,7 @@ class Indexer:
             divisible=asset_info.get("divisible"),
             supply=asset_info.get("supply"),
             fee=fee,
-            vsize=vsize,
+            tx_size=tx_size,
             xcp_burned=issuance.get("fee_paid"),
         )
         self.store.add_counter(number, rec)

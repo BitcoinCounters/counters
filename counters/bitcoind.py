@@ -126,30 +126,31 @@ class BitcoindClient:
         """Header object including 'height' and 'confirmations'."""
         return self._call("getblockheader", [block_hash])
 
-    def get_fee_and_vsize(self, txid: str, tx: dict | None = None) -> tuple[int | None, int | None]:
-        """Mining fee (sats) and virtual size (vBytes) for a tx.
+    def get_fee_and_size(self, txid: str, tx: dict | None = None) -> tuple[int | None, int | None]:
+        """Mining fee (sats) and raw serialized size (bytes) for a tx.
 
         bitcoind doesn't report a confirmed tx's fee, so we sum the outputs and
         subtract the inputs (each input's value comes from its prevout tx, which
-        needs txindex=1). `vsize` is read straight off the decoded tx. Pass an
-        already-decoded `tx` to save one RPC. Returns (None, vsize) for coinbase.
+        needs txindex=1). `size` is the full serialized byte length (witness
+        included, no segwit discount). Pass an already-decoded `tx` to save one
+        RPC. Returns (None, size) for coinbase.
         """
         if tx is None:
             tx = self.get_raw_transaction(txid, verbose=True)
-        vsize = tx.get("vsize")
+        size = tx.get("size")
         out_sats = sum(round(o.get("value", 0) * COIN) for o in tx.get("vout", []))
         in_sats = 0
         for vin in tx.get("vin", []):
             if "txid" not in vin:  # coinbase has no prevout to price
-                return None, vsize
+                return None, size
             prev = self.get_raw_transaction(vin["txid"], verbose=True)
             in_sats += round(prev["vout"][vin["vout"]]["value"] * COIN)
-        return in_sats - out_sats, vsize
+        return in_sats - out_sats, size
 
     def get_inscription_cost(
         self, reveal_txid: str, reveal_tx: dict | None = None
     ) -> tuple[int | None, int | None]:
-        """Total fee (sats) and vsize (vBytes) to inscribe = commit + reveal.
+        """Total fee (sats) and raw size (bytes) to inscribe = commit + reveal.
 
         The reveal is the mint tx; the commit is the tx whose output the reveal
         script-path-spends (the prevout of the COUNT-envelope input). We sum both
@@ -158,12 +159,12 @@ class BitcoindClient:
         """
         if reveal_tx is None:
             reveal_tx = self.get_raw_transaction(reveal_txid, verbose=True)
-        fee, vsize = self.get_fee_and_vsize(reveal_txid, tx=reveal_tx)
+        fee, size = self.get_fee_and_size(reveal_txid, tx=reveal_tx)
         commit_txid = find_commit_txid(reveal_tx.get("vin", []))
         if commit_txid and commit_txid != reveal_txid:
-            cfee, cvsize = self.get_fee_and_vsize(commit_txid)
+            cfee, csize = self.get_fee_and_size(commit_txid)
             if fee is not None and cfee is not None:
                 fee += cfee
-            if vsize is not None and cvsize is not None:
-                vsize += cvsize
-        return fee, vsize
+            if size is not None and csize is not None:
+                size += csize
+        return fee, size

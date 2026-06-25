@@ -401,7 +401,7 @@ const ZERO={
   owner:"bc1pvk6xnanj07h8un6lc25ty0zqd7dfhgh5k5yucztlyut55ynmv66qz8pdf5",
   txid:"6e6e14470434fd01d1d877ab0754dbc90d31ff33a4bb96a37e026d730762ed1f",
   commit:"848d059793aa6e9b26b77dd88dc7b43e2e4c92275605abf46a2ea7b609bb7198",
-  block:955251, position:415, fee:1552, vsize:387, xcp_burned:50000000,
+  block:955251, position:415, fee:1552, tx_size:609, xcp_burned:50000000,
   sha256:"9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
 };
 async function getCounter(id){
@@ -508,7 +508,7 @@ async function renderDetail(id){
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a> · pos ${c.position}`)}
         ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
-        ${(c.fee!=null && c.vsize) ? fact('fee/B', `${(c.fee/c.vsize).toFixed(1)} sat/vB`) : ''}
+        ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sat/B`) : ''}
         ${c.xcp_burned!=null ? fact('xcp burned', `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
         ${fact('sha-256', short(c.sha256), true, c.sha256)}

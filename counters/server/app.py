@@ -99,7 +99,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "position": row["block_position"],
         "sha256": row["content_sha256"],
         "fee": row["fee"],
-        "vsize": row["vsize"],
+        "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
         "body": _inline_body(store, row) if with_body else None,
     }
@@ -194,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
             owner = _current_owner(self.config, row["asset"], row["owner"])
             rec = record_dict(store, row, owner=owner)
             if rec["fee"] is None:
-                rec["fee"], rec["vsize"] = self._ensure_fee(store, row)
+                rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
                 rec["xcp_burned"] = self._ensure_xcp_burned(store, row)
             self._json(rec)
@@ -202,12 +202,12 @@ class Handler(BaseHTTPRequestHandler):
             store.close()
 
     def _ensure_fee(self, store: Store, row) -> tuple[int | None, int | None]:
-        """Compute the inscription cost (commit + reveal fee/vsize) from bitcoind
+        """Compute the inscription cost (commit + reveal fee/size) from bitcoind
         once and persist it (best effort — null if the node is unreachable)."""
         try:
-            fee, vsize = BitcoindClient(self.config).get_inscription_cost(row["mint_txid"])
-            store.set_fee(row["number"], fee, vsize)
-            return fee, vsize
+            fee, tx_size = BitcoindClient(self.config).get_inscription_cost(row["mint_txid"])
+            store.set_fee(row["number"], fee, tx_size)
+            return fee, tx_size
         except Exception:
             log.debug("fee backfill failed for #%s", row["number"], exc_info=True)
             return None, None
