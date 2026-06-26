@@ -1,0 +1,14 @@
+.git
+data/
+*.db
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+tests/
+docs/
+*.pdf
+.env
