@@ -31,12 +31,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import preview
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..store import Store
 
 log = logging.getLogger("counters")
+
+# Headers for untrusted inscription bytes (/content and iframe-media previews),
+# mirroring ord's `content_response`. Two CSP headers are sent; the browser
+# enforces their intersection: the first confines sub-resources to our own
+# origin (+ data:/blob:), the second additionally permits cross-server
+# `/content` recursion. Scripts are allowed, but only ever inside the opaque
+# origin of the `<iframe sandbox=allow-scripts>` that embeds this content.
+CONTENT_HEADERS = [
+    ("Content-Security-Policy", "default-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:"),
+    ("Content-Security-Policy", "default-src *:*/content/ 'unsafe-eval' 'unsafe-inline' data: blob:"),
+    ("X-Content-Type-Options", "nosniff"),
+]
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {
@@ -132,6 +145,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/block/(\d+)", path)
             if m:
                 return self._block(int(m.group(1)))
+            m = re.fullmatch(r"/preview/(\d+)", path)
+            if m:
+                return self._preview(int(m.group(1)))
             m = re.fullmatch(r"/content/(\d+)", path)
             if m:
                 return self._content(int(m.group(1)))
@@ -248,7 +264,40 @@ class Handler(BaseHTTPRequestHandler):
             if blob is None:
                 return self._send(404, "text/plain; charset=utf-8", b"content unavailable")
             ctype = row["content_type"] or "application/octet-stream"
-            self._send(200, ctype, blob, immutable=True)
+            self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
+        finally:
+            store.close()
+
+    def _preview(self, number: int) -> None:
+        """ord-style preview: raw content for HTML/SVG (rendered as a document
+        inside the sandboxed iframe), else a confined same-origin wrapper page
+        that loads /content/<n> via a native element."""
+        store = Store(self.config)
+        try:
+            row = store.get_counter(number)
+            if row is None:
+                return self._send(404, "text/html; charset=utf-8",
+                                  b"<!doctype html><meta charset=utf-8><title>404</title>not found")
+            ctype = row["content_type"] or "application/octet-stream"
+            kind, extra = preview.classify(ctype)
+            if kind == preview.IFRAME:
+                blob = store.read_blob(row["content_sha256"])
+                if blob is None:
+                    return self._send(404, "text/html; charset=utf-8",
+                                      b"<!doctype html><meta charset=utf-8><title>404</title>content unavailable")
+                return self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
+            text = None
+            if kind in ("text", "code", "markdown"):
+                blob = store.read_blob(row["content_sha256"]) or b""
+                text = blob.decode("utf-8", "replace")
+            doc = preview.wrapper(kind, number, ctype, extra, text)
+            self._send(
+                200, "text/html; charset=utf-8", doc.encode("utf-8"), immutable=True,
+                extra_headers=[
+                    ("Content-Security-Policy", preview.csp_for(kind)),
+                    ("X-Content-Type-Options", "nosniff"),
+                ],
+            )
         finally:
             store.close()
 
@@ -270,13 +319,16 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj: dict, status: int = 200) -> None:
         self._send(status, "application/json; charset=utf-8", json.dumps(obj).encode())
 
-    def _send(self, status: int, ctype: str, body: bytes, *, immutable: bool = False) -> None:
+    def _send(self, status: int, ctype: str, body: bytes, *, immutable: bool = False,
+              extra_headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         if immutable:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        for name, value in (extra_headers or []):
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)

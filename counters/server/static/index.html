@@ -133,6 +133,8 @@
   /* ---------- content render box ---------- */
   .render{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
   .render svg,.render img{width:100%;height:100%;object-fit:contain;display:block}
+  .render iframe.sandboxed{width:100%;height:100%;border:0;display:block;background:#fff}
+  .card .thumb iframe.sandboxed{pointer-events:none}
   .render .txt{font-family:var(--mono);color:var(--ink);padding:16px;text-align:center;line-height:1.35;max-width:100%;max-height:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical}
   .render .blob{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--faint);font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
 
@@ -439,10 +441,16 @@ function meterDigits(num,cls){
   ).join('')+`</span>`;
 }
 function renderContent(c){
+  // ord's model: every counter is embedded only through a sandboxed iframe
+  // (sandbox=allow-scripts => opaque origin, no same-origin access) pointing at
+  // /preview/<n>. The server returns either the raw content (HTML/SVG) or a
+  // confined, same-origin wrapper page per media type. The explorer itself
+  // never renders the untrusted bytes.
+  if(API) return `<div class="render"><iframe class="sandboxed" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" title="counter ${c.number}" src="${API}/preview/${c.number}"></iframe></div>`;
+  return sampleRender(c);   // file:// has no server: render the bundled sample inline
+}
+function sampleRender(c){
   const t=c.content_type;
-  if(t==="image/svg+xml") return `<div class="render">${c.body ? c.body : `<img alt="counter ${c.number}" src="${contentURL(c.number)||''}">`}</div>`;
-  if(t.startsWith("image/")) return `<div class="render"><img alt="counter ${c.number}" src="${contentURL(c.number)||''}"></div>`;
-  if(t==="text/html") return `<div class="render">${c.body||''}</div>`;
   if(t==="text/plain"){const L=(c.body||'').length,fs=L<=4?40:L<=10?27:L<=24?18:14;
     return `<div class="render"><div class="txt" style="font-size:${fs}px">${esc(c.body||'')}</div></div>`;}
   if(t==="application/json") return `<div class="render"><div class="txt" style="font-size:12px;text-align:left;white-space:pre;-webkit-line-clamp:8">${esc(c.body||'')}</div></div>`;
