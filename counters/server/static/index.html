@@ -516,7 +516,7 @@ async function renderDetail(id){
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a> · pos ${c.position}`)}
         ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
-        ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sat/B`) : ''}
+        ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sat`) : ''}
         ${c.xcp_burned!=null ? fact('xcp burned', `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
         ${fact('sha-256', short(c.sha256), true, c.sha256)}
