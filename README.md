@@ -14,8 +14,10 @@ For each block (ascending):
 
 1. **Parse** — scan every input's witness for a `COUNT` envelope
    (`OP_FALSE OP_IF "COUNT" <0x01 content_type> <0x00> <body…> OP_ENDIF …`).
-2. **Join** — a tx with **exactly one** valid envelope is matched against
-   Counterparty Core's issuances for that block.
+2. **Join** — keep only txs with **exactly one** envelope, then bind it to the
+   Counterparty issuance in the **same transaction** (matched by `txid`). The
+   block's issuances are fetched once and each candidate is looked up by its
+   `txid`, so the asset is whatever that transaction itself created.
 3. **Validate (via Counterparty Core, the oracle)** — keep it only if the issuance is
    `status == "valid"`, is the asset's **first/creation** issuance
    (`asset_events` contains `creation`), and the asset is not `BTC`/`XCP`.
