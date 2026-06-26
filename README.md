@@ -15,7 +15,7 @@ For each block (ascending):
 1. **Parse** — in each transaction, scan the inputs' witness data for a valid
    `COUNT` envelope
    (`OP_FALSE OP_IF "COUNT" <0x01 content_type> <0x00> <body…> OP_ENDIF …`).
-2. **Join** — for each tx with **exactly one** envelope (across all its inputs),
+2. **Join** — for each tx with **exactly one** valid envelope (across all its inputs),
    bind it to the Counterparty issuance in the **same transaction** (matched by
    `txid`). The block's issuances are fetched once and each candidate is looked
    up by its `txid`, so the asset is whatever that transaction itself created.
