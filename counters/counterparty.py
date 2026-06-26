@@ -80,6 +80,21 @@ class CounterpartyClient:
                 break
         return by_tx
 
+    def get_issuances_by_tx(self, txid: str) -> list[dict]:
+        """Issuance row(s) for a single transaction via /v2/issuances/<tx_hash>.
+
+        A tx carries at most one issuance message, so this is 0 or 1 rows;
+        returned as a list to mirror get_block_issuances(). `verbose=true` is
+        required so the row includes `asset_events` (needed by is_creation()).
+        """
+        data = self._get(f"/v2/issuances/{txid}", params={"verbose": "true"})
+        if not data:
+            return []
+        result = data.get("result")
+        if result is None:
+            return []
+        return result if isinstance(result, list) else [result]
+
     @staticmethod
     def is_creation(issuance: dict) -> bool:
         """True if this issuance record is the asset's first/creation issuance."""

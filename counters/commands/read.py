@@ -223,23 +223,20 @@ def cmd_validate(config: Config, txid: str) -> int:
     has_envelope = len(envelopes) >= 1
     exactly_one = len(envelopes) == 1
 
-    # Issuance lookup reuses the proven per-block join (keyed by tx_hash).
+    # Issuance lookup by transaction id (Counterparty's per-tx endpoint).
     issuance = None
-    any_valid_issuance = False
     blockhash = tx.get("blockhash")
     confirmed = bool(blockhash)
-    if confirmed:
-        try:
-            height = btc.get_block_header(blockhash).get("height")
-            tx_issuances = cp.get_block_issuances(height).get(txid, [])
-        except (BitcoindError, CounterpartyError) as e:
-            print(f"cannot read issuance from Core: {e}", file=sys.stderr)
-            tx_issuances = []
-        any_valid_issuance = any(cp.is_valid(r) for r in tx_issuances)
-        for r in tx_issuances:
-            if cp.is_valid(r) and cp.is_creation(r):
-                issuance = r
-                break
+    try:
+        tx_issuances = cp.get_issuances_by_tx(txid)
+    except CounterpartyError as e:
+        print(f"cannot read issuance from Counterparty Core: {e}", file=sys.stderr)
+        tx_issuances = []
+    any_valid_issuance = any(cp.is_valid(r) for r in tx_issuances)
+    for r in tx_issuances:
+        if cp.is_valid(r) and cp.is_creation(r):
+            issuance = r
+            break
 
     is_creation_issuance = issuance is not None
     asset = issuance["asset"] if issuance else None
