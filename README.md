@@ -12,7 +12,8 @@ and **serves** a web explorer plus a read-only JSON API.
 
 For each block (ascending):
 
-1. **Parse** — scan every input's witness for a valid `COUNT` envelope
+1. **Parse** — in each transaction, scan the inputs' witness data for a valid
+   `COUNT` envelope
    (`OP_FALSE OP_IF "COUNT" <0x01 content_type> <0x00> <body…> OP_ENDIF …`).
 2. **Join** — for each tx with **exactly one** envelope (across all its inputs),
    bind it to the Counterparty issuance in the **same transaction** (matched by
