@@ -97,9 +97,14 @@ class CounterpartyClient:
 
     @staticmethod
     def is_creation(issuance: dict) -> bool:
-        """True if this issuance record is the asset's first/creation issuance."""
-        events = str(issuance.get("asset_events") or "")
-        return any(ev in CREATION_EVENTS for ev in events.split(","))
+        """True if this issuance record is the asset's first/creation issuance.
+
+        `asset_events` is a space-separated list and a creation can carry extra
+        events (e.g. "creation lock_quantity" when issued with --locked). Split
+        on whitespace AND commas so any of those forms is recognised.
+        """
+        events = str(issuance.get("asset_events") or "").replace(",", " ")
+        return any(ev in CREATION_EVENTS for ev in events.split())
 
     @staticmethod
     def is_valid(issuance: dict) -> bool:
