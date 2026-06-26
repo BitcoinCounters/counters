@@ -96,6 +96,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "txid": row["mint_txid"],
         "block": row["block_index"],
         "position": row["block_position"],
+        "tx_index": row["cp_tx_index"],  # Counterparty tx index → tokenscan.io/tx/<n>
         "sha256": row["content_sha256"],
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
