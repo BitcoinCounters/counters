@@ -1,6 +1,6 @@
 # Bitcoin Counters — Indexer & Wallet
 
-**Counters** are files stored in Bitcoin witness data (a `COUNT` envelope) and
+**Bitcoin Counters** are files stored in Bitcoin witness data (a `COUNT` envelope) and
 bound to a Counterparty asset minted in the same transaction.
 
 This tool **indexes** them (parse → join → number → store), **mints** and
