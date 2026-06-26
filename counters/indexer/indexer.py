@@ -21,7 +21,7 @@ import time
 
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
-from ..counterparty import CounterpartyClient
+from ..counterparty import CounterpartyClient, CounterpartyError
 from ..envelope import find_counter_envelopes_in_tx
 from ..progress import ProgressBar
 from ..store import CounterRecord, Store
@@ -253,10 +253,25 @@ class Indexer:
         )
         try:
             while not self._stop:
+                retry = f"retrying in {self.config.poll_interval:.0f}s"
                 try:
                     self.sync_to_tip()
-                except Exception:  # keep the loop alive; log and retry
-                    log.exception("sync pass failed; retrying after poll interval")
+                except CounterpartyError:
+                    # Expected/transient: Counterparty is down, restarting, or
+                    # still running startup migrations (its API binds late).
+                    # One clear line, no stack trace; retry on the next poll.
+                    self._notify(
+                        f"Counterparty server not detected at {self.config.cp_api_url} "
+                        f"— is counterparty-server running with its v2 API on that "
+                        f"port? {retry}…"
+                    )
+                except BitcoindError:
+                    self._notify(
+                        f"Bitcoin Core not detected at {self.config.btc_rpc_url} "
+                        f"— is bitcoind running with RPC enabled? {retry}…"
+                    )
+                except Exception:  # genuinely unexpected: keep the loop alive but log fully
+                    log.exception("sync pass failed; %s", retry)
                 if self._stop:
                     break
                 self._interruptible_sleep(self.config.poll_interval)
