@@ -96,6 +96,7 @@ def cmd_inscribe(
     destination: str | None = None,
     supply: int = 1,
     divisible: bool = False,
+    lock: bool = False,
     dry_run: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
@@ -139,11 +140,11 @@ def cmd_inscribe(
         if named:
             built = _prepare_named(btc, cp, wallet, insc, asset, quantity,
                                    divisible, destination, fee_rate,
-                                   commit_fee_rate, change_spk)
+                                   commit_fee_rate, change_spk, lock)
         else:
             built = _prepare_numeric(btc, cp, wallet, insc, asset, quantity,
                                      divisible, destination, fee_rate,
-                                     commit_fee_rate, change_spk)
+                                     commit_fee_rate, change_spk, lock)
     except (BitcoindError, CounterpartyError, InscribeError) as e:
         print(f"inscribe build failed: {e}", file=sys.stderr)
         return 1
@@ -210,6 +211,8 @@ def cmd_inscribe(
     # report
     print(f"asset            : {asset}{' (named)' if named else ' (numeric, free)'}")
     print(f"content_type     : {content_type.decode(errors='replace')}  ({len(body)} bytes)")
+    print(f"supply           : {supply}{' divisible' if divisible else ''}"
+          f"{' (LOCKED)' if lock else ''}")
     print(f"commit address   : {insc.commit_address}")
     print(f"commit txid      : {commit_txid}")
     print(f"reveal txid      : {reveal_txid}")
@@ -272,7 +275,7 @@ def _find_xcp_address(btc, cp, wallet, min_xcp=NAMED_ISSUANCE_FEE_XCP):
 
 
 def _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
-                      destination, change_spk):
+                      destination, change_spk, lock=False):
     """Shared tail: the commit's change output is the issuance source. Compose the
     OP_RETURN pinned to it, copy the destination outputs, and size the reveal."""
     change_out = commit["change_out"]
@@ -284,6 +287,7 @@ def _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
     composed = cp.compose_issuance(
         source=source, asset=asset, quantity=quantity, divisible=divisible,
         inputs_set=inputs_set, transfer_destination=transfer_destination,
+        lock=lock,
     )
     decoded = btc._call("decoderawtransaction", [composed["rawtransaction"]])
     dest_outs, op_return_spk = _extract_issuance_outputs(decoded)
@@ -306,16 +310,16 @@ def _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
 
 
 def _prepare_numeric(btc, cp, wallet, insc, asset, quantity, divisible,
-                     destination, fee_rate, commit_fee_rate, change_spk):
+                     destination, fee_rate, commit_fee_rate, change_spk, lock=False):
     """Build the commit (change -> a fresh wallet address); that change is the
     source for a free numeric asset."""
     commit = _build_commit(btc, wallet, insc.commit_address, DUST, commit_fee_rate)
     return _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
-                             destination, change_spk)
+                             destination, change_spk, lock)
 
 
 def _prepare_named(btc, cp, wallet, insc, asset, quantity, divisible,
-                   destination, fee_rate, commit_fee_rate, change_spk):
+                   destination, fee_rate, commit_fee_rate, change_spk, lock=False):
     """Route the commit's change back to a wallet address holding >=0.5 XCP, so
     that address is the issuance source/issuer and pays the name-registration
     burn (XCP balances are address-level, so spending its UTXO is fine)."""
@@ -329,7 +333,7 @@ def _prepare_named(btc, cp, wallet, insc, asset, quantity, divisible,
     commit = _build_commit(btc, wallet, insc.commit_address, DUST,
                            commit_fee_rate, change_address=xcp_addr)
     return _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
-                             destination, change_spk)
+                             destination, change_spk, lock)
 
 
 def _build_commit(btc, wallet, commit_address, commit_value, commit_fee_rate,

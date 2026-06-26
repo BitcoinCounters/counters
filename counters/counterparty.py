@@ -124,16 +124,20 @@ class CounterpartyClient:
         inputs_set: str,
         description: str = "",
         transfer_destination: str | None = None,
+        lock: bool = False,
     ) -> dict:
         """Compose an OP_RETURN issuance and return Core's result dict (includes
         `rawtransaction`). `inputs_set` pins the first UTXO so the RC4 key
         (= first input's txid) matches the reveal's vin[0]; the issuance message
         is keyed on it (composer.py: arc4_key = unspent_list[0]["txid"]).
+
+        `lock=True` locks the asset's supply (no future issuance can change it).
         """
         params: dict[str, Any] = {
             "asset": asset,
             "quantity": quantity,
             "divisible": "true" if divisible else "false",
+            "lock": "true" if lock else "false",
             "description": description,
             "encoding": "opreturn",
             "inputs_set": inputs_set,
