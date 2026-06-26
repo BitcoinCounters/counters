@@ -39,6 +39,33 @@ separate Bitcoin node; the two are always named in full to avoid confusion.)
 pip install -e .          # installs deps + the `counters` console command
 ```
 
+## Run with Docker
+
+The repo ships a `Dockerfile` and a `docker-compose.yml` with two services:
+
+- **`counters`** — the web explorer + read-only JSON API on port `8081`.
+- **`indexer`** — the indexing engine (runs `index --from-genesis`); needs a
+  reachable **bitcoind** and **Counterparty Core**.
+
+```bash
+cp .env.example .env             # set your bitcoind / Counterparty Core endpoints
+docker compose up -d --build     # build + start both services
+docker compose up -d counters    # ...or just the explorer (no backends required)
+docker compose logs -f counters  # follow logs
+docker compose down              # stop
+```
+
+The explorer is then at `http://127.0.0.1:8081`. The index (SQLite + blobs)
+persists in the `counters-data` volume, mounted at `/data` inside the
+containers. On Linux, `host.docker.internal` resolves to the Docker host (wired
+up via `extra_hosts`), so the defaults in `.env.example` point at bitcoind /
+Core running on the host.
+
+> Compose forwards the connection and indexer-behaviour variables from `.env`
+> (`BTC_RPC_*`, `CP_API_URL`, `COUNTER_POLL_INTERVAL`, `COUNTER_CONFIRMATIONS`).
+> The `indexer` service sets its start floor with `--from-genesis` rather than
+> `COUNTER_START_HEIGHT`.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |
@@ -142,6 +169,9 @@ counters/
     app.py          stdlib HTTP server (static SPA + /counters /counter /content)
     static/         index.html + logos/favicon (served assets)
 pyproject.toml      installs the `counters` console command
+Dockerfile          container image (entrypoint: the `counters` CLI)
+docker-compose.yml  explorer + indexer services, data volume, host networking
+.env.example        sample environment (copy to .env)
 docs/               protocol + CLI reference PDFs
 tests/
   test_envelope.py  parser unit tests
