@@ -79,6 +79,7 @@ def test_api_and_static():
         assert rec["size"] == 2
         assert rec["body"] == "hi"           # small text inlined
         assert rec["block"] == 800000 and rec["position"] == 3
+        assert rec["tx_index"] == 1   # → tokenscan.io/tx/<tx_index>
         assert rec["fee"] == 333 and rec["tx_size"] == 111
         assert rec["xcp_burned"] == 50000000
         assert rec["supply"] == 1 and rec["divisible"] is False

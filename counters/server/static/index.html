@@ -405,7 +405,7 @@ const ZERO={
   owner:"bc1pvk6xnanj07h8un6lc25ty0zqd7dfhgh5k5yucztlyut55ynmv66qz8pdf5",
   txid:"6e6e14470434fd01d1d877ab0754dbc90d31ff33a4bb96a37e026d730762ed1f",
   commit:"848d059793aa6e9b26b77dd88dc7b43e2e4c92275605abf46a2ea7b609bb7198",
-  block:955251, position:415, fee:1552, tx_size:609, xcp_burned:50000000,
+  block:955251, position:415, tx_index:3143138, fee:1552, tx_size:609, xcp_burned:50000000,
   supply:1000000000, divisible:true, locked:false,
   sha256:"9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
 };
@@ -495,7 +495,8 @@ async function renderDetail(id){
   showView('detail');
   if(!c){el('detail').innerHTML=`<div class="empty" style="grid-column:1/-1"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
   const mp=`https://mempool.space/tx/${c.txid}`;
-  const xcp=`https://www.xcp.io/asset/${encodeURIComponent(c.asset)}`;
+  const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
+  const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
   el('detail').innerHTML=`
     <div class="stage">
       <div class="frame">${renderContent(c)}</div>
@@ -517,7 +518,7 @@ async function renderDetail(id){
         ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
         ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats`) : ''}
-        ${c.xcp_burned!=null ? fact('xcp burned', `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
+        ${c.xcp_burned!=null ? fact('xcp burned', tsTx ? `<a href="${tsTx}" target="_blank" rel="noopener" class="out">${+(c.xcp_burned/1e8).toFixed(8)} XCP ↗</a>` : `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
         ${fact('sha-256', short(c.sha256), true, c.sha256)}
       </div>
