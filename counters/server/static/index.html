@@ -488,7 +488,7 @@ async function renderExplore(){
   el('synced').innerHTML = (st && st.indexed>=0)
     ? `<span class="lab">Latest synced block</span>`
       +`<a class="blk" onclick="go('#/b/${st.indexed}')" title="view this block">${meterDigits(st.indexed)}</a>`
-      +`<span class="tick">${st.count} counter${st.count===1?'':'s'} indexed</span>`
+      +`<span class="tick">${st.count} counter${st.count===1?'':'s'} detected</span>`
     : '';
   if(el('grid').dataset.done) return;
   const list=await listCounters();
