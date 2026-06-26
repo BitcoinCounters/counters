@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--destination", help="address to own the minted counter (default: wallet)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
     p_insc.add_argument("--divisible", action="store_true", help="make the asset divisible")
-    p_insc.add_argument("--lock", action="store_true",
+    p_insc.add_argument("--locked", action="store_true",
                         help="lock the asset's supply (no future issuance can change it)")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="build + sign both txs but do not broadcast; print raw hex")
@@ -250,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.name, args.file,
                     asset=args.asset, fee_rate=args.fee_rate,
                     commit_fee_rate=args.commit_fee_rate, destination=args.destination,
-                    supply=args.supply, divisible=args.divisible, lock=args.lock,
+                    supply=args.supply, divisible=args.divisible, lock=args.locked,
                     dry_run=args.dry_run,
                 )
             if args.wallet_command == "send":
