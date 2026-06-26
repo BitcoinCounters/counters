@@ -22,14 +22,13 @@ def _display_name(row: sqlite3.Row) -> str:
     return row["asset_longname"] or row["asset"]
 
 
-def _current_owner(config: Config, asset: str, fallback: str | None) -> str | None:
-    """Current holder per Counterparty (ownership can change after the mint).
-    Falls back to the mint-time owner if Core is unreachable."""
+def _live_asset(config: Config, asset: str) -> dict:
+    """Live asset info per Counterparty (owner/lock/supply can change after the
+    mint). Empty dict if Core is unreachable so callers fall back to stored data."""
     try:
-        info = CounterpartyClient(config).get_asset(asset) or {}
-        return info.get("owner") or fallback
+        return CounterpartyClient(config).get_asset(asset) or {}
     except CounterpartyError:
-        return fallback
+        return {}
 
 
 # --- status ----------------------------------------------------------------
@@ -108,7 +107,11 @@ def cmd_info(
                 sys.stdout.buffer.write(blob)
             return 0
 
-        owner = _current_owner(config, row["asset"], row["owner"])
+        info = _live_asset(config, row["asset"])
+        owner = info.get("owner") or row["owner"]
+        divisible = info["divisible"] if info.get("divisible") is not None else row["divisible"]
+        supply_raw = info["supply"] if info.get("supply") is not None else row["supply"]
+        locked = info.get("locked")
 
         # Inscription cost (commit + reveal) computed on demand and cached.
         fee, tx_size = row["fee"], row["tx_size"]
@@ -140,12 +143,18 @@ def cmd_info(
             record["fee"] = fee
             record["tx_size"] = tx_size
             record["xcp_burned"] = xcp_burned
+            record["locked"] = locked
             print(json.dumps(record, indent=2))
             return 0
 
         print(f"number       : {row['number']}")
         print(f"asset        : {_display_name(row)}")
         print(f"asset_id     : {row['asset_id']}")
+        if supply_raw is not None:
+            s = f"{supply_raw / 1e8:g}" if divisible else f"{int(supply_raw):,}"
+            print(f"supply       : {s}{' (divisible)' if divisible else ''}")
+        if locked is not None:
+            print(f"locked       : {'yes' if locked else 'no'}")
         print(f"owner        : {owner}")
         print(f"content_type : {row['content_type'] or '(none)'}")
         print(f"size         : {row['content_length']} bytes")

@@ -57,8 +57,8 @@ def _get(base: str, path: str):
 def _run_server():
     tmp = tempfile.mkdtemp()
     cfg = _seed_store(tmp)
-    # Keep the test offline: never call Counterparty for the live owner.
-    appmod._current_owner = lambda config, asset, fallback: fallback
+    # Keep the test offline: never call Counterparty for live asset info.
+    appmod._live_asset = lambda config, asset: {}
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), appmod.Handler)
     httpd.config = cfg
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -81,6 +81,7 @@ def test_api_and_static():
         assert rec["block"] == 800000 and rec["position"] == 3
         assert rec["fee"] == 333 and rec["tx_size"] == 111
         assert rec["xcp_burned"] == 50000000
+        assert rec["supply"] == 1 and rec["divisible"] is False
 
         # --- /status: latest synced height + total count ---
         status, ctype, body = _get(base, "/status")
@@ -102,6 +103,8 @@ def test_api_and_static():
         c0 = json.loads(_get(base, "/counter/0")[2])
         assert c0["fee"] == 333 and c0["tx_size"] == 111   # already stored, no backfill
         assert c0["xcp_burned"] == 50000000
+        assert c0["supply"] == 1 and c0["divisible"] is False
+        assert c0["locked"] is None   # live lookup stubbed offline
         assert _get(base, "/counter/TESTASSET")[0] == 200
         assert _get(base, "/counter/999")[0] == 404
 

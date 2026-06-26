@@ -75,14 +75,13 @@ def _inline_body(store: Store, row: sqlite3.Row) -> str | None:
         return None
 
 
-def _current_owner(config: Config, asset: str, fallback: str | None) -> str | None:
-    """Live holder per Counterparty (ownership can change after the mint);
-    fall back to the mint-time owner if Core is unreachable."""
+def _live_asset(config: Config, asset: str) -> dict:
+    """Live asset info per Counterparty (owner/lock/supply can change after the
+    mint); empty dict if Core is unreachable so callers fall back to stored data."""
     try:
-        info = CounterpartyClient(config).get_asset(asset) or {}
-        return info.get("owner") or fallback
+        return CounterpartyClient(config).get_asset(asset) or {}
     except CounterpartyError:
-        return fallback
+        return {}
 
 
 def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
@@ -98,6 +97,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "block": row["block_index"],
         "position": row["block_position"],
         "sha256": row["content_sha256"],
+        "supply": row["supply"],
+        "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
+        "locked": None,  # mutable; filled live on the single-counter endpoint
         "fee": row["fee"],
         "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
@@ -191,8 +193,14 @@ class Handler(BaseHTTPRequestHandler):
             row = store.find(ident)
             if row is None:
                 return self._json({"error": "not found"}, status=404)
-            owner = _current_owner(self.config, row["asset"], row["owner"])
+            info = _live_asset(self.config, row["asset"])
+            owner = info.get("owner") or row["owner"]
             rec = record_dict(store, row, owner=owner)
+            rec["locked"] = info.get("locked")
+            if info.get("supply") is not None:
+                rec["supply"] = info["supply"]
+            if info.get("divisible") is not None:
+                rec["divisible"] = bool(info["divisible"])
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:

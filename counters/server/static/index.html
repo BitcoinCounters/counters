@@ -406,6 +406,7 @@ const ZERO={
   txid:"6e6e14470434fd01d1d877ab0754dbc90d31ff33a4bb96a37e026d730762ed1f",
   commit:"848d059793aa6e9b26b77dd88dc7b43e2e4c92275605abf46a2ea7b609bb7198",
   block:955251, position:415, fee:1552, tx_size:609, xcp_burned:50000000,
+  supply:1000000000, divisible:true, locked:false,
   sha256:"9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
 };
 async function getCounter(id){
@@ -451,6 +452,7 @@ function renderContent(c){
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
 const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
+const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
 
 function card(c){
   return `<div class="card" onclick="go('#/c/${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')go('#/c/${c.number}')">
@@ -506,6 +508,8 @@ async function renderDetail(id){
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
+        ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.divisible?' · divisible':''}`) : ''}
+        ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
         ${fact('size', fmtSize(c.size))}
         ${fact('owner', short(c.owner), true, c.owner)}
