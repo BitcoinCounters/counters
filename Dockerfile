@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir -e .
 # Data lives on a mounted volume
 ENV COUNTER_DATA_DIR=/data
 
+# Flush stdout/stderr immediately so `docker compose logs` shows output live
+ENV PYTHONUNBUFFERED=1
+
 EXPOSE 8081
 
 VOLUME ["/data"]
