@@ -35,6 +35,7 @@ from .. import builder, tap
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .wallet import _wallet_addresses
 
 COIN = 100_000_000
 DUST = 546                     # conservative dust floor for our outputs
@@ -253,16 +254,15 @@ def _addr_to_spk(btc: BitcoindClient, address: str) -> bytes:
 
 
 def _find_xcp_address(btc, cp, wallet, min_xcp=NAMED_ISSUANCE_FEE_XCP):
-    """Return a spendable wallet address holding >= min_xcp XCP, else None.
+    """Return a wallet address holding >= min_xcp XCP, else None.
 
-    XCP balances are address-level, so the commit can spend this address's UTXO
-    and route change back to it; the address keeps its XCP and stays the named
-    issuance's source/issuer."""
-    addrs: list[str] = []
-    for u in btc.wallet_call(wallet, "listunspent", [0]):
-        if u.get("address") and u["address"] not in addrs:
-            addrs.append(u["address"])
-    for addr in addrs:
+    XCP balances are address-level. The commit funds from anywhere in the wallet
+    and routes its change to this address, making it the named issuance's
+    source/issuer — so the address does NOT need its own BTC UTXO. We therefore
+    enumerate the wallet's full address set (received + unspent), exactly like
+    `balance` does; scanning only `listunspent` would miss XCP held at an address
+    with no live UTXO."""
+    for addr in _wallet_addresses(btc, wallet):
         try:
             if cp.get_xcp_balance(addr) >= min_xcp:
                 return addr
