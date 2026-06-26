@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         "server", parents=[common], help="serve the web explorer + read-only JSON API"
     )
     p_server.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
-    p_server.add_argument("--port", type=int, default=8080, help="port (default: 8080)")
+    p_server.add_argument("--port", type=int, default=81, help="port (default: 81)")
 
     # --- reads ---
     sub.add_parser("status", parents=[common], help="tips/health of all three backends")

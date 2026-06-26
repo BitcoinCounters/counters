@@ -276,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.address_string(), fmt % args)
 
 
-def run(config: Config, host: str = "127.0.0.1", port: int = 8080) -> int:
+def run(config: Config, host: str = "127.0.0.1", port: int = 81) -> int:
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.config = config  # type: ignore[attr-defined]
     url = f"http://{host}:{port}"
