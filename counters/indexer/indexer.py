@@ -172,10 +172,25 @@ class Indexer:
 
     # --- run loops ---------------------------------------------------------
 
+    def _target_tip(self) -> int:
+        """Highest block height safe to index.
+
+        Counterparty (the oracle) can only validate blocks it has already
+        parsed, so we never index past its height: clamp to the LOWER of
+        Bitcoin Core's tip and Counterparty's parsed height, then apply the
+        confirmation buffer. Without this, when Counterparty lags behind
+        bitcoind the indexer would walk blocks the oracle hasn't seen, record
+        nothing for them, advance its cursor, and silently skip any counters
+        minted in that gap (only recoverable by a full rescan).
+        """
+        btc_tip = self.btc.get_block_count()
+        cp_tip = self.cp.counterparty_height()
+        return min(btc_tip, cp_tip) - self.config.confirmations
+
     def sync_to_tip(self, stop_at: int | None = None) -> int:
         start = self.store.get_last_height(self.config.start_height) + 1
         start = max(start, self.config.start_height)
-        tip = self.btc.get_block_count() - self.config.confirmations
+        tip = self._target_tip()
         if stop_at is not None:
             tip = min(tip, stop_at)
 
@@ -230,7 +245,7 @@ class Indexer:
         # updates in place, and shows 100% whenever the index is caught up to
         # the chain tip. sync_to_tip() reuses it and keeps its total current.
         try:
-            tip = self.btc.get_block_count() - self.config.confirmations
+            tip = self._target_tip()
         except Exception:
             tip = resume
         self._progress = ProgressBar(
