@@ -289,6 +289,7 @@
       <a href="#/docs#mint">Minting</a>
       <a href="#/docs#valid">Validity</a>
       <a href="#/docs#api">Server API</a>
+      <a href="#/docs#setup">Setup</a>
       <a href="#/docs#source">Source</a>
       <a href="#/docs#community">Community</a>
     </aside>
@@ -348,6 +349,27 @@ counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
         <li data-n="›"><code>GET /content/&lt;number&gt;</code> — the raw file, served with its stored MIME</li>
       </ul>
       <p>Point the <code>API</code> constant at the top of this file's script at your server and the sample data is replaced by live results.</p>
+
+      <h2 id="setup">Setup</h2>
+      <p>The indexer is the only part that needs backends; the explorer alone runs without them. To index, run two fully-synced nodes and point Counters at them.</p>
+      <p><strong>1 · Bitcoin Core.</strong> A synced <code>bitcoind</code> with a transaction index and RPC enabled:</p>
+      <pre><span class="c"># bitcoin.conf</span>
+txindex=1     <span class="c"># required: look up any tx by id</span>
+server=1      <span class="c"># enable JSON-RPC</span>
+<span class="c"># auth via the cookie file (default) or rpcuser/rpcpassword</span></pre>
+      <p><strong>2 · Counterparty Core.</strong> The oracle that decides issuance validity, asset identity, and ownership. Run and sync it (v2 API, default port <code>4000</code>) per its official docs: <a href="https://github.com/CounterpartyXCP/counterparty-core" target="_blank" rel="noopener" class="out">github.com/CounterpartyXCP/counterparty-core ↗</a>. Counters only reads from it — it never reimplements consensus.</p>
+      <p><strong>3 · Wire them up.</strong> Tell Counters where the backends are (env vars, or copy <code>.env.example</code> to <code>.env</code>), then verify both are detected:</p>
+      <pre><span class="c"># point at your nodes (defaults shown)</span>
+BTC_RPC_URL=http://127.0.0.1:8332
+CP_API_URL=http://127.0.0.1:4000
+
+<span class="c"># confirm bitcoind + Counterparty + index heights line up</span>
+counters status
+
+<span class="c"># then index, and serve the explorer</span>
+counters index --from-genesis
+counters server</pre>
+      <div class="callout"><b>Both nodes must be fully synced.</b> The indexer never advances past Counterparty's height, so a lagging Core simply slows indexing rather than producing wrong results.</div>
 
       <h2 id="source">Source</h2>
       <p>Counters is open source — the indexer, CLI, and this explorer all live in one repository: <a href="https://github.com/antron3000/counters" target="_blank" rel="noopener" class="out">github.com/antron3000/counters ↗</a>.</p>
