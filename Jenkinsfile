@@ -50,7 +50,12 @@ pipeline {
 
     stage('Build image') {
       steps {
-        sh 'docker compose build'
+        // Bake the deployed commit into the image so /status can report it.
+        sh '''
+          export GIT_COMMIT=$(git rev-parse --short HEAD)
+          echo "Building commit $GIT_COMMIT"
+          docker compose build
+        '''
       }
     }
 

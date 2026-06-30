@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -169,6 +170,9 @@ class Handler(BaseHTTPRequestHandler):
                 "indexed": store.get_last_height(self.config.start_height),
                 "count": store.count(),
                 "genesis": 0,
+                # Git commit this build was deployed from (baked into the image
+                # by CI via COUNTER_GIT_COMMIT); "dev" when run outside CI.
+                "commit": os.environ.get("COUNTER_GIT_COMMIT", "dev"),
             }
         finally:
             store.close()
