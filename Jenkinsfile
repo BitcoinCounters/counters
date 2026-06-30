@@ -1,8 +1,10 @@
 // CI/CD for the counters stack.
 //
-// On every push to `main` (via GitHub webhook -> jenkins.bitcoincounters.com),
-// Jenkins checks out the repo, rebuilds the app image, and redeploys the
-// docker-compose stack on the host (through the mounted docker.sock).
+// Jenkins polls `main` every minute (pollSCM below); on a new commit it checks
+// out the repo, rebuilds the app image, and redeploys the docker-compose stack
+// on the host (through the mounted docker.sock). Polling needs no public
+// exposure, so it works behind NAT; swap in a GitHub webhook later by adding
+// the "GitHub hook trigger" once jenkins.bitcoincounters.com is reachable.
 //
 // Prerequisites in Jenkins:
 //   * A "Secret file" credential with ID `counters-env` containing the real
@@ -17,6 +19,11 @@ pipeline {
     timestamps()
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  triggers {
+    // Check GitHub for new commits to the configured branch every minute.
+    pollSCM('* * * * *')
   }
 
   environment {
