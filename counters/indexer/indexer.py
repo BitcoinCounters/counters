@@ -8,7 +8,7 @@ Validity rules enforced here (MVP):
   1. tx contains exactly one valid COUNT envelope (tx-wide, all inputs)
   2. tx has a Counterparty issuance with status == "valid"
   3. that issuance is the asset's first/creation issuance
-  4. minted asset is not BTC/XCP
+  4. issued asset is not BTC/XCP
 
 Reorg renumbering and the read/serve API are intentionally out of scope.
 """

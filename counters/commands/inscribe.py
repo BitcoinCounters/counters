@@ -7,7 +7,7 @@ Flow (build ref §5, CLI ref §3), designed to work from a single funding UTXO:
      produces two outputs — the tiny P2TR commit output (which the reveal will
      script-spend to expose the envelope) and the wallet CHANGE output.
   3. That change output becomes the reveal's vin[0] = the Counterparty *source*
-     (so minted tokens + ownership land on a wallet address). Compose the
+     (so issued tokens + ownership land on a wallet address). Compose the
      issuance as a legacy OP_RETURN pinned to it (RC4 key = its txid) and copy
      the destinations-then-OP_RETURN outputs verbatim.
   4. Build the reveal: vin[0] = the commit's change output (signed by Core),
