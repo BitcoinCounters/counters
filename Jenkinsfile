@@ -50,9 +50,10 @@ pipeline {
 
     stage('Build image') {
       steps {
-        // Bake the deployed commit into the image so /status can report it.
+        // Stamp the image with the deployed short commit (compose passes this
+        // through to the Dockerfile GIT_COMMIT arg -> /status -> footer).
         sh '''
-          export GIT_COMMIT=$(git rev-parse --short HEAD)
+          export GIT_COMMIT="$(git rev-parse --short HEAD)"
           echo "Building commit $GIT_COMMIT"
           docker compose build
         '''

@@ -1,18 +1,48 @@
-<!DOCTYPE HTML>
-<html lang="en">
-    <head>
-        <meta charset="utf-8">
-        <style type="text/css">
-            :root {
-                color-scheme: light dark;
-            }
-        </style>
-        <title>Error response</title>
-    </head>
-    <body>
-        <h1>Error response</h1>
-        <p>Error code: 404</p>
-        <p>Message: File not found.</p>
-        <p>Error code explanation: 404 - Nothing matches the given URI.</p>
-    </body>
-</html>
+services:
+  counters:
+    build:
+      context: .
+      args:
+        # Stamped by CI (Jenkinsfile) with the deployed short commit hash.
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
+    ports:
+      - "8081:8081"
+    volumes:
+      - counters-data:/data
+      # Read-only so the server can report the deployed commit on /status
+      # (footer) straight from `docker compose up -d`, no build arg needed.
+      - ./.git:/app/.git:ro
+    environment:
+      # Point these at your bitcoind and Counterparty Core instances.
+      # On Linux, host.docker.internal resolves to the Docker host (added below).
+      BTC_RPC_URL: ${BTC_RPC_URL:-http://host.docker.internal:8332}
+      BTC_RPC_USER: ${BTC_RPC_USER:-}
+      BTC_RPC_PASSWORD: ${BTC_RPC_PASSWORD:-}
+      CP_API_URL: ${CP_API_URL:-http://host.docker.internal:4000}
+      COUNTER_DATA_DIR: /data
+      COUNTER_POLL_INTERVAL: ${COUNTER_POLL_INTERVAL:-15}
+      COUNTER_CONFIRMATIONS: ${COUNTER_CONFIRMATIONS:-0}
+    # Lets the container reach services running on the host (Linux).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  indexer:
+    build: .
+    command: ["index", "--from-genesis"]
+    volumes:
+      - counters-data:/data
+    environment:
+      BTC_RPC_URL: ${BTC_RPC_URL:-http://host.docker.internal:8332}
+      BTC_RPC_USER: ${BTC_RPC_USER:-}
+      BTC_RPC_PASSWORD: ${BTC_RPC_PASSWORD:-}
+      CP_API_URL: ${CP_API_URL:-http://host.docker.internal:4000}
+      COUNTER_DATA_DIR: /data
+      COUNTER_POLL_INTERVAL: ${COUNTER_POLL_INTERVAL:-15}
+      COUNTER_CONFIRMATIONS: ${COUNTER_CONFIRMATIONS:-0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  counters-data:
