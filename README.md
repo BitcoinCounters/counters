@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="counters/server/static/counters-logo-512.png" alt="Bitcoin Counters" width="160">
+</p>
+
 # Bitcoin Counters — Indexer & Wallet
 
 **Bitcoin Counters** are inscriptions — files stored in Bitcoin witness data (a
