@@ -1,10 +1,17 @@
 services:
   counters:
-    build: .
+    build:
+      context: .
+      args:
+        # Stamped by CI (Jenkinsfile) with the deployed short commit hash.
+        GIT_COMMIT: ${GIT_COMMIT:-dev}
     ports:
       - "8081:8081"
     volumes:
       - counters-data:/data
+      # Read-only so the server can report the deployed commit on /status
+      # (footer) straight from `docker compose up -d`, no build arg needed.
+      - ./.git:/app/.git:ro
     environment:
       # Point these at your bitcoind and Counterparty Core instances.
       # On Linux, host.docker.internal resolves to the Docker host (added below).
