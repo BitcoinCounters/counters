@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +39,45 @@ from ..counterparty import CounterpartyClient, CounterpartyError
 from ..store import Store
 
 log = logging.getLogger("counters")
+
+def _read_git_commit(git_dir: str = "/app/.git") -> str | None:
+    """Resolve the short HEAD commit by reading a git dir directly (no git
+    binary). Used when the repo's .git is bind-mounted into the container, so a
+    plain `docker compose up -d` shows the real revision without a build arg."""
+    head_path = Path(git_dir, "HEAD")
+    try:
+        head = head_path.read_text().strip()
+    except OSError:
+        return None
+    if not head.startswith("ref:"):
+        return head[:7] or None  # detached HEAD holds the sha directly
+    ref = head[4:].strip()  # e.g. "refs/heads/main"
+    try:  # loose ref
+        return (Path(git_dir, ref).read_text().strip()[:7]) or None
+    except OSError:
+        pass
+    try:  # packed-refs fallback
+        for line in Path(git_dir, "packed-refs").read_text().splitlines():
+            if line and not line.startswith(("#", "^")):
+                sha, _, name = line.partition(" ")
+                if name.strip() == ref:
+                    return sha.strip()[:7]
+    except OSError:
+        pass
+    return None
+
+
+def _resolve_commit() -> str:
+    # A real build-time stamp (CI's Dockerfile GIT_COMMIT arg) wins; otherwise
+    # read a bind-mounted .git at runtime; finally fall back to "dev".
+    env = os.environ.get("COUNTER_GIT_COMMIT")
+    if env and env != "dev":
+        return env
+    return _read_git_commit() or env or "dev"
+
+
+# Deployed build revision, surfaced on /status and in the explorer footer.
+GIT_COMMIT = _resolve_commit()
 
 # Headers for untrusted inscription bytes (/content and iframe-media previews),
 # mirroring ord's `content_response`. Two CSP headers are sent; the browser
@@ -169,6 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                 "indexed": store.get_last_height(self.config.start_height),
                 "count": store.count(),
                 "genesis": 0,
+                "commit": GIT_COMMIT,
             }
         finally:
             store.close()

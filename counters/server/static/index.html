@@ -192,6 +192,9 @@
   footer .lk a:hover{color:var(--copper)}
   footer .lk code{font-family:var(--mono);color:var(--patina);font-size:12px}
   footer .colophon{font-family:var(--mono);font-size:11.5px;max-width:34ch;line-height:1.7}
+  footer .build{margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+  footer .build a{color:var(--patina)}
+  footer .build code{font-family:var(--mono)}
 
   .hidden{display:none!important}
   .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--patina);color:#0c1612;font-family:var(--mono);font-size:12.5px;padding:9px 16px;border-radius:9px;opacity:0;transition:.2s;pointer-events:none;z-index:99}
@@ -399,6 +402,7 @@ counters server</pre>
     </div>
     <div class="lk colophon">
       The reference frontend for <code style="color:var(--copper2)">counters&nbsp;server</code>. Counters are files in Bitcoin witness data, owned through Counterparty assets, numbered from zero.
+      <div id="build" class="build"></div>
     </div>
   </div>
 </footer>
@@ -606,8 +610,19 @@ function doSearch(e){
 function copy(t){navigator.clipboard?.writeText(t).then(()=>toast('Copied'));}
 let tT;function toast(m){const e=el('toast');e.textContent=m;e.classList.add('show');clearTimeout(tT);tT=setTimeout(()=>e.classList.remove('show'),1400);}
 
+/* show the deployed build revision (from /status) in the footer */
+async function showBuild(){
+  const e=el('build'); if(!e) return;
+  let commit='dev';
+  try{ const st=await getStatus(); if(st&&st.commit) commit=st.commit; }catch(_){}
+  e.innerHTML = (commit && commit!=='dev')
+    ? `build <a href="https://github.com/antron3000/counters/commit/${encodeURIComponent(commit)}" target="_blank" rel="noopener"><code>${esc(commit)}</code></a>`
+    : `build <code>${esc(commit)}</code>`;
+}
+
 /* ---- boot ---- */
 route();
+showBuild();
 </script>
 </body>
 </html>
