@@ -38,6 +38,15 @@ class Indexer:
         self.store = store if store is not None else Store(config)
         self._progress: ProgressBar | None = None
         self._stop = False  # set by SIGINT for graceful shutdown
+        # Latest heights seen by _target_tip(), so run() can tell "caught up"
+        # from "waiting for the oracle to catch up".
+        self._btc_tip: int | None = None
+        self._cp_tip: int | None = None
+        # De-dup state for transient status lines (see _status): remember the
+        # current reason and when it started so we don't reprint every poll.
+        self._status_key: str | None = None
+        self._status_since = 0.0
+        self._status_last = 0.0
 
     # --- signal handling ---------------------------------------------------
 
@@ -70,6 +79,58 @@ class Indexer:
             self._progress.write(msg)
         else:
             log.info(msg)
+
+    def _status(self, key: str, msg: str, repeat_every: float = 60.0) -> None:
+        """Emit a transient, de-duplicated status line.
+
+        Prints immediately when the reason (`key`) changes; while the same
+        condition persists it reprints at most once per `repeat_every` seconds,
+        appending how long it has been waiting. This replaces the old behaviour
+        of repeating the identical line on every poll.
+        """
+        now = time.monotonic()
+        if key != self._status_key:
+            self._status_key = key
+            self._status_since = now
+            self._status_last = now
+            self._notify(msg)
+        elif now - self._status_last >= repeat_every:
+            self._status_last = now
+            self._notify(f"{msg} (still waiting, {int(now - self._status_since)}s)")
+
+    def _status_clear(self, msg: str | None = None) -> None:
+        """Clear any active status; optionally emit a one-off recovery line."""
+        if self._status_key is not None:
+            self._status_key = None
+            if msg:
+                self._notify(msg)
+
+    def _backend_wait_reason(self, err: Exception, retry: str) -> tuple[str, str]:
+        """Return (dedup_key, message) explaining why a backend is unavailable,
+        tailored to the specific failure so the line states the real reason."""
+        if isinstance(err, CounterpartyError):
+            url = self.config.cp_api_url
+            kind = getattr(err, "kind", "error")
+            if kind == "unreachable":
+                reason = (
+                    f"Counterparty API not listening on {url} yet — counterparty-server "
+                    f"is starting up or restarting (its API comes online only after the "
+                    f"database migrations finish)"
+                )
+            elif kind == "timeout":
+                reason = (
+                    f"Counterparty API at {url} is not responding — the server is busy "
+                    f"(applying migrations or catching up)"
+                )
+            else:
+                reason = f"Counterparty API error at {url}: {err}"
+            return f"cp-{kind}", f"{reason}; {retry}…"
+        # BitcoindError (or other backend RPC failure)
+        return (
+            "btc",
+            f"Bitcoin Core RPC not reachable at {self.config.btc_rpc_url} — is bitcoind "
+            f"running with RPC enabled? {retry}…",
+        )
 
     def close(self) -> None:
         self.store.close()
@@ -183,9 +244,9 @@ class Indexer:
         nothing for them, advance its cursor, and silently skip any counters
         minted in that gap (only recoverable by a full rescan).
         """
-        btc_tip = self.btc.get_block_count()
-        cp_tip = self.cp.counterparty_height()
-        return min(btc_tip, cp_tip) - self.config.confirmations
+        self._btc_tip = self.btc.get_block_count()
+        self._cp_tip = self.cp.counterparty_height()
+        return min(self._btc_tip, self._cp_tip) - self.config.confirmations
 
     def sync_to_tip(self, stop_at: int | None = None) -> int:
         start = self.store.get_last_height(self.config.start_height) + 1
@@ -254,24 +315,31 @@ class Indexer:
         try:
             while not self._stop:
                 retry = f"retrying in {self.config.poll_interval:.0f}s"
+                ok = False
                 try:
                     self.sync_to_tip()
-                except CounterpartyError:
-                    # Expected/transient: Counterparty is down, restarting, or
-                    # still running startup migrations (its API binds late).
-                    # One clear line, no stack trace; retry on the next poll.
-                    self._notify(
-                        f"Counterparty server not detected at {self.config.cp_api_url} "
-                        f"— is counterparty-server running with its v2 API on that "
-                        f"port? {retry}…"
-                    )
-                except BitcoindError:
-                    self._notify(
-                        f"Bitcoin Core not detected at {self.config.btc_rpc_url} "
-                        f"— is bitcoind running with RPC enabled? {retry}…"
-                    )
+                    ok = True
+                except (CounterpartyError, BitcoindError) as e:
+                    # Expected/transient: a backend is down, restarting, or still
+                    # running startup migrations. State the specific reason once
+                    # (no stack trace) and retry; _status de-dups the repeats.
+                    key, msg = self._backend_wait_reason(e, retry)
+                    self._status(key, msg)
                 except Exception:  # genuinely unexpected: keep the loop alive but log fully
                     log.exception("sync pass failed; %s", retry)
+                if ok:
+                    # Backends reachable. Distinguish "fully caught up" from
+                    # "waiting for the oracle to catch up" (cp behind bitcoind),
+                    # which would otherwise be a silent delay.
+                    cp, btc = self._cp_tip, self._btc_tip
+                    if cp is not None and btc is not None and cp < btc:
+                        self._status(
+                            "catchup",
+                            f"Waiting for Counterparty to catch up — it has validated to "
+                            f"block {cp:,} of {btc:,}; counters will follow automatically.",
+                        )
+                    else:
+                        self._status_clear("Backends reachable — indexing resumed.")
                 if self._stop:
                     break
                 self._interruptible_sleep(self.config.poll_interval)

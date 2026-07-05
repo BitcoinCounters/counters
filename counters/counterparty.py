@@ -16,7 +16,14 @@ from .config import Config, CREATION_EVENTS
 
 
 class CounterpartyError(Exception):
-    pass
+    """A Counterparty API call failed. `kind` classifies why so callers can
+    report a specific reason: 'unreachable' (nothing listening on the port),
+    'timeout' (reachable but slow/busy), 'http' (non-200 response), or the
+    default 'error' (anything else)."""
+
+    def __init__(self, message: str, kind: str = "error"):
+        super().__init__(message)
+        self.kind = kind
 
 
 class CounterpartyClient:
@@ -33,19 +40,23 @@ class CounterpartyClient:
         except requests.ConnectionError as e:
             raise CounterpartyError(
                 f"could not reach Counterparty at {self.base} — is counterparty-server "
-                f"running with its API enabled on that port?"
+                f"running with its API enabled on that port?",
+                kind="unreachable",
             ) from e
         except requests.Timeout as e:
             raise CounterpartyError(
                 f"Counterparty API timed out at {self.base}; the server may still be "
-                f"starting up or catching up"
+                f"starting up or catching up",
+                kind="timeout",
             ) from e
         except requests.RequestException as e:
             raise CounterpartyError(f"Counterparty API request failed: {e}") from e
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
-            raise CounterpartyError(f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}")
+            raise CounterpartyError(
+                f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}", kind="http"
+            )
         return resp.json()
 
     # --- server / chain ----------------------------------------------------
