@@ -106,6 +106,49 @@ class CounterpartyClient:
             return []
         return result if isinstance(result, list) else [result]
 
+    def get_asset_issuances(self, asset: str) -> list[dict]:
+        """Every issuance event for an asset (creation, reissuances, and
+        ownership transfers), oldest-to-newest as returned by the API.
+
+        Each row carries `block_index`, `tx_index`, `issuer`, `transfer`, and
+        `status`; used to reconstruct who held the issuance rights at any block.
+        """
+        out: list[dict] = []
+        cursor: Any = None
+        while True:
+            params: dict[str, Any] = {"limit": 1000, "verbose": "true"}
+            if cursor is not None:
+                params["cursor"] = cursor
+            data = self._get(f"/v2/assets/{asset}/issuances", params=params)
+            if not data:
+                break
+            out.extend(data.get("result", []))
+            cursor = data.get("next_cursor")
+            if cursor is None:
+                break
+        return out
+
+    def issuer_at_height(self, asset: str, height: int) -> str | None:
+        """The owner (issuance-rights holder) of `asset` as of `height`.
+
+        Ownership only changes via valid issuance messages — creation, a
+        reissuance (issuer unchanged), or a transfer that sets a new `issuer` —
+        each stamped with a block_index. So the owner as of `height` is the
+        `issuer` of the most recent VALID issuance at or before `height`,
+        ordered by (block_index, tx_index). Returns None if the asset has no
+        valid issuance by then.
+        """
+        rows = [
+            r
+            for r in self.get_asset_issuances(asset)
+            if self.is_valid(r) and r.get("block_index") is not None
+            and int(r["block_index"]) <= height
+        ]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: (int(r["block_index"]), int(r.get("tx_index") or 0)))
+        return rows[-1].get("issuer")
+
     @staticmethod
     def is_creation(issuance: dict) -> bool:
         """True if this issuance record is the asset's first/creation issuance.

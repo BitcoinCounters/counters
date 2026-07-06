@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS counters (
     fee             INTEGER,
     tx_size         INTEGER,
     xcp_burned      INTEGER,
+    reinscription   INTEGER DEFAULT 0,
     created_at      TEXT    DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_counters_asset ON counters(asset);
@@ -65,6 +66,8 @@ class CounterRecord:
     fee: int | None = None
     tx_size: int | None = None
     xcp_burned: int | None = None
+    # True when this is NOT the first counter on its asset (a reinscription).
+    reinscription: bool = False
 
 
 class Store:
@@ -89,6 +92,11 @@ class Store:
         for col in ("divisible", "supply", "fee", "tx_size", "xcp_burned"):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE counters ADD COLUMN {col} INTEGER")
+        if "reinscription" not in cols:
+            # 0 = original (first counter on its asset), 1 = reinscription.
+            self.db.execute(
+                "ALTER TABLE counters ADD COLUMN reinscription INTEGER DEFAULT 0"
+            )
 
     def close(self) -> None:
         self.db.close()
@@ -136,8 +144,8 @@ class Store:
                 number, asset, asset_id, asset_longname, content_type,
                 content_sha256, content_length, mint_txid, block_index,
                 block_position, cp_tx_index, owner, divisible, supply, fee, tx_size,
-                xcp_burned
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                xcp_burned, reinscription
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 number,
@@ -157,6 +165,7 @@ class Store:
                 rec.fee,
                 rec.tx_size,
                 rec.xcp_burned,
+                int(rec.reinscription),
             ),
         )
 
@@ -192,10 +201,32 @@ class Store:
         ).fetchone()
 
     def get_counter_by_asset(self, name: str) -> sqlite3.Row | None:
+        """The canonical (original) counter for an asset: an asset may back many
+        counters, so return the lowest-numbered one deterministically."""
         return self.db.execute(
-            "SELECT * FROM counters WHERE asset = ? OR asset_longname = ? LIMIT 1",
+            "SELECT * FROM counters WHERE asset = ? OR asset_longname = ? "
+            "ORDER BY number LIMIT 1",
             (name, name),
         ).fetchone()
+
+    def get_counters_by_asset(self, name: str) -> list[sqlite3.Row]:
+        """All counters inscribed on an asset, oldest first (original, then any
+        reinscriptions)."""
+        return self.db.execute(
+            "SELECT * FROM counters WHERE asset = ? OR asset_longname = ? "
+            "ORDER BY number",
+            (name, name),
+        ).fetchall()
+
+    def has_asset(self, asset: str) -> bool:
+        """True if the asset already backs at least one counter (used to decide
+        whether a new counter on it is a reinscription)."""
+        return (
+            self.db.execute(
+                "SELECT 1 FROM counters WHERE asset = ? LIMIT 1", (asset,)
+            ).fetchone()
+            is not None
+        )
 
     def find(self, identifier: str) -> sqlite3.Row | None:
         """Resolve a counter by number (all-digit) or asset name/longname.

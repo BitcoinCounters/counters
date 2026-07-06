@@ -160,7 +160,11 @@ class Indexer:
 
         recorded = 0
         if candidates:
-            issuances = self.cp.get_block_issuances(height)
+            # Only creation-path candidates (no target-asset tag) need the
+            # block's Counterparty issuances; a block of pure reinscriptions
+            # skips that API call entirely.
+            need_issuances = any(not env.asset for _, _, env in candidates)
+            issuances = self.cp.get_block_issuances(height) if need_issuances else {}
             for position, tx, env in candidates:
                 if self._maybe_record(height, position, tx, env, issuances):
                     recorded += 1
@@ -173,7 +177,14 @@ class Indexer:
         txid = tx.get("txid")
         if self.store.has_txid(txid):
             return False
+        # An envelope carrying a target-asset tag is a REINSCRIPTION onto an
+        # existing asset (no Counterparty message); otherwise it's a creation
+        # bound to a same-tx Counterparty issuance.
+        if env.asset:
+            return self._record_reinscription(height, position, tx, env, txid)
+        return self._record_creation(height, position, tx, env, txid, issuances)
 
+    def _record_creation(self, height, position, tx, env, txid, issuances) -> bool:
         tx_issuances = issuances.get(txid)
         if not tx_issuances:
             return False
@@ -197,6 +208,72 @@ class Indexer:
         if asset_id in ("0", "1", 0, 1):
             return False
 
+        return self._store_counter(
+            height=height, position=position, tx=tx, env=env, txid=txid,
+            asset=asset, asset_id=asset_id,
+            asset_longname=issuance.get("asset_longname") or asset_info.get("asset_longname"),
+            owner=asset_info.get("owner") or issuance.get("issuer"),
+            divisible=asset_info.get("divisible"), supply=asset_info.get("supply"),
+            cp_tx_index=issuance.get("tx_index"), xcp_burned=issuance.get("fee_paid"),
+            reinscription=False,  # a creation is always its asset's first counter
+        )
+
+    def _record_reinscription(self, height, position, tx, env, txid) -> bool:
+        """Record a counter attached to a pre-existing asset. There is NO
+        Counterparty message; the tx must instead prove issuance rights by
+        spending an input from the asset's owner address AS OF THIS BLOCK."""
+        try:
+            target = env.asset.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+
+        asset_info = self.cp.get_asset(target)
+        if not asset_info:
+            return False  # names a non-existent asset
+        asset = asset_info.get("asset") or target
+        if asset in RESERVED_ASSETS:
+            return False
+        asset_id = asset_info.get("asset_id")
+        if asset_id in ("0", "1", 0, 1):
+            return False
+
+        # Authorisation: owner (issuance-rights holder) as of this block must be
+        # among the addresses the tx spends from. Spending that input required
+        # the owner's key, so the signature proves control at this height.
+        owner = self.cp.issuer_at_height(asset, height)
+        if not owner:
+            return False
+        try:
+            spenders = self.btc.get_input_addresses(tx)
+        except (BitcoindError, KeyError, IndexError, TypeError):
+            # Can't verify authorisation (e.g. missing txindex) -> do not record.
+            log.warning(
+                "block %d tx %s: cannot verify reinscription authorisation for %s "
+                "(prevout lookup failed; is txindex=1 enabled?)", height, txid, asset,
+            )
+            return False
+        if owner not in spenders:
+            log.debug(
+                "block %d tx %s: reinscription of %s NOT authorised "
+                "(owner %s not among tx inputs)", height, txid, asset, owner,
+            )
+            return False
+
+        return self._store_counter(
+            height=height, position=position, tx=tx, env=env, txid=txid,
+            asset=asset, asset_id=asset_id,
+            asset_longname=asset_info.get("asset_longname"),
+            owner=asset_info.get("owner") or owner,
+            divisible=asset_info.get("divisible"), supply=asset_info.get("supply"),
+            cp_tx_index=None, xcp_burned=None,  # no Counterparty message
+            # First counter on the asset = "original"; any later one = reinscription.
+            reinscription=self.store.has_asset(asset),
+        )
+
+    def _store_counter(self, *, height, position, tx, env, txid, asset, asset_id,
+                       asset_longname, owner, divisible, supply, cp_tx_index,
+                       xcp_burned, reinscription) -> bool:
+        """Shared writer: blob + number + enrichment + insert + notify."""
         sha = self.store.store_blob(env.body)
         number = self.store.next_number()
         content_type = env.content_type.decode("utf-8", errors="replace") if env.content_type else None
@@ -209,24 +286,26 @@ class Indexer:
         rec = CounterRecord(
             asset=asset,
             asset_id=str(asset_id) if asset_id is not None else None,
-            asset_longname=issuance.get("asset_longname") or asset_info.get("asset_longname"),
+            asset_longname=asset_longname,
             content_type=content_type,
             content_sha256=sha,
             content_length=len(env.body),
             mint_txid=txid,
             block_index=height,
             block_position=position,
-            cp_tx_index=issuance.get("tx_index"),
-            owner=asset_info.get("owner") or issuance.get("issuer"),
-            divisible=asset_info.get("divisible"),
-            supply=asset_info.get("supply"),
+            cp_tx_index=cp_tx_index,
+            owner=owner,
+            divisible=divisible,
+            supply=supply,
             fee=fee,
             tx_size=tx_size,
-            xcp_burned=issuance.get("fee_paid"),
+            xcp_burned=xcp_burned,
+            reinscription=reinscription,
         )
         self.store.add_counter(number, rec)
+        label = "reinscription" if reinscription else "counter"
         self._notify(
-            f"counter #{number}: {asset} "
+            f"{label} #{number}: {asset} "
             f"({content_type or 'no content_type'}, {len(env.body)} bytes) @ {txid}"
         )
         return True

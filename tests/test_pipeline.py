@@ -37,16 +37,21 @@ def push(data: bytes) -> bytes:
     raise ValueError("too big")
 
 
-def counter_leaf_script(content_type: bytes, body: bytes) -> bytes:
-    return (
+def counter_leaf_script(content_type: bytes, body: bytes, asset: bytes = b"") -> bytes:
+    s = (
         b"\x00\x63"                       # OP_FALSE OP_IF
         + push(b"COUNT")                  # marker
         + push(b"\x01") + push(content_type)  # tag 1 = content_type
-        + b"\x00"                          # empty-push separator
+    )
+    if asset:
+        s += push(b"\x02") + push(asset)  # tag 2 = reinscription target asset
+    s += (
+        b"\x00"                            # empty-push separator
         + push(body)                       # body
         + b"\x68"                          # OP_ENDIF
         + push(b"\x11" * 32) + b"\xac"    # x-only pubkey + OP_CHECKSIG
     )
+    return s
 
 
 def taproot_witness(leaf_script: bytes) -> list[str]:
@@ -56,8 +61,9 @@ def taproot_witness(leaf_script: bytes) -> list[str]:
     return [sig.hex(), leaf_script.hex(), control.hex()]
 
 
-def make_block(height: int, txid: str, content_type: bytes, body: bytes) -> dict:
-    leaf = counter_leaf_script(content_type, body)
+def make_block(height: int, txid: str, content_type: bytes, body: bytes,
+               asset: bytes = b"") -> dict:
+    leaf = counter_leaf_script(content_type, body, asset)
     return {
         "hash": f"blockhash{height}",
         "height": height,
@@ -75,9 +81,13 @@ def make_block(height: int, txid: str, content_type: bytes, body: bytes) -> dict
 # --- fakes -----------------------------------------------------------------
 
 class FakeBitcoind:
-    def __init__(self, blocks: dict[int, dict], tip: int):
+    def __init__(self, blocks: dict[int, dict], tip: int, input_addresses=None):
         self._blocks = blocks
         self._tip = tip
+        self._input_addresses = set(input_addresses or [])
+
+    def get_input_addresses(self, tx: dict) -> set[str]:
+        return set(self._input_addresses)
 
     def get_block_count(self) -> int:
         return self._tip
@@ -101,9 +111,14 @@ class FakeBitcoind:
 class FakeCounterparty:
     """Mirrors the real client's interface used by the indexer."""
 
-    def __init__(self, issuances_by_block: dict[int, dict], assets: dict[str, dict]):
+    def __init__(self, issuances_by_block: dict[int, dict], assets: dict[str, dict],
+                 issuers: dict[str, str] | None = None):
         self._iss = issuances_by_block
         self._assets = assets
+        self._issuers = issuers or {}
+
+    def issuer_at_height(self, asset: str, height: int) -> str | None:
+        return self._issuers.get(asset)
 
     def get_block_issuances(self, height: int) -> dict[str, list[dict]]:
         return self._iss.get(height, {})
@@ -220,6 +235,93 @@ def test_empty_body_counter_is_recorded():
         row = idx.store.get_counter(0)
         assert row["content_length"] == 0
         assert row["content_sha256"] == hashlib.sha256(b"").hexdigest()
+        idx.close()
+
+
+def build_reinscribe_indexer(block, assets, issuers, input_addresses, tmp) -> Indexer:
+    cfg = Config()
+    cfg.data_dir = tmp
+    store = Store(cfg)
+    btc = FakeBitcoind({block["height"]: block}, tip=block["height"],
+                       input_addresses=input_addresses)
+    cp = FakeCounterparty({}, assets, issuers=issuers)
+    return Indexer(cfg, btc=btc, cp=cp, store=store)
+
+
+REINSC_ASSET = {"asset": "RAREPEPE", "asset_id": "1234", "owner": "bc1pOwner",
+                "divisible": False, "supply": 100, "asset_longname": None}
+
+
+def test_reinscription_authorized_records_counter():
+    height, txid = 800100, "1a" * 32
+    owner = "bc1pOwner"
+    block = make_block(height, txid, b"image/png", b"reinscribed!", asset=b"RAREPEPE")
+    with tempfile.TemporaryDirectory() as tmp:
+        # tx spends an input from the asset owner -> authorised
+        idx = build_reinscribe_indexer(block, {"RAREPEPE": REINSC_ASSET},
+                                       {"RAREPEPE": owner}, {owner}, tmp)
+        assert idx.process_block(height) == 1
+        row = idx.store.get_counter(0)
+        assert row["asset"] == "RAREPEPE"
+        assert row["reinscription"] == 0        # first counter on the asset = original
+        assert row["cp_tx_index"] is None       # no Counterparty message
+        assert row["xcp_burned"] is None
+        assert row["owner"] == owner
+        idx.close()
+
+
+def test_reinscription_unauthorized_is_skipped():
+    height, txid = 800101, "2b" * 32
+    block = make_block(height, txid, b"image/png", b"x", asset=b"RAREPEPE")
+    with tempfile.TemporaryDirectory() as tmp:
+        # tx spends from someone who is NOT the owner -> rejected
+        idx = build_reinscribe_indexer(block, {"RAREPEPE": REINSC_ASSET},
+                                       {"RAREPEPE": "bc1pOwner"}, {"bc1pAttacker"}, tmp)
+        assert idx.process_block(height) == 0
+        assert idx.store.count() == 0
+        idx.close()
+
+
+def test_reinscription_unknown_asset_is_skipped():
+    height, txid = 800102, "3c" * 32
+    block = make_block(height, txid, b"image/png", b"x", asset=b"NOTREAL")
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = build_reinscribe_indexer(block, {}, {}, {"bc1pWhoever"}, tmp)
+        assert idx.process_block(height) == 0
+        idx.close()
+
+
+def test_reinscription_owner_with_no_valid_issuance_is_skipped():
+    height, txid = 800103, "4d" * 32
+    block = make_block(height, txid, b"image/png", b"x", asset=b"RAREPEPE")
+    with tempfile.TemporaryDirectory() as tmp:
+        # issuer_at_height returns None (no issuers map) -> cannot authorise
+        idx = build_reinscribe_indexer(block, {"RAREPEPE": REINSC_ASSET},
+                                       {}, {"bc1pOwner"}, tmp)
+        assert idx.process_block(height) == 0
+        idx.close()
+
+
+def test_multiple_counters_per_asset_flags_later_as_reinscription():
+    owner = "bc1pOwner"
+    with tempfile.TemporaryDirectory() as tmp:
+        h1, t1 = 800200, "aa" * 32
+        b1 = make_block(h1, t1, b"image/png", b"one", asset=b"RAREPEPE")
+        idx = build_reinscribe_indexer(b1, {"RAREPEPE": REINSC_ASSET},
+                                       {"RAREPEPE": owner}, {owner}, tmp)
+        assert idx.process_block(h1) == 1       # #0, original
+
+        # a second reinscription of the SAME asset in a later block
+        h2, t2 = 800201, "bb" * 32
+        b2 = make_block(h2, t2, b"image/png", b"two", asset=b"RAREPEPE")
+        idx.btc._blocks[h2] = b2
+        idx.btc._tip = h2
+        assert idx.process_block(h2) == 1       # #1, reinscription
+
+        rows = idx.store.get_counters_by_asset("RAREPEPE")
+        assert [r["number"] for r in rows] == [0, 1]
+        assert rows[0]["reinscription"] == 0
+        assert rows[1]["reinscription"] == 1
         idx.close()
 
 
