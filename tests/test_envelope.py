@@ -40,10 +40,13 @@ OP_CHECKSIG = b"\xac"
 XONLY = b"\x11" * 32
 
 
-def envelope(content_type: bytes | None, body_chunks: list[bytes], marker: bytes = b"COUNT") -> bytes:
+def envelope(content_type: bytes | None, body_chunks: list[bytes], marker: bytes = b"COUNT",
+             asset: bytes | None = None) -> bytes:
     s = OP_FALSE + OP_IF + push(marker)
     if content_type is not None:
         s += push(b"\x01") + push(content_type)
+    if asset is not None:
+        s += push(b"\x02") + push(asset)
     s += b"\x00"  # empty-push separator
     for chunk in body_chunks:
         s += push(chunk)
@@ -108,6 +111,45 @@ def test_content_type_tag_op1_form():
     )
     envs = find_counter_envelopes(script)
     assert envs == [CounterEnvelope(b"image/png", b"data")]
+
+
+def test_reinscription_asset_tag_parsed():
+    # tag 2 = target asset; marks the envelope as a reinscription.
+    script = envelope(b"image/png", [b"data"], asset=b"RAREPEPE")
+    envs = find_counter_envelopes(script)
+    assert envs == [CounterEnvelope(b"image/png", b"data", b"RAREPEPE")]
+    assert envs[0].asset == b"RAREPEPE"
+
+
+def test_no_asset_tag_means_empty_asset():
+    # A creation-style envelope (no tag 2) leaves asset empty.
+    envs = find_counter_envelopes(envelope(b"image/png", [b"data"]))
+    assert envs[0].asset == b""
+
+
+def test_asset_tag_subasset_longname():
+    script = envelope(b"text/plain", [b"x"], asset=b"PARENT.CHILD")
+    assert find_counter_envelopes(script)[0].asset == b"PARENT.CHILD"
+
+
+def test_builder_reinscription_roundtrips_through_parser():
+    # The real builder must produce an envelope the parser reads back exactly.
+    from counters import builder
+
+    body = b"\x89PNG reinscribed"
+    leaf = builder.build_envelope(b"image/png", body, asset=b"A95428956661682177")
+    envs = find_counter_envelopes(leaf)
+    assert len(envs) == 1
+    assert envs[0].content_type == b"image/png"
+    assert envs[0].body == body
+    assert envs[0].asset == b"A95428956661682177"
+
+
+def test_builder_creation_has_no_asset():
+    from counters import builder
+
+    leaf = builder.build_envelope(b"text/plain", b"hi")
+    assert find_counter_envelopes(leaf)[0].asset == b""
 
 
 def test_no_envelope():

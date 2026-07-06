@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .config import CONTENT_TYPE_TAG, COUNT_MARKER
+from .config import ASSET_TAG, CONTENT_TYPE_TAG, COUNT_MARKER
 
 # Opcodes we care about.
 OP_0 = 0x00
@@ -107,6 +107,11 @@ def parse_script(script: bytes) -> list[Op]:
 class CounterEnvelope:
     content_type: bytes
     body: bytes
+    # Reinscription target (tag 0x02): the existing asset this counter attaches
+    # to. Empty => no target, i.e. a creation-style counter bound via a same-tx
+    # Counterparty issuance. Non-empty => reinscription (no Counterparty message;
+    # the indexer authorises it against the asset's owner as of the block).
+    asset: bytes = b""
 
 
 def _skip_to_endif(ops: list[Op], start: int) -> int:
@@ -140,13 +145,14 @@ def _parse_envelope(ops: list[Op], start: int) -> tuple[CounterEnvelope | None, 
     j += 1
 
     content_type = b""
+    asset = b""
     body_chunks: list[bytes] = []
     in_body = False
 
     while j < len(ops):
         op, data = ops[j]
         if op == OP_ENDIF:
-            return CounterEnvelope(content_type, b"".join(body_chunks)), j + 1
+            return CounterEnvelope(content_type, b"".join(body_chunks), asset), j + 1
         if op in (OP_IF, OP_NOTIF):
             # Nested conditional inside the envelope is malformed for us.
             return None, _skip_to_endif(ops, j + 1)
@@ -174,6 +180,16 @@ def _parse_envelope(ops: list[Op], start: int) -> tuple[CounterEnvelope | None, 
             if j < len(ops):
                 _, ct = ops[j]
                 content_type = ct if ct is not None else b""
+                j += 1
+            continue
+        # Tag 2 = reinscription target asset; value is the next push (UTF-8
+        # asset name/longname). Marks the envelope as a reinscription.
+        is_asset_tag = data is not None and len(data) == 1 and data[0] == ASSET_TAG
+        if is_asset_tag:
+            j += 1
+            if j < len(ops):
+                _, av = ops[j]
+                asset = av if av is not None else b""
                 j += 1
             continue
         # Unknown field element: skip it (provisional "ignore unknown" policy;

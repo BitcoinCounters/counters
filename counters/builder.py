@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 
 from . import tap
-from .config import CONTENT_TYPE_TAG, COUNT_MARKER
+from .config import ASSET_TAG, CONTENT_TYPE_TAG, COUNT_MARKER
 
 OP_FALSE = 0x00
 OP_IF = 0x63
@@ -35,13 +35,22 @@ def chunk_body(body: bytes, size: int = MAX_PUSH) -> list[bytes]:
     return [body[i : i + size] for i in range(0, len(body), size)] or []
 
 
-def build_envelope(content_type: bytes, body: bytes) -> bytes:
-    """The OP_FALSE OP_IF ... OP_ENDIF envelope (no key check)."""
+def build_envelope(content_type: bytes, body: bytes, asset: bytes = b"") -> bytes:
+    """The OP_FALSE OP_IF ... OP_ENDIF envelope (no key check).
+
+    If `asset` is given, emit the reinscription target tag (0x02) after the
+    content_type field: the counter attaches to that existing asset and the tx
+    carries no Counterparty message.
+    """
     script = bytes([OP_FALSE, OP_IF])
     script += tap.push_data(COUNT_MARKER)
     # content_type tag: a 1-byte 0x01 data push, then the MIME push.
     script += tap.push_data(bytes([CONTENT_TYPE_TAG]))
     script += tap.push_data(content_type)
+    # optional reinscription target: 1-byte 0x02 data push, then the asset push.
+    if asset:
+        script += tap.push_data(bytes([ASSET_TAG]))
+        script += tap.push_data(asset)
     script += bytes([OP_0])  # empty separator: fields end, body begins
     for chunk in chunk_body(body):
         script += tap.push_data(chunk)
@@ -49,8 +58,10 @@ def build_envelope(content_type: bytes, body: bytes) -> bytes:
     return script
 
 
-def build_leaf(reveal_xonly: bytes, content_type: bytes, body: bytes) -> bytes:
-    return tap.push_data(reveal_xonly) + bytes([OP_CHECKSIG]) + build_envelope(content_type, body)
+def build_leaf(reveal_xonly: bytes, content_type: bytes, body: bytes,
+               asset: bytes = b"") -> bytes:
+    return (tap.push_data(reveal_xonly) + bytes([OP_CHECKSIG])
+            + build_envelope(content_type, body, asset))
 
 
 @dataclass
@@ -71,10 +82,11 @@ class Inscription:
 
 
 def build_inscription(content_type: bytes, body: bytes,
-                      seckey: bytes | None = None, hrp: str = "bc") -> Inscription:
+                      seckey: bytes | None = None, hrp: str = "bc",
+                      asset: bytes = b"") -> Inscription:
     seckey = seckey or os.urandom(32)
     reveal_xonly = tap.xonly_pubkey(seckey)
-    leaf = build_leaf(reveal_xonly, content_type, body)
+    leaf = build_leaf(reveal_xonly, content_type, body, asset)
     merkle_root = tap.tapleaf_hash(leaf)
     _, output_xonly = tap.taproot_tweak_pubkey(reveal_xonly, merkle_root)
     return Inscription(
