@@ -322,6 +322,7 @@
       <a href="#/docs#number">Numbering</a>
       <a href="#/docs#mint">Minting</a>
       <a href="#/docs#valid">Validity</a>
+      <a href="#/docs#reinscribe">Reinscriptions</a>
       <a href="#/docs#api">Server API</a>
       <a href="#/docs#setup">Setup</a>
       <a href="#/docs#source">Source</a>
@@ -371,7 +372,13 @@ counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
         <li data-n="4">exactly one <code>COUNT</code> envelope is present;</li>
         <li data-n="5">the asset is not BTC or XCP.</li>
       </ul>
-      <p>Validity depends on Counterparty's verdict, not an explorer's listing — an asset can appear indexed yet be an invalid issuance.</p>
+      <p>Validity depends on Counterparty's verdict, not an explorer's listing — an asset can appear indexed yet be an invalid issuance. <em>Reinscriptions</em> onto an existing asset are bound and authorised differently — see below.</p>
+
+      <h2 id="reinscribe">Reinscriptions</h2>
+      <p>A counter can also be attached to an <strong>existing</strong> asset you already own — a <em>reinscription</em>. The <code>COUNT</code> envelope names the target asset (tag <code>0x02</code>) and the transaction carries <strong>no Counterparty message</strong>. It's authorised on-chain by spending an input from the asset's <strong>owner (issuance-rights holder) as of that block</strong> — <em>ownership</em>, not token balance, checked at the height of the inscription so a later transfer can't change the verdict.</p>
+      <p>Each reinscription is a new, permanently-numbered counter, so one asset can back many. The lowest-numbered counter on an asset is its <em>original</em>; later ones are reinscriptions, and a counter's page lists them all.</p>
+      <pre><span class="c"># attach a counter to an asset you own (no new asset, no XCP)</span>
+counters wallet --name me inscribe --file v2.png --asset RAREPEPE --reinscribe</pre>
 
       <h2 id="api">Server API</h2>
       <p>This explorer reads these endpoints from <code>counters server</code>:</p>

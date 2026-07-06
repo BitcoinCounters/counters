@@ -18,7 +18,9 @@ For each block (ascending):
 
 1. **Parse** — in each transaction, scan the inputs' witness data for a valid
    `COUNT` envelope
-   (`OP_FALSE OP_IF "COUNT" <0x01 content_type> <0x00> <body…> OP_ENDIF …`).
+   (`OP_FALSE OP_IF "COUNT" <0x01 content_type> [<0x02 asset>] <0x00> <body…> OP_ENDIF …`).
+   The optional `0x02` tag names a target asset and marks a *reinscription*
+   (see below).
 2. **Join** — for each tx with **exactly one** valid envelope (across all its inputs),
    bind it to the Counterparty issuance in the **same transaction** (matched by
    `txid`). The block's issuances are fetched once and each candidate is looked
@@ -32,6 +34,23 @@ For each block (ascending):
 We never reimplement Counterparty consensus — **Counterparty Core** decides
 issuance validity, asset identity, and ownership. ("Bitcoin Core" is the
 separate Bitcoin node; the two are always named in full to avoid confusion.)
+
+### Reinscriptions
+
+A counter can also be attached to an **existing** asset you already own — a
+*reinscription*. Here the `COUNT` envelope carries an extra `0x02` tag naming
+the target asset, and the transaction carries **no Counterparty message** at
+all. The indexer authorises it by proving the transaction spent an input from
+the asset's **owner (issuance-rights holder) as of that block** — reconstructed
+from Counterparty's issuance history (creation → reissuances → ownership
+transfers). It is *ownership*, not token balance, that grants the right, and
+ownership is checked at the height of the inscription, so a later transfer can
+neither retroactively authorise nor invalidate it.
+
+Each reinscription is a new, permanently-numbered counter, so one asset can
+back many counters. The lowest-numbered counter on an asset is its *original*;
+any later ones are reinscriptions (the explorer lists them all on the asset).
+Mint one with `inscribe --reinscribe --asset <ASSET>` (see Usage).
 
 ## Requirements
 
@@ -132,6 +151,7 @@ counters wallet --name mywallet send RAREPEPE 1 bc1p... --dry-run  # compose+sig
 counters wallet --name mywallet inscribe --file cat.png --dry-run
 counters wallet --name mywallet inscribe --file cat.png                    # free numeric asset
 counters wallet --name mywallet inscribe --file cat.png --asset ZOMBIEPEPES # named (0.5 XCP)
+counters wallet --name mywallet inscribe --file v2.png --asset RAREPEPE --reinscribe  # attach to an asset you own (no new asset, no XCP)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8 --commit-fee-rate 4
 ```
 
@@ -166,7 +186,7 @@ counters/
   commands/         CLI command handlers
     read.py         status / info / list / validate
     wallet.py       create / restore / receive / balance / inscriptions
-    inscribe.py     mint flow: compose issuance + build/sign commit & reveal
+    inscribe.py     mint flow: create-issuance or reinscribe; build/sign commit & reveal
     send.py         transfer a counter (compose send + sign + broadcast)
     serve.py        server command entry point
   server/           web explorer + read-only JSON API
