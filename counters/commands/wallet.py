@@ -98,13 +98,46 @@ def cmd_wallet_create(config: Config, name: str) -> int:
     return 0
 
 
+def _bip39_problem(mnemo: Mnemonic, phrase: str) -> str | None:
+    """Explain why `phrase` isn't a usable BIP39 mnemonic, or None if it checks
+    out. Distinguishes the common old-Counterparty case (pre-BIP39 Electrum-v1
+    seeds → legacy 1... addresses) from a plain typo, since 'checksum failed'
+    alone sends people down the wrong path."""
+    if mnemo.check(phrase):
+        return None
+    words = phrase.split()
+    n = len(words)
+    wordset = set(mnemo.wordlist)
+    unknown = [w for w in words if w.lower() not in wordset]
+    if unknown:
+        eg = ", ".join(unknown[:4]) + ("…" if len(unknown) > 4 else "")
+        return (
+            f"this doesn't look like a BIP39 seed — {len(unknown)} of {n} words aren't "
+            f"in the BIP39 word list (e.g. {eg}).\n"
+            "Old Counterparty wallets (Counterwallet / Freewallet) use the pre-BIP39 "
+            "Electrum-v1 scheme with legacy 1... addresses, which this taproot-only "
+            "tool cannot import. Recover those funds/assets in Counterwallet, "
+            "Freewallet, or Electrum ('I already have a seed' → options → old-style), "
+            "then optionally sweep them to a fresh wallet made here "
+            "(`counters wallet --name <name> create`)."
+        )
+    if n not in (12, 15, 18, 21, 24):
+        return (f"got {n} words; a BIP39 seed is 12, 15, 18, 21, or 24 words. "
+                "Check for a missing or extra word.")
+    return ("BIP39 checksum failed although every word is valid — a word is most "
+            "likely mistyped, swapped, or out of order (the final word encodes a "
+            "checksum). Re-check the phrase and its word order.")
+
+
 def cmd_wallet_restore(config: Config, name: str) -> int:
     btc = BitcoindClient(config)
-    print("enter your 12/24-word seed phrase:", file=sys.stderr)
+    print("enter your 12/24-word BIP39 seed phrase (this restores a taproot / bc1p "
+          "wallet):", file=sys.stderr)
     mnemonic = sys.stdin.readline().strip()
     mnemo = Mnemonic("english")
-    if not mnemo.check(mnemonic):
-        print("invalid BIP39 mnemonic (checksum failed)", file=sys.stderr)
+    problem = _bip39_problem(mnemo, mnemonic)
+    if problem:
+        print(problem, file=sys.stderr)
         return 1
     seed = mnemo.to_seed(mnemonic)
     print(f"importing into wallet {name!r} and rescanning the chain — this can take "
