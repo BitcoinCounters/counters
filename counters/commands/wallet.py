@@ -17,8 +17,7 @@ from decimal import Decimal
 
 from mnemonic import Mnemonic
 
-from .. import electrum1
-from ..bip32 import bip86_account, bip86_descriptors
+from .. import bip32, electrum1
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
@@ -33,28 +32,25 @@ def _checksummed(btc: BitcoindClient, descriptor: str) -> str:
 
 
 def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool) -> None:
-    """Create a blank descriptor wallet and import the BIP86 tr() chains."""
-    acct_xprv, fp = bip86_account(seed)
-    recv, change = bip86_descriptors(acct_xprv, fp)
+    """Create a blank descriptor wallet and import ALL standard BIP39 accounts
+    (legacy/nested/segwit/taproot). A BIP39 seed can hold coins under any of
+    them, so importing all four lets one rescan find funds wherever they are —
+    important for Counterparty assets, which mostly sit on legacy 1... paths.
+    Core allows one active descriptor per output type, so all four coexist."""
     # blank descriptor wallet, private keys enabled, so we can import our own.
     btc._call("createwallet", [name, False, True, "", False, True, False, False])
     timestamp = 0 if rescan else "now"
-    requests = [
-        {
-            "desc": _checksummed(btc, recv),
-            "active": True,
-            "internal": False,
-            "timestamp": timestamp,
-            "range": [0, _KEYPOOL],
-        },
-        {
-            "desc": _checksummed(btc, change),
-            "active": True,
-            "internal": True,
-            "timestamp": timestamp,
-            "range": [0, _KEYPOOL],
-        },
-    ]
+    requests = []
+    for kind in bip32.ACCOUNT_TYPES:
+        recv, change = bip32.account_descriptors(seed, kind)
+        for desc, internal in ((recv, False), (change, True)):
+            requests.append({
+                "desc": _checksummed(btc, desc),
+                "active": True,
+                "internal": internal,
+                "timestamp": timestamp,
+                "range": [0, _KEYPOOL],
+            })
     # A timestamp=0 import rescans the whole chain and blocks the RPC until
     # done, so disable the client timeout for that case.
     results = btc.wallet_call(
@@ -165,18 +161,21 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
     )
     if use_counterwallet:
         return _restore_counterwallet(config, name, phrase, addresses, dry_run)
-    if dry_run:
-        print("--dry-run is only supported for Counterwallet restores.",
-              file=sys.stderr)
-        return 1
     problem = _bip39_problem(mnemo, phrase)
     if problem:
         print(problem, file=sys.stderr)
         return 1
-    btc = BitcoindClient(config)
     seed = mnemo.to_seed(phrase)
-    print(f"importing into wallet {name!r} and rescanning the chain — this can take "
-          "several minutes; please wait...", file=sys.stderr)
+    if dry_run:
+        print("BIP39 seed — first receive address of each account type (NOTHING "
+              "imported — dry run):")
+        for kind in bip32.ACCOUNT_TYPES:
+            print(f"  {kind:8} {bip32.first_address(seed, kind)}")
+        print("\nre-run without --dry-run to import all four accounts + rescan.")
+        return 0
+    btc = BitcoindClient(config)
+    print(f"importing all account types into wallet {name!r} and rescanning the chain "
+          "— this can take several minutes; please wait...", file=sys.stderr)
     try:
         _import_account(btc, name, seed, rescan=True)
     except BitcoindError as e:

@@ -175,8 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_restore.add_argument(
         "--dry-run", action="store_true",
-        help="Counterwallet only: derive and print the legacy 1... addresses to "
-             "verify them, but import nothing and skip the rescan",
+        help="derive and print the addresses (per account type for BIP39, or the "
+             "1... list for Counterwallet) to verify them, but import nothing and "
+             "skip the rescan",
     )
     wsub.add_parser("receive", parents=[common, wname], help="new taproot (bc1p) receive address")
     wsub.add_parser("balance", parents=[common, wname], help="BTC + Counterparty balances")

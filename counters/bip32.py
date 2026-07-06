@@ -18,6 +18,8 @@ import struct
 
 from ecdsa import SECP256k1
 
+from . import tap  # bech32/bech32m + BIP341 taproot tweak for address encoding
+
 _CURVE_ORDER = SECP256k1.order
 _G = SECP256k1.generator
 _HARDENED = 0x80000000
@@ -189,3 +191,62 @@ def bip86_descriptors(account_xprv: str, master_fp: str) -> tuple[str, str]:
     receive = f"tr({origin}{account_xprv}/0/*)"
     change = f"tr({origin}{account_xprv}/1/*)"
     return receive, change
+
+
+# --- generic BIP39 accounts (legacy/nested/segwit/taproot) ------------------
+#
+# A BIP39 seed can hold coins under several standard accounts. We import all of
+# them so a rescan finds funds wherever they are, without the user knowing which
+# derivation their old wallet used. Each entry maps a friendly name to the BIP43
+# purpose and the Core descriptor template (Core appends the checksum).
+_ACCOUNTS = {
+    "legacy":  (44, "pkh({inner})"),        # 1...   P2PKH
+    "nested":  (49, "sh(wpkh({inner}))"),   # 3...   P2SH-P2WPKH
+    "segwit":  (84, "wpkh({inner})"),       # bc1q.. P2WPKH
+    "taproot": (86, "tr({inner})"),         # bc1p.. P2TR (BIP86)
+}
+ACCOUNT_TYPES = ("legacy", "nested", "segwit", "taproot")
+
+
+def _account_node(seed: bytes, purpose: int) -> tuple["_Node", str]:
+    master = _master_from_seed(seed)
+    fp = _fingerprint(master.secret).hex()
+    node = (master.ckd_priv(purpose + _HARDENED)
+                  .ckd_priv(0 + _HARDENED)
+                  .ckd_priv(0 + _HARDENED))
+    return node, fp
+
+
+def account_descriptors(seed: bytes, kind: str) -> tuple[str, str]:
+    """(receive, change) descriptors (no checksum) for a BIP39 account type:
+    'legacy'(44) / 'nested'(49) / 'segwit'(84) / 'taproot'(86)."""
+    purpose, template = _ACCOUNTS[kind]
+    node, fp = _account_node(seed, purpose)
+    xprv = node.xprv()
+    origin = f"[{fp}/{purpose}h/0h/0h]"
+    return (template.format(inner=f"{origin}{xprv}/0/*"),
+            template.format(inner=f"{origin}{xprv}/1/*"))
+
+
+def address_from_pubkey(kind: str, pub_compressed: bytes) -> str:
+    """Encode a compressed pubkey as the address for the given account type."""
+    if kind == "legacy":
+        return _b58check(b"\x00" + _hash160(pub_compressed))
+    if kind == "nested":
+        redeem = b"\x00\x14" + _hash160(pub_compressed)  # 0 <20-byte-keyhash>
+        return _b58check(b"\x05" + _hash160(redeem))
+    if kind == "segwit":
+        return tap.encode_segwit_address("bc", 0, _hash160(pub_compressed))
+    if kind == "taproot":
+        _, tweaked = tap.taproot_tweak_pubkey(pub_compressed[1:], b"")  # BIP86: no script
+        return tap.p2tr_address(tweaked)
+    raise ValueError(f"unknown account type {kind!r}")
+
+
+def first_address(seed: bytes, kind: str, *, change: int = 0, index: int = 0) -> str:
+    """Offline: the address at m/purpose'/0'/0'/change/index for the account type
+    (used to preview a restore without touching Bitcoin Core)."""
+    purpose, _ = _ACCOUNTS[kind]
+    node, _ = _account_node(seed, purpose)
+    child = node.ckd_priv(change).ckd_priv(index)
+    return address_from_pubkey(kind, _ser_pubkey(child.secret))
