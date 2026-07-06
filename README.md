@@ -139,7 +139,11 @@ counters server --host 0.0.0.0 --port 8081         # bind publicly / pick a port
 
 # --- wallet (taproot BIP86, bc1p; keys held by Bitcoin Core) ---
 counters wallet --name mywallet create             # new wallet; prints a 12-word seed ONCE
-counters wallet --name mywallet restore            # re-import from a seed (read on stdin) + rescan
+counters wallet --name mywallet restore            # re-import from a BIP39 seed (read on stdin) + rescan
+
+# recover an OLD Counterparty wallet (Counterwallet / Freewallet — pre-BIP39 Electrum v1, legacy 1... addresses)
+counters wallet --name old restore --counterwallet --dry-run   # preview the derived 1... addresses; imports nothing
+counters wallet --name old restore --counterwallet             # import the legacy keys into Core + rescan
 counters wallet --name mywallet receive            # next taproot (bc1p) address
 counters wallet --name mywallet balance            # BTC + aggregated Counterparty balances
 counters wallet --name mywallet inscriptions       # counters held by the wallet
@@ -179,6 +183,8 @@ counters/
   builder.py        COUNT leaf script + P2TR commit-address derivation
   tap.py            BIP340 Schnorr + BIP341/342 taproot + tx serializer
   bip32.py          BIP32/BIP86 derivation (pure-Python RIPEMD160 + ecdsa)
+  electrum1.py      Electrum-v1 recovery for old Counterwallet/Freewallet seeds
+  electrum1_words.txt  the 1626-word Electrum-v1 list (verbatim from Electrum, MIT)
   progress.py       ord-style progress bar
   __main__.py       CLI command tree (parser + dispatch)
   indexer/          the indexing engine

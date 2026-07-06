@@ -21,3 +21,4 @@ include = ["counters*"]
 
 [tool.setuptools.package-data]
 "counters.server" = ["static/*"]
+"counters" = ["electrum1_words.txt"]

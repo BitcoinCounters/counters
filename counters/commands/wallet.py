@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from mnemonic import Mnemonic
 
+from .. import electrum1
 from ..bip32 import bip86_account, bip86_descriptors
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
@@ -56,6 +57,29 @@ def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool) -
     ]
     # A timestamp=0 import rescans the whole chain and blocks the RPC until
     # done, so disable the client timeout for that case.
+    results = btc.wallet_call(
+        name, "importdescriptors", [requests], timeout=None if rescan else -1.0
+    )
+    for r in results:
+        if not r.get("success"):
+            raise BitcoindError(f"importdescriptors failed: {r.get('error')}")
+
+
+def _import_counterwallet(btc: BitcoindClient, name: str, keys: list[dict],
+                          rescan: bool) -> None:
+    """Create a blank descriptor wallet and import the legacy Counterwallet keys
+    as single-key pkh() descriptors (WIF), so Core holds them and can sign. Each
+    key is uncompressed → a 1... P2PKH address, matching Counterwallet exactly."""
+    btc._call("createwallet", [name, False, True, "", False, True, False, False])
+    timestamp = 0 if rescan else "now"
+    requests = [
+        {
+            "desc": _checksummed(btc, f"pkh({k['wif']})"),
+            "timestamp": timestamp,
+            "label": f"counterwallet/{k['for_change']}/{k['n']}",
+        }
+        for k in keys
+    ]
     results = btc.wallet_call(
         name, "importdescriptors", [requests], timeout=None if rescan else -1.0
     )
@@ -115,11 +139,8 @@ def _bip39_problem(mnemo: Mnemonic, phrase: str) -> str | None:
             f"this doesn't look like a BIP39 seed — {len(unknown)} of {n} words aren't "
             f"in the BIP39 word list (e.g. {eg}).\n"
             "Old Counterparty wallets (Counterwallet / Freewallet) use the pre-BIP39 "
-            "Electrum-v1 scheme with legacy 1... addresses, which this taproot-only "
-            "tool cannot import. Recover those funds/assets in Counterwallet, "
-            "Freewallet, or Electrum ('I already have a seed' → options → old-style), "
-            "then optionally sweep them to a fresh wallet made here "
-            "(`counters wallet --name <name> create`)."
+            "Electrum-v1 scheme with legacy 1... addresses. Restore those with:\n"
+            "  counters wallet --name <name> restore --counterwallet"
         )
     if n not in (12, 15, 18, 21, 24):
         return (f"got {n} words; a BIP39 seed is 12, 15, 18, 21, or 24 words. "
@@ -129,7 +150,10 @@ def _bip39_problem(mnemo: Mnemonic, phrase: str) -> str | None:
             "checksum). Re-check the phrase and its word order.")
 
 
-def cmd_wallet_restore(config: Config, name: str) -> int:
+def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False,
+                       addresses: int = 20, dry_run: bool = False) -> int:
+    if counterwallet:
+        return _restore_counterwallet(config, name, addresses, dry_run)
     btc = BitcoindClient(config)
     print("enter your 12/24-word BIP39 seed phrase (this restores a taproot / bc1p "
           "wallet):", file=sys.stderr)
@@ -149,6 +173,54 @@ def cmd_wallet_restore(config: Config, name: str) -> int:
         return 1
     print(f"restored wallet {name!r}; rescan complete. Check `counters wallet --name "
           f"{name} balance`.")
+    return 0
+
+
+def _restore_counterwallet(config: Config, name: str, addresses: int,
+                           dry_run: bool = False) -> int:
+    """Recover an old Counterwallet / Freewallet (Electrum v1) wallet: decode the
+    seed, derive its legacy uncompressed 1... keys, and import them into Core so
+    it holds and signs them. These are NOT taproot; they live on 1... addresses.
+    With dry_run, print the derived addresses and import nothing (no node needed),
+    so you can confirm they match your wallet before the long rescan."""
+    print("enter your 12-word Counterwallet / Freewallet (Electrum v1) seed phrase:",
+          file=sys.stderr)
+    phrase = sys.stdin.readline().strip()
+    if not electrum1.is_electrum_v1_phrase(phrase):
+        print("that isn't a valid Counterwallet / Electrum-v1 phrase — a word is "
+              "unknown or the word count isn't a multiple of 3 (Counterwallet uses "
+              "12).", file=sys.stderr)
+        return 1
+    try:
+        mpk, keys = electrum1.derive(phrase, count=max(1, addresses))
+    except ValueError as e:
+        print(f"could not decode seed: {e}", file=sys.stderr)
+        return 1
+
+    if dry_run:
+        print(f"Counterwallet (Electrum v1) — mpk {mpk[:16]}…")
+        print(f"derived {len(keys)} addresses (NOT imported — dry run):")
+        for k in keys:
+            chain = "recv" if k["for_change"] == 0 else "chng"
+            print(f"  {chain}/{k['n']:<3} {k['address']}")
+        print("\nif your address is listed, re-run without --dry-run to import + "
+              "rescan; if not, raise --addresses N.")
+        return 0
+
+    btc = BitcoindClient(config)
+    print(f"deriving {len(keys)} legacy addresses (mpk {mpk[:16]}…) and importing them "
+          f"into wallet {name!r}; rescanning the chain — this can take several "
+          "minutes, please wait...", file=sys.stderr)
+    try:
+        _import_counterwallet(btc, name, keys, rescan=True)
+    except BitcoindError as e:
+        print(f"could not restore wallet: {e}", file=sys.stderr)
+        return 1
+    print(f"restored Counterwallet keys into wallet {name!r}; rescan complete.")
+    print(f"  first address: {keys[0]['address']}")
+    print("these are legacy 1... addresses. Run `counters wallet --name "
+          f"{name} balance` for BTC + Counterparty balances, and `... send` to move "
+          "assets (e.g. to a new taproot wallet created here).")
     return 0
 
 

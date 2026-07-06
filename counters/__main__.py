@@ -160,7 +160,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_wallet._action_groups.insert(0, p_wallet._action_groups.pop())
     wsub.add_parser("create", parents=[common, wname], help="create a wallet; print the seed once")
-    wsub.add_parser("restore", parents=[common, wname], help="restore from a seed phrase (via stdin)")
+    p_restore = wsub.add_parser(
+        "restore", parents=[common, wname], help="restore from a seed phrase (via stdin)"
+    )
+    p_restore.add_argument(
+        "--counterwallet", action="store_true",
+        help="the seed is an old Counterwallet / Freewallet (Electrum v1) phrase; "
+             "import its legacy 1... keys instead of deriving taproot",
+    )
+    p_restore.add_argument(
+        "--addresses", type=int, default=20, metavar="N",
+        help="Counterwallet only: how many addresses per chain to import (default 20)",
+    )
+    p_restore.add_argument(
+        "--dry-run", action="store_true",
+        help="Counterwallet only: derive and print the legacy 1... addresses to "
+             "verify them, but import nothing and skip the rescan",
+    )
     wsub.add_parser("receive", parents=[common, wname], help="new taproot (bc1p) receive address")
     wsub.add_parser("balance", parents=[common, wname], help="BTC + Counterparty balances")
     wsub.add_parser("inscriptions", parents=[common, wname], help="counters held by this wallet")
@@ -261,9 +277,14 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.name, args.asset, args.amount, args.destination,
                     dry_run=args.dry_run,
                 )
+            if args.wallet_command == "restore":
+                return wallet.cmd_wallet_restore(
+                    config, args.name,
+                    counterwallet=args.counterwallet, addresses=args.addresses,
+                    dry_run=args.dry_run,
+                )
             dispatch = {
                 "create": wallet.cmd_wallet_create,
-                "restore": wallet.cmd_wallet_restore,
                 "receive": wallet.cmd_wallet_receive,
                 "balance": wallet.cmd_wallet_balance,
                 "inscriptions": wallet.cmd_wallet_inscriptions,
