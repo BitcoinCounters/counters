@@ -141,9 +141,10 @@ counters server --host 0.0.0.0 --port 8081         # bind publicly / pick a port
 counters wallet --name mywallet create             # new wallet; prints a 12-word seed ONCE
 counters wallet --name mywallet restore            # re-import from a BIP39 seed (read on stdin) + rescan
 
-# recover an OLD Counterparty wallet (Counterwallet / Freewallet — pre-BIP39 Electrum v1, legacy 1... addresses)
-counters wallet --name old restore --counterwallet --dry-run   # preview the derived 1... addresses; imports nothing
-counters wallet --name old restore --counterwallet             # import the legacy keys into Core + rescan
+# recover an OLD Counterparty wallet (Counterwallet / Freewallet — pre-BIP39 Electrum v1, legacy 1... addresses).
+# The seed type is auto-detected; --counterwallet only forces it for a phrase valid as BOTH schemes.
+counters wallet --name old restore --dry-run                   # preview the derived 1... addresses; imports nothing
+counters wallet --name old restore                             # import the legacy keys into Core + rescan
 counters wallet --name mywallet receive            # next taproot (bc1p) address
 counters wallet --name mywallet balance            # BTC + aggregated Counterparty balances
 counters wallet --name mywallet inscriptions       # counters held by the wallet

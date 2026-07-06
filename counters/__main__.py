@@ -165,8 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_restore.add_argument(
         "--counterwallet", action="store_true",
-        help="the seed is an old Counterwallet / Freewallet (Electrum v1) phrase; "
-             "import its legacy 1... keys instead of deriving taproot",
+        help="force the old Counterwallet / Freewallet (Electrum v1) path, importing "
+             "legacy 1... keys. Normally auto-detected from the phrase; only needed "
+             "for a phrase that is valid as both BIP39 and Electrum v1",
     )
     p_restore.add_argument(
         "--addresses", type=int, default=20, metavar="N",
