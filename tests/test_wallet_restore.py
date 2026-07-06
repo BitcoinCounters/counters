@@ -62,13 +62,21 @@ def test_autodetects_counterwallet_without_flag(monkeypatch, capsys):
     assert "1FJEEB8ihPMbzs2SkLmr37dHyRFzakqUmo" in out   # known first address
 
 
-def test_bip39_dry_run_is_rejected(monkeypatch, capsys):
-    # --dry-run only applies to Counterwallet; a BIP39 seed must not silently
-    # import. It should error out before touching a node.
-    monkeypatch.setattr(sys, "stdin", io.StringIO(MN.generate(strength=128) + "\n"))
+def test_bip39_dry_run_previews_all_accounts(monkeypatch, capsys):
+    # --dry-run on a BIP39 seed previews one address per account type, offline,
+    # and imports nothing. Uses the canonical 'abandon...about' vector.
+    seed = ("abandon abandon abandon abandon abandon abandon "
+            "abandon abandon abandon abandon abandon about")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(seed + "\n"))
     rc = wallet.cmd_wallet_restore(Config(), "w", dry_run=True)
-    assert rc == 1
-    assert "dry-run" in capsys.readouterr().err.lower()
+    out = capsys.readouterr().out
+    assert rc == 0
+    # authoritative first addresses (iancoleman / BIP86 spec)
+    assert "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA" in out          # legacy  (BIP44)
+    assert "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf" in out          # nested  (BIP49)
+    assert "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu" in out  # segwit  (BIP84)
+    assert ("bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
+            in out)                                             # taproot (BIP86)
 
 
 if __name__ == "__main__":
