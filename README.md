@@ -142,7 +142,7 @@ counters wallet --name mywallet create             # new wallet; prints a 12-wor
 counters wallet --name mywallet restore            # re-import from a BIP39 seed (read on stdin) + rescan
 
 # recover an OLD Counterparty wallet (Counterwallet / Freewallet — pre-BIP39 Electrum v1, legacy 1... addresses).
-# The seed type is auto-detected; --counterwallet only forces it for a phrase valid as BOTH schemes.
+# The seed type is auto-detected; --counterwallet only forces it for a phrase valid as BOTH schemes. See wallets.md.
 counters wallet --name old restore --dry-run                   # preview the derived 1... addresses; imports nothing
 counters wallet --name old restore                             # import the legacy keys into Core + rescan
 counters wallet --name mywallet receive            # next taproot (bc1p) address
@@ -203,6 +203,7 @@ pyproject.toml      installs the `counters` console command
 Dockerfile          container image (entrypoint: the `counters` CLI)
 docker-compose.yml  explorer + indexer services, data volume, host networking
 .env.example        sample environment (copy to .env)
+wallets.md          seed-phrase / wallet-type import support (BIP39, Counterwallet, …)
 docs/               protocol + CLI reference PDFs
 tests/
   test_envelope.py  parser unit tests
