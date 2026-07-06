@@ -188,3 +188,22 @@ class BitcoindClient:
             if size is not None and csize is not None:
                 size += csize
         return fee, size
+
+    def get_input_addresses(self, tx: dict) -> set[str]:
+        """The set of addresses whose UTXOs this tx spends.
+
+        Each input's address is read from its prevout's scriptPubKey (needs
+        txindex=1 for non-wallet prevouts). Used to prove reinscription
+        authorisation: the tx must spend from the asset's owner address.
+        Coinbase inputs and prevouts without a decodable address are skipped.
+        """
+        addrs: set[str] = set()
+        for vin in tx.get("vin", []):
+            if "txid" not in vin:  # coinbase: no prevout
+                continue
+            prev = self.get_raw_transaction(vin["txid"], verbose=True)
+            spk = prev["vout"][vin["vout"]].get("scriptPubKey", {})
+            addr = spk.get("address")
+            if addr:
+                addrs.add(addr)
+        return addrs
