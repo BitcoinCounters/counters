@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from mnemonic import Mnemonic
 
-from .. import bip32, electrum1
+from .. import bip32, electrum1, electrum2
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
@@ -61,20 +61,16 @@ def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool) -
             raise BitcoindError(f"importdescriptors failed: {r.get('error')}")
 
 
-def _import_counterwallet(btc: BitcoindClient, name: str, keys: list[dict],
-                          rescan: bool) -> None:
-    """Create a blank descriptor wallet and import the legacy Counterwallet keys
-    as single-key pkh() descriptors (WIF), so Core holds them and can sign. Each
-    key is uncompressed → a 1... P2PKH address, matching Counterwallet exactly."""
+def _import_wif(btc: BitcoindClient, name: str,
+                descriptors_with_labels: list[tuple[str, str]], rescan: bool) -> None:
+    """Create a blank descriptor wallet and import single-key WIF descriptors, so
+    Core holds the keys and can sign. Used by the legacy imports (Counterwallet /
+    Electrum) where addresses are a flat key list, not ranged BIP32 chains."""
     btc._call("createwallet", [name, False, True, "", False, True, False, False])
     timestamp = 0 if rescan else "now"
     requests = [
-        {
-            "desc": _checksummed(btc, f"pkh({k['wif']})"),
-            "timestamp": timestamp,
-            "label": f"counterwallet/{k['for_change']}/{k['n']}",
-        }
-        for k in keys
+        {"desc": _checksummed(btc, desc), "timestamp": timestamp, "label": label}
+        for desc, label in descriptors_with_labels
     ]
     results = btc.wallet_call(
         name, "importdescriptors", [requests], timeout=None if rescan else -1.0
@@ -82,6 +78,24 @@ def _import_counterwallet(btc: BitcoindClient, name: str, keys: list[dict],
     for r in results:
         if not r.get("success"):
             raise BitcoindError(f"importdescriptors failed: {r.get('error')}")
+
+
+def _import_counterwallet(btc: BitcoindClient, name: str, keys: list[dict],
+                          rescan: bool) -> None:
+    """Import legacy Counterwallet keys as pkh() WIF descriptors — each key is
+    uncompressed → a 1... P2PKH address, matching Counterwallet exactly."""
+    _import_wif(btc, name,
+                [(f"pkh({k['wif']})", f"counterwallet/{k['for_change']}/{k['n']}")
+                 for k in keys], rescan)
+
+
+def _import_electrum2(btc: BitcoindClient, name: str, keys: list[dict],
+                      rescan: bool) -> None:
+    """Import Electrum 2.x keys as pkh() (standard) or wpkh() (segwit) WIF
+    descriptors, per the seed's script type carried on each key."""
+    _import_wif(btc, name,
+                [(k["desc"].format(wif=k["wif"]), f"electrum/{k['for_change']}/{k['n']}")
+                 for k in keys], rescan)
 
 
 def _wallet_addresses(btc: BitcoindClient, name: str) -> list[str]:
@@ -161,6 +175,8 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
     )
     if use_counterwallet:
         return _restore_counterwallet(config, name, phrase, addresses, dry_run)
+    if not mnemo.check(phrase) and electrum2.is_electrum2_phrase(phrase):
+        return _restore_electrum2(config, name, phrase, addresses, dry_run)
     problem = _bip39_problem(mnemo, phrase)
     if problem:
         print(problem, file=sys.stderr)
@@ -228,6 +244,42 @@ def _restore_counterwallet(config: Config, name: str, phrase: str, addresses: in
     print("these are legacy 1... addresses. Run `counters wallet --name "
           f"{name} balance` for BTC + Counterparty balances, and `... send` to move "
           "assets (e.g. to a new taproot wallet created here).")
+    return 0
+
+
+def _restore_electrum2(config: Config, name: str, phrase: str, addresses: int,
+                       dry_run: bool = False) -> int:
+    """Recover an Electrum 2.x wallet (standard → 1… P2PKH, or segwit → bc1q…
+    P2WPKH): decode the seed with Electrum's derivation and import the keys into
+    Core. With dry_run, print the addresses and import nothing (no node needed)."""
+    try:
+        seed_type, keys = electrum2.derive(phrase, count=max(1, addresses))
+    except ValueError as e:
+        print(f"could not decode seed: {e}", file=sys.stderr)
+        return 1
+    label = f"Electrum 2.x ({seed_type})"
+
+    if dry_run:
+        print(f"{label} — derived {len(keys)} addresses (NOT imported — dry run):")
+        for k in keys:
+            chain = "recv" if k["for_change"] == 0 else "chng"
+            print(f"  {chain}/{k['n']:<3} {k['address']}")
+        print("\nif your address is listed, re-run without --dry-run to import + "
+              "rescan; if not, raise --addresses N.")
+        return 0
+
+    btc = BitcoindClient(config)
+    print(f"importing {len(keys)} {label} keys into wallet {name!r}; rescanning the "
+          "chain — this can take several minutes, please wait...", file=sys.stderr)
+    try:
+        _import_electrum2(btc, name, keys, rescan=True)
+    except BitcoindError as e:
+        print(f"could not restore wallet: {e}", file=sys.stderr)
+        return 1
+    print(f"restored {label} keys into wallet {name!r}; rescan complete.")
+    print(f"  first address: {keys[0]['address']}")
+    print(f"run `counters wallet --name {name} balance` for BTC + Counterparty "
+          "balances.")
     return 0
 
 

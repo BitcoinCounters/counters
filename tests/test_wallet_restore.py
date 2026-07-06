@@ -79,6 +79,18 @@ def test_bip39_dry_run_previews_all_accounts(monkeypatch, capsys):
             in out)                                             # taproot (BIP86)
 
 
+def test_autodetects_electrum2_segwit(monkeypatch, capsys):
+    # An Electrum 2.x segwit seed (not BIP39, not Electrum v1) routes to the
+    # Electrum path automatically; --dry-run derives offline.
+    seed = "bitter grass shiver impose acquire brush forget axis eager alone wine silver"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(seed + "\n"))
+    rc = wallet.cmd_wallet_restore(Config(), "e2", dry_run=True, addresses=1)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "segwit" in out
+    assert "bc1q3g5tmkmlvxryhh843v4dz026avatc0zzr6h3af" in out
+
+
 if __name__ == "__main__":
     import inspect
     failures = 0

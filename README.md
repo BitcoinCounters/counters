@@ -186,6 +186,7 @@ counters/
   bip32.py          BIP32/BIP86 derivation (pure-Python RIPEMD160 + ecdsa)
   electrum1.py      Electrum-v1 recovery for old Counterwallet/Freewallet seeds
   electrum1_words.txt  the 1626-word Electrum-v1 list (verbatim from Electrum, MIT)
+  electrum2.py      Electrum 2.x (standard/segwit) seed recovery
   progress.py       ord-style progress bar
   __main__.py       CLI command tree (parser + dispatch)
   indexer/          the indexing engine
