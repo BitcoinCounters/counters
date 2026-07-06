@@ -172,6 +172,16 @@
   .dhead h1{font-family:var(--mono);font-weight:600;font-size:30px;margin:0;color:var(--copper2);word-break:break-all;line-height:1.1}
   .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--patina);border:1px solid var(--patina-dim);border-radius:99px;padding:4px 11px;margin:14px 0 26px}
   .vbadge .dot{width:6px;height:6px;border-radius:99px;background:var(--patina);box-shadow:0 0 8px var(--patina)}
+  .vbadge.re{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
+  .vbadge.re .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
+  .acs{margin-top:26px}
+  .acs .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+  .acs .list{display:flex;flex-wrap:wrap;gap:8px}
+  .acs a{display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-family:var(--mono);font-size:12.5px;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:6px 11px;cursor:pointer;text-decoration:none}
+  .acs a:hover{border-color:var(--patina-dim)}
+  .acs a.cur{border-color:var(--copper2);background:var(--bg2)}
+  .acs a em{font-style:normal;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  .acs a.re em{color:var(--copper2)}
   .facts{border-top:1px solid var(--line)}
   .fact{display:grid;grid-template-columns:130px 1fr;gap:16px;padding:13px 0;border-bottom:1px solid var(--line2);align-items:baseline}
   .fact .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
@@ -566,6 +576,7 @@ async function renderDetail(id){
       <div class="dhead">${meterDigits(c.number)}</div>
       <h1>${esc(c.asset)}</h1>
       <span class="vbadge"><span class="dot"></span>valid counter</span>
+      ${c.reinscription ? `<span class="vbadge re"><span class="dot"></span>reinscription</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
@@ -582,6 +593,13 @@ async function renderDetail(id){
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
         ${fact('sha-256', short(c.sha256), true, c.sha256)}
       </div>
+      ${(c.asset_counters && c.asset_counters.length>1) ? `
+      <div class="acs">
+        <div class="k">${c.asset_counters.length} counters on ${esc(c.asset)}</div>
+        <div class="list">
+          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.reinscription?'re':''}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.reinscription?'reinscription':'original'}</em></a>`).join('')}
+        </div>
+      </div>` : ''}
     </div>`;
 }
 async function renderBlock(h){

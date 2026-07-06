@@ -157,6 +157,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "fee": row["fee"],
         "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
+        "reinscription": bool(row["reinscription"]),
         "body": _inline_body(store, row) if with_body else None,
     }
 
@@ -263,6 +264,15 @@ class Handler(BaseHTTPRequestHandler):
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
                 rec["xcp_burned"] = self._ensure_xcp_burned(store, row)
+            # All counters inscribed on this asset (original first, then any
+            # reinscriptions) so the explorer can list them together.
+            siblings = store.get_counters_by_asset(row["asset"])
+            rec["asset_counters"] = [
+                {"number": s["number"],
+                 "reinscription": bool(s["reinscription"]),
+                 "content_type": s["content_type"]}
+                for s in siblings
+            ]
             self._json(rec)
         finally:
             store.close()
