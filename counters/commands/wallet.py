@@ -152,18 +152,29 @@ def _bip39_problem(mnemo: Mnemonic, phrase: str) -> str | None:
 
 def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False,
                        addresses: int = 20, dry_run: bool = False) -> int:
-    if counterwallet:
-        return _restore_counterwallet(config, name, addresses, dry_run)
-    btc = BitcoindClient(config)
-    print("enter your 12/24-word BIP39 seed phrase (this restores a taproot / bc1p "
-          "wallet):", file=sys.stderr)
-    mnemonic = sys.stdin.readline().strip()
+    print("enter your seed phrase (BIP39, or an old Counterwallet / Freewallet "
+          "phrase):", file=sys.stderr)
+    phrase = sys.stdin.readline().strip()
     mnemo = Mnemonic("english")
-    problem = _bip39_problem(mnemo, mnemonic)
+    # Route automatically: a valid BIP39 phrase (it carries a checksum) restores a
+    # taproot wallet; a phrase whose words are all in the Electrum-v1 list is an old
+    # Counterwallet seed. --counterwallet forces the legacy path for the rare phrase
+    # that would satisfy both.
+    use_counterwallet = counterwallet or (
+        not mnemo.check(phrase) and electrum1.is_electrum_v1_phrase(phrase)
+    )
+    if use_counterwallet:
+        return _restore_counterwallet(config, name, phrase, addresses, dry_run)
+    if dry_run:
+        print("--dry-run is only supported for Counterwallet restores.",
+              file=sys.stderr)
+        return 1
+    problem = _bip39_problem(mnemo, phrase)
     if problem:
         print(problem, file=sys.stderr)
         return 1
-    seed = mnemo.to_seed(mnemonic)
+    btc = BitcoindClient(config)
+    seed = mnemo.to_seed(phrase)
     print(f"importing into wallet {name!r} and rescanning the chain — this can take "
           "several minutes; please wait...", file=sys.stderr)
     try:
@@ -176,16 +187,13 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
     return 0
 
 
-def _restore_counterwallet(config: Config, name: str, addresses: int,
+def _restore_counterwallet(config: Config, name: str, phrase: str, addresses: int,
                            dry_run: bool = False) -> int:
     """Recover an old Counterwallet / Freewallet (Electrum v1) wallet: decode the
     seed, derive its legacy uncompressed 1... keys, and import them into Core so
     it holds and signs them. These are NOT taproot; they live on 1... addresses.
     With dry_run, print the derived addresses and import nothing (no node needed),
     so you can confirm they match your wallet before the long rescan."""
-    print("enter your 12-word Counterwallet / Freewallet (Electrum v1) seed phrase:",
-          file=sys.stderr)
-    phrase = sys.stdin.readline().strip()
     if not electrum1.is_electrum_v1_phrase(phrase):
         print("that isn't a valid Counterwallet / Electrum-v1 phrase — a word is "
               "unknown or the word count isn't a multiple of 3 (Counterwallet uses "
