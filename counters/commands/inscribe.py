@@ -97,6 +97,7 @@ def cmd_inscribe(
     supply: int = 1,
     divisible: bool = False,
     lock: bool = False,
+    reinscribe: bool = False,
     dry_run: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
@@ -110,44 +111,79 @@ def cmd_inscribe(
         body = fh.read()
     content_type = guess_content_type(file_path)
 
-    named = asset is not None
-    if named:
-        asset = asset.upper()
-        if asset in RESERVED_ASSETS:
-            print(f"cannot inscribe onto reserved asset {asset}", file=sys.stderr)
-            return 1
-        if cp.get_asset(asset):
-            print(f"asset {asset} already exists; pick an unregistered name",
-                  file=sys.stderr)
-            return 1
-    else:
-        asset = random_numeric_asset()
-    quantity = supply * COIN if divisible else supply
-
-    # 1. inscription envelope + commit address
-    insc = builder.build_inscription(content_type, body)
     change_addr = btc.wallet_call(wallet, "getrawchangeaddress", ["bech32m"])
     change_spk = _addr_to_spk(btc, change_addr)
 
-    # 2-3. Resolve the issuance source, compose the OP_RETURN, and build/sign the
-    #      commit. Two shapes:
-    #      - numeric (free): the source is the commit's *own* change output, so
-    #        we build the commit first, then compose against its change.
-    #      - named (0.5 XCP burn): the source must already hold >=0.5 XCP, so we
-    #        pick that UTXO up front, compose against it, size the commit to fund
-    #        the reveal, then build the commit (locking the XCP UTXO).
-    try:
+    # Resolve the inscription and build/sign the commit. Three shapes:
+    #   - reinscription: attach to an EXISTING asset you own; NO Counterparty
+    #     message. The commit's change is routed to the asset owner's address so
+    #     the reveal spends from it, proving issuance rights on-chain.
+    #   - numeric (free): source is the commit's own change output.
+    #   - named (0.5 XCP burn): source must already hold >=0.5 XCP.
+    named = False
+    if reinscribe:
+        if asset is None:
+            print("--reinscribe requires --asset (the existing asset to attach the counter to)",
+                  file=sys.stderr)
+            return 1
+        if destination is not None:
+            print("--destination is not allowed with --reinscribe: a reinscription attaches a "
+                  "counter to an existing asset and moves no Counterparty asset or ownership.",
+                  file=sys.stderr)
+            return 1
+        # Resolve the asset (try the name as given, then upper-cased for named).
+        asset_info = cp.get_asset(asset) or cp.get_asset(asset.upper())
+        if not asset_info:
+            print(f"asset {asset} does not exist — --reinscribe attaches to an EXISTING asset "
+                  f"you own; omit --reinscribe to create a new asset.", file=sys.stderr)
+            return 1
+        # Human-readable name for the envelope tag; canonical name for reporting.
+        target_name = asset_info.get("asset_longname") or asset_info.get("asset") or asset
+        asset = asset_info.get("asset") or target_name
+        if asset in RESERVED_ASSETS:
+            print(f"cannot reinscribe onto reserved asset {asset}", file=sys.stderr)
+            return 1
+        owner = asset_info.get("issuer") or asset_info.get("owner")
+        if not owner:
+            print(f"could not determine the issuance-rights owner of {asset}", file=sys.stderr)
+            return 1
+        if owner not in set(_wallet_addresses(btc, wallet)):
+            print(f"this wallet does not hold the issuance rights of {asset} (owner {owner}); "
+                  f"you can only reinscribe assets you own.", file=sys.stderr)
+            return 1
+        insc = builder.build_inscription(content_type, body, asset=target_name.encode())
+        try:
+            built = _prepare_reinscribe(btc, wallet, insc, owner, commit_fee_rate, change_spk)
+        except (BitcoindError, CounterpartyError, InscribeError) as e:
+            print(f"reinscribe build failed: {e}", file=sys.stderr)
+            return 1
+    else:
+        named = asset is not None
         if named:
-            built = _prepare_named(btc, cp, wallet, insc, asset, quantity,
-                                   divisible, destination, fee_rate,
-                                   commit_fee_rate, change_spk, lock)
+            asset = asset.upper()
+            if asset in RESERVED_ASSETS:
+                print(f"cannot inscribe onto reserved asset {asset}", file=sys.stderr)
+                return 1
+            if cp.get_asset(asset):
+                print(f"asset {asset} already exists; use --reinscribe to attach to an asset "
+                      f"you own, or pick an unregistered name.", file=sys.stderr)
+                return 1
         else:
-            built = _prepare_numeric(btc, cp, wallet, insc, asset, quantity,
-                                     divisible, destination, fee_rate,
-                                     commit_fee_rate, change_spk, lock)
-    except (BitcoindError, CounterpartyError, InscribeError) as e:
-        print(f"inscribe build failed: {e}", file=sys.stderr)
-        return 1
+            asset = random_numeric_asset()
+        quantity = supply * COIN if divisible else supply
+        insc = builder.build_inscription(content_type, body)
+        try:
+            if named:
+                built = _prepare_named(btc, cp, wallet, insc, asset, quantity,
+                                       divisible, destination, fee_rate,
+                                       commit_fee_rate, change_spk, lock)
+            else:
+                built = _prepare_numeric(btc, cp, wallet, insc, asset, quantity,
+                                         divisible, destination, fee_rate,
+                                         commit_fee_rate, change_spk, lock)
+        except (BitcoindError, CounterpartyError, InscribeError) as e:
+            print(f"inscribe build failed: {e}", file=sys.stderr)
+            return 1
     if built is None:
         return 1
 
@@ -174,11 +210,16 @@ def cmd_inscribe(
         return 1
 
     def build_reveal(cv: int) -> tap.Tx:
+        # Reinscriptions carry no Counterparty message, so there is no OP_RETURN
+        # and no destination outputs — just the envelope reveal + our change.
+        outs = list(dest_outs)
+        if op_return_spk is not None:
+            outs.append(tap.TxOut(0, op_return_spk))
+        outs.append(tap.TxOut(cv, change_spk))
         return tap.Tx(
             vin=[tap.TxIn(source_txid, source_vout),
                  tap.TxIn(commit_txid, commit_out["vout"])],
-            vout=dest_outs
-            + [tap.TxOut(0, op_return_spk), tap.TxOut(cv, change_spk)],
+            vout=outs,
         )
 
     reveal = build_reveal(change_value)
@@ -209,10 +250,17 @@ def cmd_inscribe(
     all_ok = bool(checks) and all(c.get("allowed") for c in checks)
 
     # report
-    print(f"asset            : {asset}{' (named)' if named else ' (numeric, free)'}")
+    if reinscribe:
+        kind = " (reinscription)"
+    elif named:
+        kind = " (named)"
+    else:
+        kind = " (numeric, free)"
+    print(f"asset            : {asset}{kind}")
     print(f"content_type     : {content_type.decode(errors='replace')}  ({len(body)} bytes)")
-    print(f"supply           : {supply}{' divisible' if divisible else ''}"
-          f"{' (LOCKED)' if lock else ''}")
+    if not reinscribe:
+        print(f"supply           : {supply}{' divisible' if divisible else ''}"
+              f"{' (LOCKED)' if lock else ''}")
     print(f"commit address   : {insc.commit_address}")
     print(f"commit txid      : {commit_txid}")
     print(f"reveal txid      : {reveal_txid}")
@@ -222,6 +270,9 @@ def cmd_inscribe(
     print(f"total BTC fees   : {total} sat ({total / COIN:.8f} BTC)")
     if named:
         print("XCP cost         : 0.5 XCP (named-asset issuance burn)")
+    if reinscribe:
+        print("Counterparty     : none (pure inscription; authorised by spending an "
+              "input from the owner address)")
 
     print("\npackage validity (testmempoolaccept):")
     for c in checks:
@@ -248,7 +299,11 @@ def cmd_inscribe(
         print(f"commit_raw: {commit_hex}\nreveal_raw: {reveal_hex}", file=sys.stderr)
         return 1
     print(f"\nbroadcast OK\n  commit: {ctxid}\n  reveal: {rtxid}")
-    print("the counter mints once the reveal confirms and Counterparty processes the issuance.")
+    if reinscribe:
+        print("the counter mints once the reveal confirms and the indexer verifies the "
+              "owner signed it.")
+    else:
+        print("the counter mints once the reveal confirms and Counterparty processes the issuance.")
     return 0
 
 
@@ -334,6 +389,33 @@ def _prepare_named(btc, cp, wallet, insc, asset, quantity, divisible,
                            commit_fee_rate, change_address=xcp_addr)
     return _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
                              destination, change_spk, lock)
+
+
+def _prepare_reinscribe(btc, wallet, insc, owner_addr, commit_fee_rate, change_spk):
+    """Reinscription: NO Counterparty message. Route the commit's change to the
+    asset OWNER address so the reveal's vin[0] spends from it — that signature
+    proves the issuance rights on-chain. The reveal therefore has no OP_RETURN
+    and no destination outputs, just the envelope reveal + change to the wallet.
+    """
+    commit = _build_commit(btc, wallet, insc.commit_address, DUST,
+                           commit_fee_rate, change_address=owner_addr)
+    change_out = commit["change_out"]
+    struct = tap.Tx(
+        vin=[tap.TxIn(commit["txid"], change_out["vout"]),
+             tap.TxIn(commit["txid"], commit["commit_out"]["vout"])],
+        vout=[tap.TxOut(0, change_spk)],
+    )
+    reveal_vsize = _estimate_reveal_vsize(struct, insc.leaf, insc.control_block)
+    return {
+        "commit": commit,
+        "source_txid": commit["txid"],
+        "source_vout": change_out["vout"],
+        "source_value": change_out["value"],
+        "source_spk": change_out["spk"],
+        "dest_outs": [],
+        "op_return_spk": None,
+        "reveal_vsize": reveal_vsize,
+    }
 
 
 def _build_commit(btc, wallet, commit_address, commit_value, commit_fee_rate,

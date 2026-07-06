@@ -177,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--divisible", action="store_true", help="make the asset divisible")
     p_insc.add_argument("--locked", action="store_true",
                         help="lock the asset's supply (no future issuance can change it)")
+    p_insc.add_argument("--reinscribe", action="store_true",
+                        help="attach a counter to an EXISTING asset you own (no new asset, "
+                             "no Counterparty message); requires --asset")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="build + sign both txs but do not broadcast; print raw hex")
 
@@ -251,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
                     asset=args.asset, fee_rate=args.fee_rate,
                     commit_fee_rate=args.commit_fee_rate, destination=args.destination,
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
-                    dry_run=args.dry_run,
+                    reinscribe=args.reinscribe, dry_run=args.dry_run,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
