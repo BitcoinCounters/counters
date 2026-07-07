@@ -72,10 +72,27 @@ def _extract_issuance_outputs(decoded: dict):
     raise CounterpartyError("composed issuance has no OP_RETURN output")
 
 
-def _estimate_reveal_vsize(tx: tap.Tx, leaf: bytes, control_block: bytes) -> int:
-    """Exact vsize by filling placeholder witnesses of the real sizes."""
-    tx.vin[0].witness = [b"\x00" * 65]                          # P2TR keypath sig
+def _is_p2pkh(spk: bytes) -> bool:
+    """True for a legacy P2PKH scriptPubKey (OP_DUP OP_HASH160 <20> OP_EQUALVERIFY
+    OP_CHECKSIG) — the 1... addresses Counterwallet/Electrum-v1 wallets use."""
+    return len(spk) == 25 and spk[:3] == b"\x76\xa9\x14" and spk[-2:] == b"\x88\xac"
+
+
+def _estimate_reveal_vsize(tx: tap.Tx, leaf: bytes, control_block: bytes,
+                           source_spk: bytes | None = None) -> int:
+    """Exact vsize by filling placeholders of the real signature sizes.
+
+    vin[1] is always the taproot script-path spend (witness). vin[0] is the
+    source: model it by script type so the fee is right whether the source is
+    segwit/taproot (signature in the weight-discounted WITNESS) or a legacy
+    P2PKH `1...` owner address (signature in the full-weight SCRIPTSIG) — the
+    latter is the norm for a Counterwallet reinscription."""
     tx.vin[1].witness = [b"\x00" * 64, leaf, control_block]     # script-path
+    if source_spk is not None and _is_p2pkh(source_spk):
+        tx.vin[0].witness = []
+        tx.vin[0].script_sig = b"\x00" * 107   # ~ push+sig(72) + push+pubkey(33)
+    else:
+        tx.vin[0].witness = [b"\x00" * 65]                      # P2TR keypath sig
     base = len(tx.serialize(force_witness=False))
     total = len(tx.serialize(force_witness=True))
     weight = base * 3 + total
@@ -99,6 +116,8 @@ def cmd_inscribe(
     lock: bool = False,
     reinscribe: bool = False,
     dry_run: bool = False,
+    fund_from_address: str | None = None,
+    fund_from_input: str | None = None,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -111,7 +130,21 @@ def cmd_inscribe(
         body = fh.read()
     content_type = guess_content_type(file_path)
 
-    change_addr = btc.wallet_call(wallet, "getrawchangeaddress", ["bech32m"])
+    # --fund-from-address / --fund-from-input choose WHICH of the wallet's coins
+    # pay for the commit, for ANY inscription type. The funding coin is decoupled
+    # from the issuance source (the commit's change): for a reinscription the
+    # change goes to the asset owner, for a named mint to the XCP-holding issuer,
+    # for a numeric mint to a fresh address — none of which need to hold BTC
+    # themselves, since the chosen funding coins cover the commit. Both flags may
+    # be combined (their coins are unioned); every pinned coin must belong to the
+    # --name wallet, since Core signs the commit with it.
+    try:
+        fund_inputs = _collect_fund_inputs(btc, wallet, fund_from_address, fund_from_input)
+    except InscribeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    change_addr = _wallet_change_address(btc, wallet)
     change_spk = _addr_to_spk(btc, change_addr)
 
     # Resolve the inscription and build/sign the commit. Three shapes:
@@ -135,7 +168,8 @@ def cmd_inscribe(
         asset_info = cp.get_asset(asset) or cp.get_asset(asset.upper())
         if not asset_info:
             print(f"asset {asset} does not exist — --reinscribe attaches to an EXISTING asset "
-                  f"you own; omit --reinscribe to create a new asset.", file=sys.stderr)
+                  f"whose issuance rights you hold; omit --reinscribe to create a new asset.",
+                  file=sys.stderr)
             return 1
         # Human-readable name for the envelope tag; canonical name for reporting.
         target_name = asset_info.get("asset_longname") or asset_info.get("asset") or asset
@@ -143,17 +177,24 @@ def cmd_inscribe(
         if asset in RESERVED_ASSETS:
             print(f"cannot reinscribe onto reserved asset {asset}", file=sys.stderr)
             return 1
-        owner = asset_info.get("issuer") or asset_info.get("owner")
+        # Use the CURRENT owner (issuance-rights holder), not `issuer` (the
+        # original, immutable creator): ownership moves on transfer, and Rare
+        # Pepe-style assets are usually acquired, not self-issued. This must
+        # match the indexer, which authorises `issuer_at_height` = the current
+        # owner as of the block.
+        owner = asset_info.get("owner") or asset_info.get("issuer")
         if not owner:
             print(f"could not determine the issuance-rights owner of {asset}", file=sys.stderr)
             return 1
         if owner not in set(_wallet_addresses(btc, wallet)):
             print(f"this wallet does not hold the issuance rights of {asset} (owner {owner}); "
-                  f"you can only reinscribe assets you own.", file=sys.stderr)
+                  f"you can only reinscribe assets whose issuance rights you hold.",
+                  file=sys.stderr)
             return 1
         insc = builder.build_inscription(content_type, body, asset=target_name.encode())
         try:
-            built = _prepare_reinscribe(btc, wallet, insc, owner, commit_fee_rate, change_spk)
+            built = _prepare_reinscribe(btc, wallet, insc, owner, commit_fee_rate,
+                                        change_spk, fund_inputs=fund_inputs)
         except (BitcoindError, CounterpartyError, InscribeError) as e:
             print(f"reinscribe build failed: {e}", file=sys.stderr)
             return 1
@@ -166,7 +207,8 @@ def cmd_inscribe(
                 return 1
             if cp.get_asset(asset):
                 print(f"asset {asset} already exists; use --reinscribe to attach to an asset "
-                      f"you own, or pick an unregistered name.", file=sys.stderr)
+                      f"whose issuance rights you hold, or pick an unregistered name.",
+                      file=sys.stderr)
                 return 1
         else:
             asset = random_numeric_asset()
@@ -176,11 +218,13 @@ def cmd_inscribe(
             if named:
                 built = _prepare_named(btc, cp, wallet, insc, asset, quantity,
                                        divisible, destination, fee_rate,
-                                       commit_fee_rate, change_spk, lock)
+                                       commit_fee_rate, change_spk, lock,
+                                       fund_inputs=fund_inputs)
             else:
                 built = _prepare_numeric(btc, cp, wallet, insc, asset, quantity,
                                          divisible, destination, fee_rate,
-                                         commit_fee_rate, change_spk, lock)
+                                         commit_fee_rate, change_spk, lock,
+                                         fund_inputs=fund_inputs)
         except (BitcoindError, CounterpartyError, InscribeError) as e:
             print(f"inscribe build failed: {e}", file=sys.stderr)
             return 1
@@ -273,6 +317,9 @@ def cmd_inscribe(
     if reinscribe:
         print("Counterparty     : none (pure inscription; authorised by spending an "
               "input from the owner address)")
+    if fund_from_address or fund_from_input:
+        srcs = ", ".join(s for s in (fund_from_address, fund_from_input) if s)
+        print(f"funded from      : {srcs}")
 
     print("\npackage validity (testmempoolaccept):")
     for c in checks:
@@ -309,6 +356,66 @@ def cmd_inscribe(
 
 def _addr_to_spk(btc: BitcoindClient, address: str) -> bytes:
     return bytes.fromhex(btc._call("validateaddress", [address])["scriptPubKey"])
+
+
+def _address_utxos(btc: BitcoindClient, wallet: str, address: str) -> list[dict]:
+    """Spendable UTXOs (as {txid, vout}) held by `address` in `wallet`.
+
+    Used by --fund-from-address so the commit is funded from a specific address's
+    coins (e.g. one that actually holds BTC, when the asset owner address is
+    empty). include_unsafe=True so still-unconfirmed self-change is usable."""
+    utxos = btc.wallet_call(wallet, "listunspent", [0, 9999999, [address], True])
+    return [{"txid": u["txid"], "vout": u["vout"]} for u in utxos]
+
+
+def _collect_fund_inputs(btc: BitcoindClient, wallet: str,
+                         fund_from_address: str | None,
+                         fund_from_input: str | None) -> list[dict] | None:
+    """Resolve --fund-from-input and --fund-from-address into the deduped list of
+    coins that must fund the commit, or None to let Core select. The two may be
+    combined (union); every coin must be spendable by `wallet` since Core signs
+    the commit with it. Raises InscribeError on a malformed input or an address
+    with no spendable UTXO."""
+    inputs: list[dict] = []
+    if fund_from_input:
+        parts = fund_from_input.rsplit(":", 1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            raise InscribeError(f"--fund-from-input must be TXID:VOUT, got {fund_from_input!r}")
+        inputs.append({"txid": parts[0], "vout": int(parts[1])})
+    if fund_from_address:
+        addr_utxos = _address_utxos(btc, wallet, fund_from_address)
+        if not addr_utxos:
+            raise InscribeError(f"no spendable UTXO at {fund_from_address} in wallet "
+                                f"{wallet!r} to fund the commit — pick an address that "
+                                f"holds BTC.")
+        inputs.extend(addr_utxos)
+    seen: set[tuple[str, int]] = set()
+    deduped = [u for u in inputs
+               if (u["txid"], u["vout"]) not in seen
+               and not seen.add((u["txid"], u["vout"]))]
+    return deduped or None
+
+
+def _wallet_change_address(btc: BitcoindClient, wallet: str) -> str:
+    """A change address the wallet controls.
+
+    Taproot wallets (from `wallet create` or a BIP39 restore) have an active
+    ranged descriptor, so Core hands us a fresh bech32m change address. Legacy
+    Counterwallet/Electrum wallets are imported as flat single-key WIF
+    descriptors with no active/internal descriptor, so `getrawchangeaddress`
+    fails with "no available keys"; fall back to an address the wallet already
+    controls (its key is present, so the change stays spendable)."""
+    try:
+        return btc.wallet_call(wallet, "getrawchangeaddress", ["bech32m"])
+    except BitcoindError:
+        addrs = _wallet_addresses(btc, wallet)
+        if not addrs:
+            raise BitcoindError(
+                f"wallet {wallet!r} cannot produce a change address and has no known "
+                f"addresses to reuse — fund it, or inscribe from a wallet made with "
+                f"`counters wallet create`."
+            )
+        return addrs[0]
 
 
 def _find_xcp_address(btc, cp, wallet, min_xcp=NAMED_ISSUANCE_FEE_XCP):
@@ -351,7 +458,8 @@ def _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
              tap.TxIn(commit["txid"], commit["commit_out"]["vout"])],
         vout=dest_outs + [tap.TxOut(0, op_return_spk), tap.TxOut(0, change_spk)],
     )
-    reveal_vsize = _estimate_reveal_vsize(struct, insc.leaf, insc.control_block)
+    reveal_vsize = _estimate_reveal_vsize(struct, insc.leaf, insc.control_block,
+                                          source_spk=change_out["spk"])
     return {
         "commit": commit,
         "source_txid": commit["txid"],
@@ -365,19 +473,23 @@ def _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
 
 
 def _prepare_numeric(btc, cp, wallet, insc, asset, quantity, divisible,
-                     destination, fee_rate, commit_fee_rate, change_spk, lock=False):
+                     destination, fee_rate, commit_fee_rate, change_spk, lock=False,
+                     fund_inputs=None):
     """Build the commit (change -> a fresh wallet address); that change is the
-    source for a free numeric asset."""
-    commit = _build_commit(btc, wallet, insc.commit_address, DUST, commit_fee_rate)
+    source for a free numeric asset. `fund_inputs` pins the funding coins."""
+    commit = _build_commit(btc, wallet, insc.commit_address, DUST, commit_fee_rate,
+                           fund_inputs=fund_inputs)
     return _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
                              destination, change_spk, lock)
 
 
 def _prepare_named(btc, cp, wallet, insc, asset, quantity, divisible,
-                   destination, fee_rate, commit_fee_rate, change_spk, lock=False):
+                   destination, fee_rate, commit_fee_rate, change_spk, lock=False,
+                   fund_inputs=None):
     """Route the commit's change back to a wallet address holding >=0.5 XCP, so
     that address is the issuance source/issuer and pays the name-registration
-    burn (XCP balances are address-level, so spending its UTXO is fine)."""
+    burn (XCP balances are address-level, so spending its UTXO is fine).
+    `fund_inputs` pins which coins pay — the XCP address needs no BTC of its own."""
     xcp_addr = _find_xcp_address(btc, cp, wallet)
     if xcp_addr is None:
         print(f"no wallet address holds the {NAMED_ISSUANCE_FEE_XCP / COIN:.1f} XCP "
@@ -386,26 +498,34 @@ def _prepare_named(btc, cp, wallet, insc, asset, quantity, divisible,
               file=sys.stderr)
         return None
     commit = _build_commit(btc, wallet, insc.commit_address, DUST,
-                           commit_fee_rate, change_address=xcp_addr)
+                           commit_fee_rate, change_address=xcp_addr,
+                           fund_inputs=fund_inputs)
     return _compose_and_size(btc, cp, insc, commit, asset, quantity, divisible,
                              destination, change_spk, lock)
 
 
-def _prepare_reinscribe(btc, wallet, insc, owner_addr, commit_fee_rate, change_spk):
+def _prepare_reinscribe(btc, wallet, insc, owner_addr, commit_fee_rate, change_spk,
+                        fund_inputs=None):
     """Reinscription: NO Counterparty message. Route the commit's change to the
     asset OWNER address so the reveal's vin[0] spends from it — that signature
     proves the issuance rights on-chain. The reveal therefore has no OP_RETURN
     and no destination outputs, just the envelope reveal + change to the wallet.
-    """
+
+    `fund_inputs` (a list of {txid, vout}) pins which of the wallet's coins pay
+    for the commit — e.g. a BTC-holding address when the owner address is empty.
+    Change still lands on owner_addr, so ownership is proven regardless of which
+    coin funded the commit."""
     commit = _build_commit(btc, wallet, insc.commit_address, DUST,
-                           commit_fee_rate, change_address=owner_addr)
+                           commit_fee_rate, change_address=owner_addr,
+                           fund_inputs=fund_inputs)
     change_out = commit["change_out"]
     struct = tap.Tx(
         vin=[tap.TxIn(commit["txid"], change_out["vout"]),
              tap.TxIn(commit["txid"], commit["commit_out"]["vout"])],
         vout=[tap.TxOut(0, change_spk)],
     )
-    reveal_vsize = _estimate_reveal_vsize(struct, insc.leaf, insc.control_block)
+    reveal_vsize = _estimate_reveal_vsize(struct, insc.leaf, insc.control_block,
+                                          source_spk=change_out["spk"])
     return {
         "commit": commit,
         "source_txid": commit["txid"],
@@ -419,25 +539,30 @@ def _prepare_reinscribe(btc, wallet, insc, owner_addr, commit_fee_rate, change_s
 
 
 def _build_commit(btc, wallet, commit_address, commit_value, commit_fee_rate,
-                  change_address=None):
+                  change_address=None, fund_inputs=None):
     """Fund + sign a tx paying `commit_value` to `commit_address`. Core adds a
     change output (to `change_address`, or a fresh wallet address) which we
     return so the reveal can use it as its source. For named mints the caller
-    passes the XCP-holding address so the change keeps the issuance source."""
+    passes the XCP-holding address so the change keeps the issuance source.
+
+    `fund_inputs` (a list of {txid, vout}), if given, pins the exact coins that
+    fund the commit (add_inputs=False), so a caller can pay from a specific
+    address's or UTXO's coins in `wallet`."""
+    prevouts = list(fund_inputs) if fund_inputs else []
     raw = btc.wallet_call(
         wallet, "createrawtransaction",
-        [[], [{commit_address: f"{commit_value / COIN:.8f}"}]],
+        [prevouts, [{commit_address: f"{commit_value / COIN:.8f}"}]],
     )
     # Pin the change address: this output becomes the reveal's source.
     # include_unsafe lets the commit chain off the wallet's own still-unconfirmed
     # funds, which is safe here since we only spend our own UTXOs.
     if change_address is None:
-        change_address = btc.wallet_call(wallet, "getrawchangeaddress", ["bech32m"])
-    funded = btc.wallet_call(
-        wallet, "fundrawtransaction",
-        [raw, {"fee_rate": commit_fee_rate, "include_unsafe": True,
-               "changeAddress": change_address}],
-    )
+        change_address = _wallet_change_address(btc, wallet)
+    fund_opts = {"fee_rate": commit_fee_rate, "include_unsafe": True,
+                 "changeAddress": change_address}
+    if fund_inputs:
+        fund_opts["add_inputs"] = False   # fund from ONLY the pinned coins
+    funded = btc.wallet_call(wallet, "fundrawtransaction", [raw, fund_opts])
     signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [funded["hex"]])
     if not signed.get("complete"):
         raise BitcoindError(f"commit not fully signed: {signed.get('errors')}")
@@ -501,10 +626,23 @@ def _sign_reveal(btc, wallet, reveal: tap.Tx, insc, prevouts):
     ]
     signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [unsigned, prevtxs])
     dec = btc._call("decoderawtransaction", [signed["hex"]])
-    vin0_witness = dec["vin"][0].get("txinwitness")
-    if not vin0_witness:
-        raise InscribeError("Core did not sign the source input (vin[0])")
+    # Copy whatever Core produced for vin[0], regardless of the source's script
+    # type: native segwit / taproot (bc1q/bc1p change from a `wallet create`
+    # wallet) is signed into the WITNESS; a legacy P2PKH `1...` owner address
+    # (e.g. a Counterwallet reinscription source) is signed into the SCRIPTSIG;
+    # nested segwit (3...) uses both. Take both so every source type works.
+    vin0 = dec["vin"][0]
+    vin0_witness = vin0.get("txinwitness") or []
+    vin0_script_sig = (vin0.get("scriptSig") or {}).get("hex", "")
+    if not vin0_witness and not vin0_script_sig:
+        errors = signed.get("errors")
+        raise InscribeError(
+            "Core did not sign the source input (vin[0]) — the wallet may not hold "
+            "that address's key, or the prevout is wrong"
+            + (f"; {errors}" if errors else "")
+        )
     reveal.vin[0].witness = [bytes.fromhex(w) for w in vin0_witness]
+    reveal.vin[0].script_sig = bytes.fromhex(vin0_script_sig) if vin0_script_sig else b""
 
     sighash = tap.taproot_script_path_sighash(
         reveal, input_index=1,

@@ -325,6 +325,50 @@ def test_multiple_counters_per_asset_flags_later_as_reinscription():
         idx.close()
 
 
+def test_pepeme_reinscription_from_real_builder_is_indexed():
+    """End-to-end: the EXACT tapscript `wallet inscribe --reinscribe --asset
+    PEPEME` emits (via builder.build_inscription, not a hand-rolled script) must
+    be parsed and recorded by the indexer, authorised by the PEPEME owner's
+    input. This proves the builder -> envelope -> indexer contract for the real
+    reinscription path, so the PEPEME counter is picked up once its reveal
+    confirms and the owner is verified at the block height."""
+    from counters import builder
+
+    height, txid = 800300, "ee" * 32
+    owner = "bc1pPepemeOwner"
+    body = b"\xff\xd8\xff\xe0 fake jpeg bytes for PEPEME"
+    # The same call the reinscribe command makes: asset tag = PEPEME.
+    insc = builder.build_inscription(b"image/jpeg", body, asset=b"PEPEME")
+    # Reveal's script-path witness = [sig, leaf tapscript, control block].
+    witness = [(b"\x30" * 64).hex(), insc.leaf.hex(), insc.control_block.hex()]
+    block = {
+        "hash": f"blockhash{height}",
+        "height": height,
+        "tx": [
+            {"txid": "coinbase", "vin": [{"coinbase": "00"}], "vout": []},
+            {"txid": txid,
+             "vin": [{"txid": "commit", "vout": 0, "txinwitness": witness}],
+             "vout": []},
+        ],
+    }
+    asset_info = {"asset": "PEPEME", "asset_id": "777", "owner": owner,
+                  "divisible": False, "supply": 10, "asset_longname": None}
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = build_reinscribe_indexer(block, {"PEPEME": asset_info},
+                                       {"PEPEME": owner}, {owner}, tmp)
+        assert idx.process_block(height) == 1, "PEPEME reinscription not recorded"
+        row = idx.store.get_counter(0)
+        assert row["asset"] == "PEPEME"
+        assert row["content_type"] == "image/jpeg"
+        assert row["content_length"] == len(body)
+        assert row["content_sha256"] == hashlib.sha256(body).hexdigest()
+        assert idx.store.read_blob(row["content_sha256"]) == body  # blob round-trips
+        assert row["owner"] == owner
+        assert row["reinscription"] == 0        # first counter on PEPEME = original
+        assert row["cp_tx_index"] is None and row["xcp_burned"] is None  # no CP message
+        idx.close()
+
+
 def test_inscription_cost_sums_commit_and_reveal():
     """get_inscription_cost = reveal fee/vsize + the commit's, where the commit
     is the prevout of the envelope-bearing (script-path) input."""

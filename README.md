@@ -156,7 +156,7 @@ counters wallet --name mywallet send RAREPEPE 1 bc1p... --dry-run  # compose+sig
 counters wallet --name mywallet inscribe --file cat.png --dry-run
 counters wallet --name mywallet inscribe --file cat.png                    # free numeric asset
 counters wallet --name mywallet inscribe --file cat.png --asset ZOMBIEPEPES # named (0.5 XCP)
-counters wallet --name mywallet inscribe --file v2.png --asset RAREPEPE --reinscribe  # attach to an asset you own (no new asset, no XCP)
+counters wallet --name mywallet inscribe --file v2.png --asset RAREPEPE --reinscribe  # attach to an asset whose issuance rights you hold (no new asset, no XCP)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8 --commit-fee-rate 4
 ```
 

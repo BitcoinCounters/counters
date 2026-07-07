@@ -254,6 +254,29 @@ class CounterpartyClient:
                 break
         return out
 
+    def get_address_owned_assets(self, address: str) -> list[dict]:
+        """Assets whose issuance rights this address currently OWNS — i.e. it can
+        reissue, lock, or transfer ownership — even if it holds zero of the token.
+
+        This is distinct from get_address_balances (tokens held). Hits
+        /v2/addresses/<address>/assets/owned (get_valid_assets_by_owner). Each row
+        carries at least {asset, asset_longname, owner, supply/supply_normalized}.
+        """
+        out: list[dict] = []
+        cursor: Any = None
+        while True:
+            params: dict[str, Any] = {"limit": 1000, "verbose": "true"}
+            if cursor is not None:
+                params["cursor"] = cursor
+            data = self._get(f"/v2/addresses/{address}/assets/owned", params=params)
+            if not data:
+                break
+            out.extend(data.get("result", []))
+            cursor = data.get("next_cursor")
+            if cursor is None:
+                break
+        return out
+
     def get_xcp_balance(self, address: str) -> int:
         """XCP balance of an address, in satoshis (XCP is divisible). 0 if none."""
         data = self._get(f"/v2/addresses/{address}/balances/XCP")
