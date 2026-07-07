@@ -179,8 +179,33 @@ def main(argv: list[str] | None = None) -> int:
              "1... list for Counterwallet) to verify them, but import nothing and "
              "skip the rescan",
     )
+    p_restore.add_argument(
+        "--no-rescan", action="store_true",
+        help="import the keys WITHOUT rescanning the chain (timestamp=now). "
+             "Counterparty balances are visible immediately via `balance "
+             "--no-rescan`; run `wallet rescan` later for a BTC balance or to spend",
+    )
     wsub.add_parser("receive", parents=[common, wname], help="new taproot (bc1p) receive address")
-    wsub.add_parser("balance", parents=[common, wname], help="BTC + Counterparty balances")
+    p_bal = wsub.add_parser("balance", parents=[common, wname],
+                            help="BTC + Counterparty balances")
+    p_bal.add_argument(
+        "--no-rescan", action="store_true",
+        help="skip Bitcoin Core's on-chain view: derive addresses from the "
+             "wallet descriptors and query Counterparty directly (no rescan). "
+             "BTC balance is unavailable this way",
+    )
+    p_bal.add_argument(
+        "--addresses", type=int, default=20, metavar="N",
+        help="--no-rescan only: addresses per chain to derive and check (default 20)",
+    )
+    p_rescan = wsub.add_parser(
+        "rescan", parents=[common, wname],
+        help="rescan the chain for this wallet (e.g. to backfill balances)",
+    )
+    p_rescan.add_argument("--start-height", type=int, default=None, metavar="H",
+                          help="first block to scan (default: genesis)")
+    p_rescan.add_argument("--stop-height", type=int, default=None, metavar="H",
+                          help="last block to scan (default: chain tip)")
     wsub.add_parser("inscriptions", parents=[common, wname], help="counters held by this wallet")
     p_insc = wsub.add_parser(
         "inscribe", parents=[common, wname], help="mint a counter from a file"
@@ -196,8 +221,15 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--locked", action="store_true",
                         help="lock the asset's supply (no future issuance can change it)")
     p_insc.add_argument("--reinscribe", action="store_true",
-                        help="attach a counter to an EXISTING asset you own (no new asset, "
-                             "no Counterparty message); requires --asset")
+                        help="attach a counter to an EXISTING asset whose issuance rights you "
+                             "hold (no new asset, no Counterparty message); requires --asset")
+    p_insc.add_argument("--fund-from-address", metavar="ADDRESS",
+                        help="fund the commit from this address's coins (in --name) instead "
+                             "of letting Core pick — useful when the issuer/owner address "
+                             "holds no BTC. Works for any inscription type")
+    p_insc.add_argument("--fund-from-input", metavar="TXID:VOUT",
+                        help="fund the commit from this exact UTXO (in --name) instead of "
+                             "letting Core select coins. Works for any inscription type")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="build + sign both txs but do not broadcast; print raw hex")
 
@@ -273,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
                     commit_fee_rate=args.commit_fee_rate, destination=args.destination,
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
                     reinscribe=args.reinscribe, dry_run=args.dry_run,
+                    fund_from_address=args.fund_from_address,
+                    fund_from_input=args.fund_from_input,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
@@ -283,12 +317,21 @@ def main(argv: list[str] | None = None) -> int:
                 return wallet.cmd_wallet_restore(
                     config, args.name,
                     counterwallet=args.counterwallet, addresses=args.addresses,
-                    dry_run=args.dry_run,
+                    dry_run=args.dry_run, no_rescan=args.no_rescan,
+                )
+            if args.wallet_command == "balance":
+                return wallet.cmd_wallet_balance(
+                    config, args.name,
+                    no_rescan=args.no_rescan, addresses=args.addresses,
+                )
+            if args.wallet_command == "rescan":
+                return wallet.cmd_wallet_rescan(
+                    config, args.name,
+                    start_height=args.start_height, stop_height=args.stop_height,
                 )
             dispatch = {
                 "create": wallet.cmd_wallet_create,
                 "receive": wallet.cmd_wallet_receive,
-                "balance": wallet.cmd_wallet_balance,
                 "inscriptions": wallet.cmd_wallet_inscriptions,
             }
             return dispatch[args.wallet_command](config, args.name)
