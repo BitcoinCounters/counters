@@ -2,7 +2,7 @@
 
 Renders a single self-updating line to stderr when attached to a TTY, e.g.:
 
-    Indexing  62%|███████████████████░░░░░░░░░░░| 0 counters
+    Indexing  62%|███████████████████░░░░░░░░░░░| 595123/957412 · 0 counters
 
 When stderr is not a TTY (piped/redirected) it degrades to nothing on the bar
 itself; callers should still emit periodic log lines in that case.
@@ -57,16 +57,26 @@ class ProgressBar:
     def _render(self) -> None:
         total = self.total or 1
         frac = min(max(self.n / total, 0.0), 1.0)
-        filled = int(round(self.width * frac))
-        bar = "█" * filled + "░" * (self.width - filled)
-        line = f"{self.desc} {frac * 100:3.0f}%|{bar}| {self.n}/{self.total}"
+        # The info section is always the position, with the caller's postfix
+        # (e.g. the counter count) appended after it.
+        info = f"{self.n}/{self.total}"
         if self.postfix:
-            line += f" · {self.postfix}"
-        # Truncate to the terminal width so the line never wraps onto a second
-        # physical row (wrapping would defeat the in-place \r redraw and spew
-        # lines). \r returns to col 0, \033[K clears the rest of the line.
+            info = f"{info} · {self.postfix}"
+        head = f"{self.desc} {frac * 100:3.0f}%"
+        # Fit the line to the terminal so the info tail is never cut off:
+        # shrink the bar first, then drop it, then drop the description.
+        # Wrapping/truncating mid-info would defeat the in-place \r redraw.
         cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-        if len(line) > cols:
+        width = min(self.width, cols - 1 - len(head) - len("|| ") - len(info))
+        if width >= 8:
+            filled = int(round(width * frac))
+            bar = "█" * filled + "░" * (width - filled)
+            line = f"{head}|{bar}| {info}"
+        elif len(head) + 1 + len(info) < cols:
+            line = f"{head} {info}"
+        else:
+            line = f"{frac * 100:3.0f}% {info}"
+        if len(line) > cols:  # last resort on a very narrow terminal
             line = line[: max(cols - 1, 0)]
         self.stream.write(f"\r\033[K{line}")
         self.stream.flush()

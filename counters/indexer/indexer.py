@@ -42,6 +42,12 @@ class Indexer:
         # from "waiting for the oracle to catch up".
         self._btc_tip: int | None = None
         self._cp_tip: int | None = None
+        # Whether the last poll of each backend failed, so the height lines
+        # can say "down" instead of silently showing a stale height.
+        self._btc_down = False
+        self._cp_down = False
+        # Heights already printed above the bar, so they only reprint on change.
+        self._shown_heights: list[str] = []
         # De-dup state for transient status lines (see _status): remember the
         # current reason and when it started so we don't reprint every poll.
         self._status_key: str | None = None
@@ -312,6 +318,36 @@ class Indexer:
 
     # --- run loops ---------------------------------------------------------
 
+    def _height_lines(self) -> list[str]:
+        """Backend heights shown above the progress bar, one per line —
+        `bitcoin - 957090` / `counterparty - 957063/957090`. Counterparty
+        is shown against bitcoind's tip, so a lagging oracle is visible at a
+        glance. A backend whose last poll failed shows `down` instead of a
+        stale height. Lines whose height is unknown (backend not reached
+        yet) are omitted."""
+        btc, cp = self._btc_tip, self._cp_tip
+        lines = []
+        if self._btc_down:
+            lines.append("bitcoin - down")
+        elif btc is not None:
+            lines.append(f"bitcoin - {btc}")
+        if self._cp_down:
+            lines.append("counterparty - down")
+        elif cp is not None:
+            if btc is not None and not self._btc_down:
+                lines.append(f"counterparty - {cp}/{btc}")
+            else:
+                lines.append(f"counterparty - {cp}")
+        return lines
+
+    def _show_heights(self, bar: ProgressBar) -> None:
+        """Print the backend heights above the bar, only when they change."""
+        lines = self._height_lines()
+        if lines and lines != self._shown_heights:
+            self._shown_heights = lines
+            for line in lines:
+                bar.write(line)
+
     def _target_tip(self) -> int:
         """Highest block height safe to index.
 
@@ -323,8 +359,24 @@ class Indexer:
         nothing for them, advance its cursor, and silently skip any counters
         minted in that gap (only recoverable by a full rescan).
         """
-        self._btc_tip = self.btc.get_block_count()
-        self._cp_tip = self.cp.counterparty_height()
+        # Poll both backends even if the first one fails, so the height lines
+        # can report each one's up/down state independently.
+        btc_err: Exception | None = None
+        try:
+            self._btc_tip = self.btc.get_block_count()
+            self._btc_down = False
+        except BitcoindError as e:
+            self._btc_down = True
+            btc_err = e
+        try:
+            self._cp_tip = self.cp.counterparty_height()
+            self._cp_down = False
+        except CounterpartyError:
+            self._cp_down = True
+            if btc_err is None:
+                raise
+        if btc_err is not None:
+            raise btc_err
         return min(self._btc_tip, self._cp_tip) - self.config.confirmations
 
     def sync_to_tip(self, stop_at: int | None = None) -> int:
@@ -351,6 +403,7 @@ class Indexer:
             own_bar = True
         if bar is not None:
             bar.total = max(tip, 1)  # keep up with a moving tip
+            self._show_heights(bar)
 
         total = 0
         try:
@@ -404,6 +457,10 @@ class Indexer:
                     # (no stack trace) and retry; _status de-dups the repeats.
                     key, msg = self._backend_wait_reason(e, retry)
                     self._status(key, msg)
+                    # Refresh the height lines so the dead backend reads
+                    # "down" instead of freezing at its last known height.
+                    if self._progress is not None:
+                        self._show_heights(self._progress)
                 except Exception:  # genuinely unexpected: keep the loop alive but log fully
                     log.exception("sync pass failed; %s", retry)
                 if ok:
@@ -412,11 +469,7 @@ class Indexer:
                     # which would otherwise be a silent delay.
                     cp, btc = self._cp_tip, self._btc_tip
                     if cp is not None and btc is not None and cp < btc:
-                        self._status(
-                            "catchup",
-                            f"Waiting for Counterparty to catch up — it has validated to "
-                            f"block {cp:,} of {btc:,}; counters will follow automatically.",
-                        )
+                        self._status("catchup", f"Waiting for Counterparty — {cp}/{btc}")
                     else:
                         self._status_clear("Backends reachable — indexing resumed.")
                 if self._stop:

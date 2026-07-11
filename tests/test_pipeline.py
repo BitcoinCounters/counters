@@ -392,6 +392,38 @@ def test_inscription_cost_sums_commit_and_reveal():
     assert fee == 932 + 200 and size == 233 + 100
 
 
+def test_height_lines_show_all_backend_heights():
+    """The backend heights print above the bar, one per line: bitcoind's tip,
+    then Counterparty's validated height against that tip."""
+    idx = Indexer.__new__(Indexer)
+    idx._btc_down, idx._cp_down = False, False
+    idx._btc_tip, idx._cp_tip = 957_090, 957_063
+    assert idx._height_lines() == [
+        "bitcoin - 957090",
+        "counterparty - 957063/957090",
+    ]
+    # Heights not yet known (backend never reached) are omitted, never crash.
+    idx._btc_tip, idx._cp_tip = None, None
+    assert idx._height_lines() == []
+    idx._btc_tip, idx._cp_tip = 957_090, None
+    assert idx._height_lines() == ["bitcoin - 957090"]
+
+
+def test_height_lines_show_down_backends():
+    """A backend whose last poll failed reads `down`, never a stale height."""
+    idx = Indexer.__new__(Indexer)
+    idx._btc_tip, idx._cp_tip = 957_090, 957_063
+
+    idx._btc_down, idx._cp_down = True, False
+    assert idx._height_lines() == ["bitcoin - down", "counterparty - 957063"]
+
+    idx._btc_down, idx._cp_down = False, True
+    assert idx._height_lines() == ["bitcoin - 957090", "counterparty - down"]
+
+    idx._btc_down, idx._cp_down = True, True
+    assert idx._height_lines() == ["bitcoin - down", "counterparty - down"]
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
