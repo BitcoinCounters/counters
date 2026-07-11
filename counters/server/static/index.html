@@ -331,7 +331,7 @@
     <div class="doc"><article>
       <h2 id="what">What a counter is</h2>
       <p>A <strong>Bitcoin counter</strong> is a numbered inscription: a file committed permanently to Bitcoin, stored in witness data, and bound to a Counterparty asset. The inscription number is assigned in sequence; the file is its content; the asset is the handle by which it is identified, owned, and traded.</p>
-      <p>The asset does the heavy lifting — identity, ownership, naming, and transfer are all Counterparty's job — so the protocol layer stays small: a witness envelope plus an indexing convention.</p>
+      <p>The asset does the heavy lifting — identity, ownership, naming, and transfer are all Counterparty's job — so the counters protocol stays small: the COUNT envelope rules plus an indexer.</p>
 
       <h2 id="envelope">The COUNT envelope</h2>
       <p>The file is serialized as data pushes inside a taproot script-path witness, wrapped in a skipped no-op. It is byte-for-byte ord's envelope with a different marker — so existing parsers are reusable.</p>
