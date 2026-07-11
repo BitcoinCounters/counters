@@ -4,8 +4,10 @@
 
 # Bitcoin Counters — Indexer & Wallet
 
-**Bitcoin Counters** are inscriptions — files stored in Bitcoin witness data (a
-`COUNT` envelope) — bound to a Counterparty asset issued in the same transaction.
+**Bitcoin Counters** are numbered inscriptions — files stored in Bitcoin witness
+data (a `COUNT` envelope) — bound to a Counterparty asset. The inscription number
+is assigned in sequence; the file is its content; the asset is the handle by
+which it is identified, owned, and traded.
 
 This tool **indexes** them (parse → join → number → store), **mints** and
 **transfers** them using a taproot (BIP86) wallet kept inside **Bitcoin Core**
