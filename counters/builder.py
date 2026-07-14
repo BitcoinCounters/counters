@@ -38,16 +38,16 @@ def chunk_body(body: bytes, size: int = MAX_PUSH) -> list[bytes]:
 def build_envelope(content_type: bytes, body: bytes, asset: bytes = b"") -> bytes:
     """The OP_FALSE OP_IF ... OP_ENDIF envelope (no key check).
 
-    If `asset` is given, emit the reinscription target tag (0x02) after the
-    content_type field: the counter attaches to that existing asset and the tx
-    carries no Counterparty message.
+    If `asset` is given, emit the target-asset tag (0x02) after the content_type
+    field: it names the asset the counter binds to (a creation matched to a
+    same-tx issuance, or a reinscription onto an existing asset).
     """
     script = bytes([OP_FALSE, OP_IF])
     script += tap.push_data(COUNT_MARKER)
     # content_type tag: a 1-byte 0x01 data push, then the MIME push.
     script += tap.push_data(bytes([CONTENT_TYPE_TAG]))
     script += tap.push_data(content_type)
-    # optional reinscription target: 1-byte 0x02 data push, then the asset push.
+    # optional target asset: 1-byte 0x02 data push, then the asset name push.
     if asset:
         script += tap.push_data(bytes([ASSET_TAG]))
         script += tap.push_data(asset)

@@ -213,7 +213,10 @@ def cmd_inscribe(
         else:
             asset = random_numeric_asset()
         quantity = supply * COIN if divisible else supply
-        insc = builder.build_inscription(content_type, body)
+        # Name the asset in the envelope too, so the counter is envelope-bound
+        # (the indexer prefers the envelope's asset, matched to this same-tx
+        # issuance) rather than relying solely on the OP_RETURN issuance.
+        insc = builder.build_inscription(content_type, body, asset=asset.encode())
         try:
             if named:
                 built = _prepare_named(btc, cp, wallet, insc, asset, quantity,

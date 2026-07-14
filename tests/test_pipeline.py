@@ -238,6 +238,47 @@ def test_empty_body_counter_is_recorded():
         idx.close()
 
 
+def test_creation_with_envelope_asset_is_bound_to_that_asset():
+    """A modern creation names its asset in the envelope (tag 2) AND issues it in
+    the same tx. The indexer binds to the envelope's asset via the matching
+    same-tx issuance — recorded as a creation (not a reinscription)."""
+    height, txid = 800006, "1f" * 32
+    body = b"gm"
+    block = make_block(height, txid, b"text/plain", body, asset=b"NEWCOUNTER")
+    issuances = {txid: [{"asset": "NEWCOUNTER", "status": "valid", "asset_events": "creation",
+                          "tx_index": 99, "asset_longname": None, "issuer": "1Issuer",
+                          "fee_paid": 50000000}]}
+    assets = {"NEWCOUNTER": {"asset_id": "555", "owner": "1Owner", "asset_longname": None,
+                              "divisible": False, "supply": 1}}
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = build_indexer(block, issuances, assets, tmp)
+        assert idx.process_block(height) == 1
+        row = idx.store.get_counter(0)
+        assert row["asset"] == "NEWCOUNTER"
+        assert row["reinscription"] == 0        # a creation, not a reinscription
+        assert row["cp_tx_index"] == 99         # bound via the same-tx issuance
+        idx.close()
+
+
+def test_envelope_asset_that_does_not_resolve_falls_back_to_same_tx_issuance():
+    """Envelope names an asset that neither exists nor is issued here, while a
+    DIFFERENT asset is validly created in the same tx. Per the binding rule, the
+    unresolved envelope asset is ignored and the counter binds to the issuance."""
+    height, txid = 800007, "2e" * 32
+    block = make_block(height, txid, b"text/plain", b"x", asset=b"GHOST")
+    issuances = {txid: [{"asset": "REALISSUE", "status": "valid", "asset_events": "creation",
+                          "tx_index": 7, "asset_longname": None, "issuer": "1Issuer"}]}
+    assets = {"REALISSUE": {"asset_id": "808", "owner": "1Owner", "asset_longname": None,
+                             "divisible": False, "supply": 1}}
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = build_indexer(block, issuances, assets, tmp)
+        assert idx.process_block(height) == 1
+        row = idx.store.get_counter(0)
+        assert row["asset"] == "REALISSUE"      # bound to the same-tx issuance
+        assert row["reinscription"] == 0
+        idx.close()
+
+
 def build_reinscribe_indexer(block, assets, issuers, input_addresses, tmp) -> Indexer:
     cfg = Config()
     cfg.data_dir = tmp

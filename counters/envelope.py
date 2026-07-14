@@ -107,10 +107,11 @@ def parse_script(script: bytes) -> list[Op]:
 class CounterEnvelope:
     content_type: bytes
     body: bytes
-    # Reinscription target (tag 0x02): the existing asset this counter attaches
-    # to. Empty => no target, i.e. a creation-style counter bound via a same-tx
-    # Counterparty issuance. Non-empty => reinscription (no Counterparty message;
-    # the indexer authorises it against the asset's owner as of the block).
+    # Target asset (tag 0x02): the asset this counter binds to. The indexer
+    # prefers it over the same-tx issuance — resolving to a creation (a same-tx
+    # Counterparty issuance creates it) or a reinscription (a pre-existing asset,
+    # authorised against its owner as of the block). Empty => bind to whatever
+    # asset the tx issues.
     asset: bytes = b""
 
 
@@ -182,8 +183,8 @@ def _parse_envelope(ops: list[Op], start: int) -> tuple[CounterEnvelope | None, 
                 content_type = ct if ct is not None else b""
                 j += 1
             continue
-        # Tag 2 = reinscription target asset; value is the next push (UTF-8
-        # asset name/longname). Marks the envelope as a reinscription.
+        # Tag 2 = target asset; value is the next push (UTF-8 asset
+        # name/longname). Names the asset the counter binds to.
         is_asset_tag = data is not None and len(data) == 1 and data[0] == ASSET_TAG
         if is_asset_tag:
             j += 1

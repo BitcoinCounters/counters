@@ -35,12 +35,13 @@ COUNT_MARKER = b"COUNT"
 # parse (build reference §4).
 CONTENT_TYPE_TAG = 0x01
 
-# Field tag for a *reinscription* target asset, pushed as a single byte 0x02
-# followed by the asset's name/longname (UTF-8). Its presence marks the envelope
-# as a reinscription onto an EXISTING asset: there is NO Counterparty message in
-# the tx; the indexer binds the counter to this named asset and authorises it by
-# checking the tx spent an input from the asset's owner (issuance rights) as of
-# that block. Absent tag => creation-style counter bound via a same-tx issuance.
+# Field tag for the target asset, pushed as a single byte 0x02 followed by the
+# asset's name/longname (UTF-8). It names the asset the counter binds to, and
+# the indexer prefers it over the same-tx issuance. The binding resolves two
+# ways: if a same-tx Counterparty issuance CREATES this asset, it is a creation;
+# otherwise, for a pre-existing asset, it is a reinscription (no Counterparty
+# message) authorised by the tx spending an input from the owner as of that
+# block. Absent tag => the counter binds to whatever asset the tx issues.
 ASSET_TAG = 0x02
 
 # Counterparty `asset_events` values that mark an asset's first (creation)

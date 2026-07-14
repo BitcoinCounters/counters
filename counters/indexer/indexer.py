@@ -132,11 +132,10 @@ class Indexer:
 
         recorded = 0
         if candidates:
-            # Only creation-path candidates (no target-asset tag) need the
-            # block's Counterparty issuances; a block of pure reinscriptions
-            # skips that API call entirely.
-            need_issuances = any(not env.asset for _, _, env in candidates)
-            issuances = self.cp.get_block_issuances(height) if need_issuances else {}
+            # Any candidate may be a creation (its envelope's asset matched to a
+            # same-tx issuance) or fall back to whatever the tx issues, so the
+            # block's issuances are needed whenever there is a candidate.
+            issuances = self.cp.get_block_issuances(height)
             for position, tx, env in candidates:
                 if self._maybe_record(height, position, tx, env, issuances):
                     recorded += 1
@@ -149,25 +148,45 @@ class Indexer:
         txid = tx.get("txid")
         if self.store.has_txid(txid):
             return False
-        # An envelope carrying a target-asset tag is a REINSCRIPTION onto an
-        # existing asset (no Counterparty message); otherwise it's a creation
-        # bound to a same-tx Counterparty issuance.
+        # Binding is envelope-first. If the envelope names an asset, use it when
+        # that binding is valid: either a same-tx issuance that CREATES it (a
+        # creation), or, for a pre-existing asset, a tx authorised by its owner
+        # (a reinscription). If the named asset does not resolve — or the
+        # envelope names none — fall back to whatever asset the tx issues. If
+        # neither holds, it is not a valid counter.
         if env.asset:
-            return self._record_reinscription(height, position, tx, env, txid)
+            try:
+                target = env.asset.decode("utf-8")
+            except UnicodeDecodeError:
+                target = None
+            if target is not None:
+                if self._record_creation(height, position, tx, env, txid,
+                                         issuances, require_asset=target):
+                    return True
+                if self._record_reinscription(height, position, tx, env, txid, target):
+                    return True
         return self._record_creation(height, position, tx, env, txid, issuances)
 
-    def _record_creation(self, height, position, tx, env, txid, issuances) -> bool:
+    def _record_creation(self, height, position, tx, env, txid, issuances,
+                         require_asset: str | None = None) -> bool:
         tx_issuances = issuances.get(txid)
         if not tx_issuances:
             return False
 
         # A tx carries one Counterparty message; pick the issuance row that is
-        # a valid creation. (Defensive: iterate in case of multiple rows.)
+        # a valid creation. (Defensive: iterate in case of multiple rows.) When
+        # require_asset is set (the envelope named an asset), the issuance must
+        # create THAT asset — matched against its name or longname.
         issuance = None
         for row in tx_issuances:
-            if self.cp.is_valid(row) and self.cp.is_creation(row):
-                issuance = row
-                break
+            if not (self.cp.is_valid(row) and self.cp.is_creation(row)):
+                continue
+            if require_asset is not None and require_asset not in (
+                row.get("asset"), row.get("asset_longname")
+            ):
+                continue
+            issuance = row
+            break
         if issuance is None:
             return False
 
@@ -190,15 +209,10 @@ class Indexer:
             reinscription=False,  # a creation is always its asset's first counter
         )
 
-    def _record_reinscription(self, height, position, tx, env, txid) -> bool:
+    def _record_reinscription(self, height, position, tx, env, txid, target: str) -> bool:
         """Record a counter attached to a pre-existing asset. There is NO
         Counterparty message; the tx must instead prove issuance rights by
         spending an input from the asset's owner address AS OF THIS BLOCK."""
-        try:
-            target = env.asset.decode("utf-8")
-        except UnicodeDecodeError:
-            return False
-
         asset_info = self.cp.get_asset(target)
         if not asset_info:
             return False  # names a non-existent asset
