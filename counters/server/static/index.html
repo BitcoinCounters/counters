@@ -320,33 +320,35 @@
       <a href="#/docs#envelope">The COUNT envelope</a>
       <a href="#/docs#own">Ownership</a>
       <a href="#/docs#number">Numbering</a>
+      <a href="#/docs#setup">Setup</a>
       <a href="#/docs#mint">Minting</a>
       <a href="#/docs#valid">Validity</a>
       <a href="#/docs#reinscribe">Reinscriptions</a>
       <a href="#/docs#api">Server API</a>
-      <a href="#/docs#setup">Setup</a>
       <a href="#/docs#source">Source</a>
       <a href="#/docs#community">Community</a>
     </aside>
     <div class="doc"><article>
       <h2 id="what">What a counter is</h2>
-      <p>A <strong>Bitcoin counter</strong> is a numbered inscription: a file committed permanently to the Bitcoin blockchain, stored in witness data, linked to a Counterparty asset, and assigned an inscription number in order of minting.</p>
-      <p>The Counterparty asset does the heavy lifting — identity, ownership, naming, and transfer are all Counterparty's job — so the counters protocol stays small: the COUNT envelope rules for valid inscriptions, assigning inscription numbers, and linking inscriptions to Counterparty assets.</p>
-      <p>A Bitcoin counter is made by including a valid COUNT envelope in a transaction, with the inscription data and Counterparty asset name inside. The Counters Indexer parses the entire Bitcoin blockchain, finds all valid inscriptions, and assigns inscription numbers. The Counters Server produces a boilerplate Counters explorer and documentation page. You're looking at it now.</p>
+      <p>A <strong>Bitcoin counter</strong> is a numbered inscription — a file committed to Bitcoin in witness data and linked to a Counterparty asset. Counters are numbered in order of creation.</p>
+      <p>Any Counterparty asset can carry a counter — named, unnamed, divisible, new, or existing — and one asset can hold many.</p>
+      <p>The asset does the heavy lifting: identity, ownership, naming, and transfer are all Counterparty's job. The protocol stays small — it defines only the COUNT envelope, the validity rules, and the numbering.</p>
+      <p>To mint a counter, include a <strong>valid COUNT envelope</strong> — the inscription data plus the Counterparty asset name — in a transaction. The indexer scans the blockchain, finds every valid inscription, and numbers it; the server renders this explorer and its docs.</p>
 
       <h2 id="envelope">The COUNT envelope</h2>
-      <p>The COUNT envelope is a standard structure that must be included in a transaction and followed exactly in order to mint a Bitcoin counter.</p>
-      <p>It goes as follows:</p>
+      <p>The COUNT envelope is a small Bitcoin script — opcodes in the transaction's witness — that carries the inscription as data:</p>
       <pre>OP_FALSE OP_IF
   OP_PUSH <span class="k">"COUNT"</span>          <span class="c"># marker</span>
   OP_PUSH 0x01           <span class="c"># tag 1 = content type</span>
   OP_PUSH &lt;content_type&gt;  <span class="c"># MIME, e.g. image/png</span>
+  OP_PUSH 0x02           <span class="c"># tag 2 = target asset</span>
+  OP_PUSH &lt;asset&gt;         <span class="c"># e.g. RAREPEPE or A9542…</span>
   OP_0                   <span class="c"># separator; body begins</span>
   OP_PUSH &lt;file bytes&gt;    <span class="c"># ≤520 bytes per push</span>
 OP_ENDIF
 &lt;pubkey&gt; OP_CHECKSIG</pre>
-      <p>The file is serialized as data pushes inside a taproot script-path witness, wrapped in a skipped no-op. It is byte-for-byte ord's envelope with a different marker — so existing parsers are reusable.</p>
-      <p>Three things travel in the envelope: the <code>COUNT</code> marker, the MIME type, and the file. Nothing else — no pointer, parent, or metadata fields, because the asset already carries them.</p>
+      <p>The <code>OP_FALSE OP_IF … OP_ENDIF</code> block never runs — it is pure data; <code>&lt;pubkey&gt; OP_CHECKSIG</code> is the real spend condition. As a taproot leaf script, it is committed in the commit transaction and revealed in the reveal's witness, where the bytes land on-chain (see Minting). It follows ord's envelope structure, so existing parsers work unchanged.</p>
+      <p>Four things travel in it — the <code>COUNT</code> marker, the MIME type, the <strong>target asset</strong> name, and the file. Naming the asset makes the counter envelope-bound: the indexer trusts the envelope's asset and binds to it (see Validity). No pointer, parent, or metadata; the asset already carries those.</p>
 
       <h2 id="own">Ownership</h2>
       <p>Whoever holds the Counterparty asset balance owns the counter. Transfer is an ordinary Counterparty send of that asset; the witness file never moves — it stays as permanent provenance pinned to the mint transaction.</p>
@@ -354,45 +356,6 @@ OP_ENDIF
       <h2 id="number">Numbering</h2>
       <p>Counters are numbered globally, gap-free, starting at <strong>0</strong>, ordered by block height then position within the block — the same scheme Ordinals uses. Only <em>valid</em> counters get a number.</p>
       <div class="callout"><b>Genesis is data-defined.</b> There is no activation height. Counter #0 is simply the first valid counter the indexer finds on-chain.</div>
-
-      <h2 id="mint">Minting</h2>
-      <p>A mint is a taproot commit/reveal pair, built and broadcast together. The reveal carries the file in its witness and the Counterparty issuance as a plain <code>OP_RETURN</code>.</p>
-      <pre><span class="c"># create a wallet (prints a seed phrase once)</span>
-counters wallet create --name me
-
-<span class="c"># inscribe a file as a free numeric asset…</span>
-counters wallet --name me inscribe --file cat.png
-
-<span class="c"># …or as a named asset (costs 0.5 XCP)</span>
-counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
-
-      <h2 id="valid">Validity</h2>
-      <p>A transaction is a valid counter when all hold:</p>
-      <ul>
-        <li data-n="1">its witness has a well-formed <code>COUNT</code> envelope;</li>
-        <li data-n="2">the same transaction has a Counterparty issuance that <strong>successfully mints</strong> an asset;</li>
-        <li data-n="3">it is that asset's <strong>first</strong> issuance;</li>
-        <li data-n="4">exactly one <code>COUNT</code> envelope is present;</li>
-        <li data-n="5">the asset is not BTC or XCP.</li>
-      </ul>
-      <p>Validity depends on Counterparty's verdict, not an explorer's listing — an asset can appear indexed yet be an invalid issuance. <em>Reinscriptions</em> onto an existing asset are bound and authorised differently — see below.</p>
-
-      <h2 id="reinscribe">Reinscriptions</h2>
-      <p>A counter can also be attached to an <strong>existing</strong> asset you already own — a <em>reinscription</em>. The <code>COUNT</code> envelope names the target asset (tag <code>0x02</code>) and the transaction carries <strong>no Counterparty message</strong>. It's authorised on-chain by spending an input from the asset's <strong>owner (issuance-rights holder) as of that block</strong> — <em>ownership</em>, not token balance, checked at the height of the inscription so a later transfer can't change the verdict.</p>
-      <p>Each reinscription is a new, permanently-numbered counter, so one asset can back many. The lowest-numbered counter on an asset is its <em>original</em>; later ones are reinscriptions, and a counter's page lists them all.</p>
-      <pre><span class="c"># attach a counter to an asset you own (no new asset, no XCP)</span>
-counters wallet --name me inscribe --file v2.png --asset RAREPEPE --reinscribe</pre>
-
-      <h2 id="api">Server API</h2>
-      <p>This explorer reads these endpoints from <code>counters server</code>:</p>
-      <ul>
-        <li data-n="›"><code>GET /status</code> — latest synced block + total counter count</li>
-        <li data-n="›"><code>GET /counters?before=N&amp;limit=K</code> — recent counters</li>
-        <li data-n="›"><code>GET /counter/&lt;number|asset&gt;</code> — one counter's record</li>
-        <li data-n="›"><code>GET /block/&lt;height&gt;</code> — counters minted in a block</li>
-        <li data-n="›"><code>GET /content/&lt;number&gt;</code> — the raw file, served with its stored MIME</li>
-      </ul>
-      <p>Point the <code>API</code> constant at the top of this file's script at your server and the sample data is replaced by live results.</p>
 
       <h2 id="setup">Setup</h2>
       <p>The indexer is the only part that needs backends; the explorer alone runs without them. To index, run two fully-synced nodes and point Counters at them.</p>
@@ -414,6 +377,48 @@ counters status
 counters index --from-genesis
 counters server</pre>
       <div class="callout"><b>Both nodes must be fully synced.</b> The indexer never advances past Counterparty's height, so a lagging Core simply slows indexing rather than producing wrong results.</div>
+
+      <h2 id="mint">Minting</h2>
+      <p>A mint is a taproot commit/reveal pair, built and broadcast together. The reveal carries the file in its witness and, for a new asset, the Counterparty issuance as a plain <code>OP_RETURN</code> (a reinscription onto an existing asset carries no issuance — see below).</p>
+      <pre><span class="c"># create a wallet (prints a seed phrase once)</span>
+counters wallet create --name me
+
+<span class="c"># inscribe a file as a free numeric asset…</span>
+counters wallet --name me inscribe --file cat.png
+
+<span class="c"># …or as a named asset (costs 0.5 XCP)</span>
+counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
+
+      <h2 id="valid">Validity</h2>
+      <p>A transaction records a counter when all hold:</p>
+      <ul>
+        <li data-n="1">its witness has a well-formed <code>COUNT</code> envelope, and <strong>exactly one</strong> is present across the whole transaction;</li>
+        <li data-n="2">the counter <strong>binds</strong> to an asset (below);</li>
+        <li data-n="3">that asset is not BTC or XCP.</li>
+      </ul>
+      <p><strong>Binding is envelope-first.</strong> The envelope names its asset (tag <code>0x02</code>), and the counter binds to it when either:</p>
+      <ul>
+        <li data-n="a">a Counterparty issuance in the <strong>same transaction successfully creates</strong> that asset — a <em>creation</em>; or</li>
+        <li data-n="b">the asset <strong>already exists</strong> and the transaction is authorised by its owner — a <em>reinscription</em> (see below).</li>
+      </ul>
+      <p>If the named asset doesn't resolve either way — or a legacy envelope names none — the counter falls back to whatever asset the transaction issues. Otherwise it isn't a counter. Validity depends on Counterparty's verdict, not an explorer's listing — an asset can appear indexed yet be an invalid issuance.</p>
+
+      <h2 id="reinscribe">Reinscriptions</h2>
+      <p>A counter can also be attached to an <strong>existing</strong> asset you already own — a <em>reinscription</em>. Like every counter, its envelope names the asset (tag <code>0x02</code>); what makes it a reinscription is that the asset already exists and the transaction carries <strong>no Counterparty message</strong>. It's authorised on-chain by spending an input from the asset's <strong>owner (issuance-rights holder) as of that block</strong> — <em>ownership</em>, not token balance, checked at the height of the inscription so a later transfer can't change the verdict.</p>
+      <p>Each reinscription is a new, permanently-numbered counter, so one asset can back many. The lowest-numbered counter on an asset is its <em>original</em>; later ones are reinscriptions, and a counter's page lists them all.</p>
+      <pre><span class="c"># attach a counter to an asset you own (no new asset, no XCP)</span>
+counters wallet --name me inscribe --file v2.png --asset RAREPEPE --reinscribe</pre>
+
+      <h2 id="api">Server API</h2>
+      <p>This explorer reads these endpoints from <code>counters server</code>:</p>
+      <ul>
+        <li data-n="›"><code>GET /status</code> — latest synced block + total counter count</li>
+        <li data-n="›"><code>GET /counters?before=N&amp;limit=K</code> — recent counters</li>
+        <li data-n="›"><code>GET /counter/&lt;number|asset&gt;</code> — one counter's record</li>
+        <li data-n="›"><code>GET /block/&lt;height&gt;</code> — counters minted in a block</li>
+        <li data-n="›"><code>GET /content/&lt;number&gt;</code> — the raw file, served with its stored MIME</li>
+      </ul>
+      <p>Point the <code>API</code> constant at the top of this file's script at your server and the sample data is replaced by live results.</p>
 
       <h2 id="source">Source</h2>
       <p>Counters is open source — the indexer, CLI, and this explorer all live in one repository: <a href="https://github.com/antron3000/counters" target="_blank" rel="noopener" class="out">github.com/antron3000/counters ↗</a>.</p>
