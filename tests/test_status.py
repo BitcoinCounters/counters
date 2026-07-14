@@ -1,13 +1,13 @@
-"""Indexer status messaging: specific backend-down reasons + de-duplication.
-
-Covers the run-loop UX so a transient outage states *why* it's waiting and
-does not reprint the identical line on every poll.
+"""Indexer status messaging: a transient outage states *why* it's waiting on
+the affected backend's height line, redrawn in place, and never scrolls a fresh
+message every poll.
 
 Run: python tests/test_status.py   (or via pytest)
 """
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 import tempfile
@@ -18,8 +18,15 @@ from counters.bitcoind import BitcoindError  # noqa: E402
 from counters.config import Config  # noqa: E402
 from counters.counterparty import CounterpartyError  # noqa: E402
 from counters.indexer import Indexer  # noqa: E402
-from counters.indexer import indexer as indexer_mod  # noqa: E402
+from counters.progress import ProgressBar  # noqa: E402
 from counters.store import Store  # noqa: E402
+
+
+class _FakeTTY(io.StringIO):
+    """A StringIO that claims to be a TTY so ProgressBar renders in place."""
+
+    def isatty(self) -> bool:
+        return True
 
 
 def _make_idx(tmp: str):
@@ -32,52 +39,107 @@ def _make_idx(tmp: str):
     return idx, msgs
 
 
-def test_wait_reason_classifies_backend_and_kind():
+def test_wait_note_reflects_backend_and_kind():
+    """A backend failure annotates ITS height line with a concise reason instead
+    of scrolling a message; the kind (starting up / busy / error) is preserved."""
     with tempfile.TemporaryDirectory() as tmp:
         idx, _ = _make_idx(tmp)
-        k, m = idx._backend_wait_reason(CounterpartyError("x", kind="unreachable"), "retrying in 15s")
-        assert k == "cp-unreachable" and "not listening" in m
+        idx._btc_tip, idx._cp_tip = 957_090, None
 
-        k, m = idx._backend_wait_reason(CounterpartyError("x", kind="timeout"), "retrying in 15s")
-        assert k == "cp-timeout" and "not responding" in m
+        # Counterparty API not up yet -> reason on the counterparty line.
+        idx._cp_down = True
+        idx._set_wait_note(CounterpartyError("x", kind="unreachable"))
+        assert idx._cp_note == "API not up yet — server starting/migrating · retrying"
+        assert idx._height_lines() == [
+            "bitcoin - 957090",
+            "counterparty - API not up yet — server starting/migrating · retrying",
+        ]
 
-        k, m = idx._backend_wait_reason(BitcoindError("x"), "retrying in 15s")
-        assert k == "btc" and "bitcoind" in m.lower()
+        idx._set_wait_note(CounterpartyError("x", kind="timeout"))
+        assert idx._cp_note == "not responding — server busy · retrying"
+        idx._set_wait_note(CounterpartyError("x"))   # generic
+        assert idx._cp_note == "API error · retrying"
+
+        # bitcoind down annotates the bitcoin line.
+        idx._btc_down = True
+        idx._set_wait_note(BitcoindError("x"))
+        assert idx._btc_note == "Core RPC unreachable — is bitcoind running? · retrying"
+        assert idx._height_lines()[0] == "bitcoin - Core RPC unreachable — is bitcoind running? · retrying"
         idx.close()
 
 
-def test_status_dedups_until_reason_changes():
+def test_wait_note_clears_on_recovery_without_scrolling():
+    """Once a backend recovers the note disappears and the line shows the plain
+    height; the transient status is never emitted as scrollback history."""
     with tempfile.TemporaryDirectory() as tmp:
         idx, msgs = _make_idx(tmp)
-        clock = {"t": 1000.0}
-        orig = indexer_mod.time.monotonic
-        indexer_mod.time.monotonic = lambda: clock["t"]
-        try:
-            idx._status("cp-unreachable", "down")
-            idx._status("cp-unreachable", "down")   # same reason, within window -> suppressed
-            assert msgs == ["down"]
+        idx._btc_tip, idx._cp_tip = 957_090, 957_063
+        idx._cp_down = True
+        idx._set_wait_note(CounterpartyError("x", kind="unreachable"))
+        assert "API not up yet" in idx._height_lines()[1]
 
-            clock["t"] += 61                          # past the 60s repeat window
-            idx._status("cp-unreachable", "down")     # reprints with elapsed
-            assert len(msgs) == 2 and "still waiting" in msgs[1]
-
-            idx._status("catchup", "catching up")     # reason changed -> immediate
-            assert msgs[-1] == "catching up"
-        finally:
-            indexer_mod.time.monotonic = orig
+        # Recovery mirrors the run loop: clear the note + down flag on success.
+        idx._cp_down = False
+        idx._cp_note = None
+        assert idx._height_lines() == [
+            "bitcoin - 957090",
+            "counterparty - 957063/957090 · catching up",   # trailing bitcoind, in place
+        ]
+        # Nothing was ever pushed to scrollback via _notify.
+        assert msgs == []
         idx.close()
 
 
-def test_status_clear_emits_once_then_noop():
-    with tempfile.TemporaryDirectory() as tmp:
-        idx, msgs = _make_idx(tmp)
-        idx._status("cp-unreachable", "down")
-        idx._status_clear("resumed")
-        assert msgs == ["down", "resumed"]
+def test_heights_update_in_place_on_tty_no_scroll():
+    """On a TTY a moving bitcoind tip updates the height rows IN PLACE: the
+    heights stay on their own lines above the bar, nothing scrolls (bar.write
+    is never used), and the persistent status holds only the newest tip."""
+    idx = Indexer.__new__(Indexer)
+    idx._btc_down = idx._cp_down = False
+    idx._cp_tip = None  # Counterparty down/unknown while bitcoind advances
+    idx._shown_heights = []
+    idx._cp_down = True
 
-        idx._status_clear("resumed")   # nothing active -> no-op (no duplicate)
-        assert msgs == ["down", "resumed"]
-        idx.close()
+    stream = _FakeTTY()
+    bar = ProgressBar(1000, stream=stream)
+    assert bar.enabled  # our fake stream is a "TTY"
+
+    scrolls: list[str] = []
+    bar.write = lambda msg: scrolls.append(msg)  # the scroll path must be unused
+
+    for tip in (957_457, 957_527, 957_577):
+        idx._btc_tip = tip
+        idx._show_heights(bar)
+
+    # No scrolling: the heights were redrawn in place, never written as history.
+    assert scrolls == []
+    # bitcoin and counterparty stay on SEPARATE lines, showing only the latest.
+    assert bar.status_lines == ["bitcoin - 957577", "counterparty - down"]
+    # An in-place redraw uses cursor-movement escapes (never plain scrollback).
+    assert "\033[" in stream.getvalue()
+
+
+def test_heights_scroll_only_on_change_when_not_tty():
+    """Piped to a log (no TTY): height lines print only when they change, not
+    on every poll, so a static backend state does not repeat."""
+    idx = Indexer.__new__(Indexer)
+    idx._btc_down = idx._cp_down = False
+    idx._cp_down = True
+    idx._cp_tip = None
+    idx._shown_heights = []
+
+    stream = io.StringIO()  # not a TTY
+    bar = ProgressBar(1000, stream=stream)
+    assert not bar.enabled
+
+    idx._btc_tip = 957_457
+    idx._show_heights(bar)
+    idx._show_heights(bar)  # unchanged -> must NOT reprint
+    assert stream.getvalue().count("bitcoin - 957457") == 1
+
+    idx._btc_tip = 957_527  # changed -> reprints once
+    idx._show_heights(bar)
+    assert stream.getvalue().count("bitcoin - 957527") == 1
 
 
 if __name__ == "__main__":

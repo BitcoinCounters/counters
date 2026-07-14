@@ -393,20 +393,24 @@ def test_inscription_cost_sums_commit_and_reveal():
 
 
 def test_height_lines_show_all_backend_heights():
-    """The backend heights print above the bar, one per line: bitcoind's tip,
-    then Counterparty's validated height against that tip."""
+    """The block is ALWAYS two backend lines (+ the bar = 3 rows): bitcoind's
+    tip, then Counterparty's validated height against that tip, tagged
+    `catching up` while it trails bitcoind."""
     idx = Indexer.__new__(Indexer)
     idx._btc_down, idx._cp_down = False, False
     idx._btc_tip, idx._cp_tip = 957_090, 957_063
     assert idx._height_lines() == [
         "bitcoin - 957090",
-        "counterparty - 957063/957090",
+        "counterparty - 957063/957090 · catching up",
     ]
-    # Heights not yet known (backend never reached) are omitted, never crash.
+    # Fully caught up: no tag.
+    idx._cp_tip = 957_090
+    assert idx._height_lines() == ["bitcoin - 957090", "counterparty - 957090/957090"]
+    # Heights not yet known (backend never reached) still render both lines.
     idx._btc_tip, idx._cp_tip = None, None
-    assert idx._height_lines() == []
+    assert idx._height_lines() == ["bitcoin - connecting…", "counterparty - connecting…"]
     idx._btc_tip, idx._cp_tip = 957_090, None
-    assert idx._height_lines() == ["bitcoin - 957090"]
+    assert idx._height_lines() == ["bitcoin - 957090", "counterparty - connecting…"]
 
 
 def test_height_lines_show_down_backends():

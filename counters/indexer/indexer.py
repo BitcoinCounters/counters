@@ -46,13 +46,15 @@ class Indexer:
         # can say "down" instead of silently showing a stale height.
         self._btc_down = False
         self._cp_down = False
-        # Heights already printed above the bar, so they only reprint on change.
+        # Non-TTY only: last height lines logged, so a piped log reprints them
+        # on change instead of every poll (a TTY updates them in place instead).
         self._shown_heights: list[str] = []
-        # De-dup state for transient status lines (see _status): remember the
-        # current reason and when it started so we don't reprint every poll.
-        self._status_key: str | None = None
-        self._status_since = 0.0
-        self._status_last = 0.0
+        # Concise, in-place status note for a backend that is currently
+        # unavailable (e.g. "starting up · retrying"), shown ON its height line
+        # and redrawn in place rather than scrolling a fresh message each poll.
+        # None while the backend is healthy.
+        self._btc_note: str | None = None
+        self._cp_note: str | None = None
 
     # --- signal handling ---------------------------------------------------
 
@@ -86,57 +88,21 @@ class Indexer:
         else:
             log.info(msg)
 
-    def _status(self, key: str, msg: str, repeat_every: float = 60.0) -> None:
-        """Emit a transient, de-duplicated status line.
-
-        Prints immediately when the reason (`key`) changes; while the same
-        condition persists it reprints at most once per `repeat_every` seconds,
-        appending how long it has been waiting. This replaces the old behaviour
-        of repeating the identical line on every poll.
-        """
-        now = time.monotonic()
-        if key != self._status_key:
-            self._status_key = key
-            self._status_since = now
-            self._status_last = now
-            self._notify(msg)
-        elif now - self._status_last >= repeat_every:
-            self._status_last = now
-            self._notify(f"{msg} (still waiting, {int(now - self._status_since)}s)")
-
-    def _status_clear(self, msg: str | None = None) -> None:
-        """Clear any active status; optionally emit a one-off recovery line."""
-        if self._status_key is not None:
-            self._status_key = None
-            if msg:
-                self._notify(msg)
-
-    def _backend_wait_reason(self, err: Exception, retry: str) -> tuple[str, str]:
-        """Return (dedup_key, message) explaining why a backend is unavailable,
-        tailored to the specific failure so the line states the real reason."""
+    def _set_wait_note(self, err: Exception) -> None:
+        """Reflect WHY a backend is unavailable as a concise note on its height
+        line, tailored to the failure. Shown in place (redrawn each poll) rather
+        than scrolling a fresh 'waiting' message. _target_tip() has already set
+        the matching down flag; here we only annotate the reason."""
         if isinstance(err, CounterpartyError):
-            url = self.config.cp_api_url
             kind = getattr(err, "kind", "error")
-            if kind == "unreachable":
-                reason = (
-                    f"Counterparty API not listening on {url} yet — counterparty-server "
-                    f"is starting up or restarting (its API comes online only after the "
-                    f"database migrations finish)"
-                )
-            elif kind == "timeout":
-                reason = (
-                    f"Counterparty API at {url} is not responding — the server is busy "
-                    f"(applying migrations or catching up)"
-                )
-            else:
-                reason = f"Counterparty API error at {url}: {err}"
-            return f"cp-{kind}", f"{reason}; {retry}…"
-        # BitcoindError (or other backend RPC failure)
-        return (
-            "btc",
-            f"Bitcoin Core RPC not reachable at {self.config.btc_rpc_url} — is bitcoind "
-            f"running with RPC enabled? {retry}…",
-        )
+            self._cp_note = {
+                # API comes online only after startup DB migrations finish.
+                "unreachable": "API not up yet — server starting/migrating · retrying",
+                # Busy applying migrations or catching up.
+                "timeout": "not responding — server busy · retrying",
+            }.get(kind, "API error · retrying")
+        else:  # BitcoindError (or other backend RPC failure)
+            self._btc_note = "Core RPC unreachable — is bitcoind running? · retrying"
 
     def close(self) -> None:
         self.store.close()
@@ -319,31 +285,51 @@ class Indexer:
     # --- run loops ---------------------------------------------------------
 
     def _height_lines(self) -> list[str]:
-        """Backend heights shown above the progress bar, one per line —
-        `bitcoin - 957090` / `counterparty - 957063/957090`. Counterparty
-        is shown against bitcoind's tip, so a lagging oracle is visible at a
-        glance. A backend whose last poll failed shows `down` instead of a
-        stale height. Lines whose height is unknown (backend not reached
-        yet) are omitted."""
+        """The two backend status lines shown above the bar — ALWAYS both, so the
+        live block is a stable three rows (bitcoin, counterparty, bar) that update
+        in place instead of scrolling. Each line shows the backend's height, or,
+        whenever something happens, the reason in its place: a wait note when a
+        backend is unreachable (falling back to `down`), `connecting…` before the
+        first poll, and a `catching up` tag on Counterparty while it trails
+        bitcoind (`957063/957090 · catching up`)."""
         btc, cp = self._btc_tip, self._cp_tip
-        lines = []
+        btc_note = getattr(self, "_btc_note", None)
+        cp_note = getattr(self, "_cp_note", None)
+
         if self._btc_down:
-            lines.append("bitcoin - down")
+            btc_line = f"bitcoin - {btc_note or 'down'}"
         elif btc is not None:
-            lines.append(f"bitcoin - {btc}")
+            btc_line = f"bitcoin - {btc}"
+        else:
+            btc_line = "bitcoin - connecting…"
+
         if self._cp_down:
-            lines.append("counterparty - down")
+            cp_line = f"counterparty - {cp_note or 'down'}"
         elif cp is not None:
             if btc is not None and not self._btc_down:
-                lines.append(f"counterparty - {cp}/{btc}")
+                tag = " · catching up" if cp < btc else ""
+                cp_line = f"counterparty - {cp}/{btc}{tag}"
             else:
-                lines.append(f"counterparty - {cp}")
-        return lines
+                cp_line = f"counterparty - {cp}"
+        else:
+            cp_line = "counterparty - connecting…"
+
+        return [btc_line, cp_line]
 
     def _show_heights(self, bar: ProgressBar) -> None:
-        """Print the backend heights above the bar, only when they change."""
+        """Surface the backend heights as *current status*, not history.
+
+        On a TTY the heights are shown on their own lines just above the bar
+        and redrawn in place, so a moving bitcoind tip (or a backend flapping
+        up/down) updates the same rows instead of scrolling a fresh pair every
+        poll. When output is not a TTY (piped to a log) there is no in-place
+        redraw, so fall back to printing the lines only when they change."""
         lines = self._height_lines()
-        if lines and lines != self._shown_heights:
+        if not lines:
+            return
+        if bar.enabled:
+            bar.set_status_lines(lines)
+        elif lines != self._shown_heights:
             self._shown_heights = lines
             for line in lines:
                 bar.write(line)
@@ -453,25 +439,22 @@ class Indexer:
                     ok = True
                 except (CounterpartyError, BitcoindError) as e:
                     # Expected/transient: a backend is down, restarting, or still
-                    # running startup migrations. State the specific reason once
-                    # (no stack trace) and retry; _status de-dups the repeats.
-                    key, msg = self._backend_wait_reason(e, retry)
-                    self._status(key, msg)
-                    # Refresh the height lines so the dead backend reads
-                    # "down" instead of freezing at its last known height.
+                    # running startup migrations. Reflect the reason ON the
+                    # affected backend's height line and redraw it in place —
+                    # never scroll a fresh "waiting" message every poll.
+                    self._set_wait_note(e)
                     if self._progress is not None:
                         self._show_heights(self._progress)
                 except Exception:  # genuinely unexpected: keep the loop alive but log fully
                     log.exception("sync pass failed; %s", retry)
                 if ok:
-                    # Backends reachable. Distinguish "fully caught up" from
-                    # "waiting for the oracle to catch up" (cp behind bitcoind),
-                    # which would otherwise be a silent delay.
-                    cp, btc = self._cp_tip, self._btc_tip
-                    if cp is not None and btc is not None and cp < btc:
-                        self._status("catchup", f"Waiting for Counterparty — {cp}/{btc}")
-                    else:
-                        self._status_clear("Backends reachable — indexing resumed.")
+                    # Backends reachable: drop any stale wait note and refresh the
+                    # lines. A Counterparty tip below bitcoind's (catching up) is
+                    # already visible in the `cp/btc` numbers, so nothing scrolls.
+                    if self._btc_note or self._cp_note:
+                        self._btc_note = self._cp_note = None
+                    if self._progress is not None:
+                        self._show_heights(self._progress)
                 if self._stop:
                     break
                 self._interruptible_sleep(self.config.poll_interval)

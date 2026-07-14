@@ -12,6 +12,7 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.hypothesis/
 
 # Local env / editor
 .env
