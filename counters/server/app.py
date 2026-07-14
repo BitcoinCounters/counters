@@ -388,9 +388,17 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.address_string(), fmt % args)
 
 
-def run(config: Config, host: str = "127.0.0.1", port: int = 8081) -> int:
+def make_server(config: Config, host: str = "127.0.0.1", port: int = 8081) -> ThreadingHTTPServer:
+    """Build (but do not start) the explorer HTTP server. The caller drives it —
+    either blocking via run() for a serve-only process, or on a background thread
+    when `counters server` also runs the indexer in the foreground."""
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.config = config  # type: ignore[attr-defined]
+    return httpd
+
+
+def run(config: Config, host: str = "127.0.0.1", port: int = 8081) -> int:
+    httpd = make_server(config, host, port)
     url = f"http://{host}:{port}"
     print(f"counters explorer + API on {url}  (Ctrl+C to stop)")
     try:

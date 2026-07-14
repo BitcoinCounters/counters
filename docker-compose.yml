@@ -5,6 +5,10 @@ services:
       args:
         # Stamped by CI (Jenkinsfile) with the deployed short commit hash.
         GIT_COMMIT: ${GIT_COMMIT:-dev}
+    # Serve only: the dedicated `indexer` service below is the sole writer, and
+    # `docker compose up -d counters` should still run the explorer with no
+    # backends. (`counters server` indexes by default when run on its own.)
+    command: ["server", "--no-index", "--host", "0.0.0.0", "--port", "8081"]
     ports:
       - "8081:8081"
     volumes:

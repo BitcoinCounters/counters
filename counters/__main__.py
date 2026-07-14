@@ -116,10 +116,16 @@ def main(argv: list[str] | None = None) -> int:
     p_sync.add_argument("--stop-at", type=int, default=None, help="stop at this block height")
 
     p_server = sub.add_parser(
-        "server", parents=[common], help="serve the web explorer + read-only JSON API"
+        "server", parents=[common],
+        help="run the indexer AND serve the web explorer + read-only JSON API",
     )
     p_server.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     p_server.add_argument("--port", type=int, default=8081, help="port (default: 8081)")
+    p_server.add_argument(
+        "--no-index", action="store_true",
+        help="serve only; do not run the indexer (e.g. when `counters index` "
+             "already runs in a separate process)",
+    )
 
     # --- reads ---
     sub.add_parser("status", parents=[common], help="tips/health of all three backends")
@@ -291,7 +297,9 @@ def main(argv: list[str] | None = None) -> int:
         return read.cmd_validate(config, args.txid)
 
     if args.command == "server":
-        return serve.cmd_server(config, args.host, args.port)
+        return serve.cmd_server(
+            config, args.host, args.port, with_index=not args.no_index
+        )
 
     if args.command == "wallet":
         if not getattr(args, "wallet_command", None):

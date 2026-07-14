@@ -76,6 +76,12 @@ class Store:
         self.blobs_dir = config.blobs_dir
         self.db = sqlite3.connect(str(config.db_path))
         self.db.row_factory = sqlite3.Row
+        # WAL lets the server's read connections and the indexer's writer share
+        # the file without blocking each other; busy_timeout waits out the brief
+        # exclusive lock at commit instead of raising "database is locked". Both
+        # matter now that `counters server` can run the indexer in-process.
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=5000")
         self.db.executescript(SCHEMA)
         self._migrate()
         self.db.commit()

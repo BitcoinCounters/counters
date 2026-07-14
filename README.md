@@ -136,7 +136,8 @@ counters info 0 --save cat.png                      # write the file to disk
 counters validate <txid>                           # is this tx a counter, and why / why not
 
 # --- web explorer + read-only JSON API ---
-counters server                                    # http://127.0.0.1:8081
+counters server                                    # indexer + explorer on http://127.0.0.1:8081
+counters server --no-index                         # serve only (index runs elsewhere)
 counters server --host 0.0.0.0 --port 8081         # bind publicly / pick a port
 
 # --- wallet (taproot BIP86, bc1p; keys held by Bitcoin Core) ---
