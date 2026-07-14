@@ -10,7 +10,7 @@ import argparse
 import logging
 import sys
 
-from .commands import inscribe, read, send, serve, wallet
+from .commands import inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import COUNTERS_GENESIS_HEIGHT, TAPROOT_ACTIVATION_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -240,13 +240,44 @@ def main(argv: list[str] | None = None) -> int:
                         help="build + sign both txs but do not broadcast; print raw hex")
 
     p_send = wsub.add_parser(
-        "send", parents=[common, wname], help="transfer a counter (asset) to an address"
+        "send", parents=[common, wname],
+        help="transfer a counter (asset) to an address",
+        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
     )
+    p_send.add_argument("destination", metavar="address", help="recipient Bitcoin address")
     p_send.add_argument("asset", help="asset name or longname of the counter")
     p_send.add_argument("amount", help="quantity to send (e.g. 1, or 0.5 for a divisible asset)")
-    p_send.add_argument("destination", help="recipient Bitcoin address")
+    p_send.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_send.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_lock_supply = wsub.add_parser(
+        "lock-supply", parents=[common, wname], aliases=["lock"],
+        help="freeze an asset's supply (no future issuance can change it)",
+    )
+    p_lock_supply.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    p_lock_supply.add_argument("--dry-run", action="store_true",
+                               help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_lock_desc = wsub.add_parser(
+        "lock-description", parents=[common, wname],
+        help="freeze an asset's description (the image/metadata reference)",
+    )
+    p_lock_desc.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    p_lock_desc.add_argument("--dry-run", action="store_true",
+                             help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_issue = wsub.add_parser(
+        "issue", parents=[common, wname],
+        help="issue additional supply of an existing asset you own",
+    )
+    p_issue.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    p_issue.add_argument("amount", help="additional quantity to issue (e.g. 100, or 0.5 if divisible)")
+    p_issue.add_argument("--lock", action="store_true",
+                         help="also lock the supply in the same transaction")
+    p_issue.add_argument("--dry-run", action="store_true",
+                         help="compose + sign + validate but do not broadcast; print raw hex")
 
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
@@ -318,8 +349,21 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
-                    config, args.name, args.asset, args.amount, args.destination,
-                    dry_run=args.dry_run,
+                    config, args.name, args.destination, args.asset, args.amount,
+                    fee_rate=args.fee_rate, dry_run=args.dry_run,
+                )
+            if args.wallet_command in ("lock-supply", "lock"):
+                return issue.cmd_lock_supply(
+                    config, args.name, args.asset, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "lock-description":
+                return issue.cmd_lock_description(
+                    config, args.name, args.asset, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "issue":
+                return issue.cmd_issue(
+                    config, args.name, args.asset, args.amount,
+                    lock=args.lock, dry_run=args.dry_run,
                 )
             if args.wallet_command == "restore":
                 return wallet.cmd_wallet_restore(

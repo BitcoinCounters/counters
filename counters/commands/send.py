@@ -1,5 +1,8 @@
 """`counters wallet send` — transfer a counter (its Counterparty asset).
 
+Argument order mirrors `ord wallet send`: DESTINATION first, then ASSET, then
+AMOUNT (`send <ADDRESS> <ASSET> <AMOUNT>`).
+
 A counter is owned by whoever holds its Counterparty asset balance, so
 transferring ownership is a plain Counterparty *send*: compose the OP_RETURN
 via Core, have the wallet (which holds the keys) sign it, validate against the
@@ -65,24 +68,48 @@ def _find_source(btc, cp, wallet: str, asset: str, need_raw: int):
     return best
 
 
+_ORDER_HINT = "note: the argument order is  send <ADDRESS> <ASSET> <AMOUNT>"
+
+
+def _is_valid_address(btc, value: str) -> bool:
+    """True if bitcoind considers `value` a valid Bitcoin address. Used to fail
+    fast on a bad destination and to detect a swapped ADDRESS/ASSET/AMOUNT arg."""
+    try:
+        return bool(btc._call("validateaddress", [value]).get("isvalid"))
+    except (BitcoindError, KeyError, TypeError):
+        return False
+
+
 def cmd_send(
     config: Config,
     wallet: str,
+    destination: str,
     asset: str,
     amount: str,
-    destination: str,
+    fee_rate: float | None = None,
     dry_run: bool = False,
 ) -> int:
+    btc = BitcoindClient(config)
+    cp = CounterpartyClient(config)
+
+    # Order is ADDRESS ASSET AMOUNT: validate the destination first, so a
+    # swapped argument (e.g. an asset name where the address belongs) fails
+    # fast with a clear message + order hint instead of a confusing downstream
+    # "unknown asset" / "invalid amount".
+    if not _is_valid_address(btc, destination):
+        print(f"destination {destination!r} is not a valid Bitcoin address", file=sys.stderr)
+        print(_ORDER_HINT, file=sys.stderr)
+        return 1
+
     if asset in RESERVED_ASSETS:
         print(f"{asset} is a reserved asset, not a counter", file=sys.stderr)
         return 1
 
-    btc = BitcoindClient(config)
-    cp = CounterpartyClient(config)
-
-    info = cp.get_asset(asset)
+    info = cp.get_asset(asset) or cp.get_asset(asset.upper())
     if not info:
         print(f"unknown asset {asset!r} (Counterparty has no record)", file=sys.stderr)
+        if _is_valid_address(btc, asset):
+            print(_ORDER_HINT, file=sys.stderr)
         return 1
     asset = info.get("asset") or asset          # canonical name Core expects
     divisible = bool(info.get("divisible"))
@@ -91,6 +118,8 @@ def cmd_send(
         need = _to_raw_quantity(amount, divisible)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
+        if _is_valid_address(btc, amount):
+            print(_ORDER_HINT, file=sys.stderr)
         return 1
 
     source, have = _find_source(btc, cp, wallet, asset, need)
@@ -107,7 +136,7 @@ def cmd_send(
         return 1
 
     try:
-        composed = cp.compose_send(source, asset, need, destination)
+        composed = cp.compose_send(source, asset, need, destination, sat_per_vbyte=fee_rate)
     except CounterpartyError as e:
         msg = str(e)
         print(f"compose failed: {msg}", file=sys.stderr)
@@ -138,6 +167,8 @@ def cmd_send(
     print(f"send {_fmt_raw(need, divisible)} {asset}")
     print(f"  from      : {source}")
     print(f"  to        : {destination}")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
     if checks:
         c = checks[0]
         verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"

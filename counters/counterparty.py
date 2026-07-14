@@ -180,30 +180,38 @@ class CounterpartyClient:
         asset: str,
         quantity: int,
         divisible: bool,
-        inputs_set: str,
-        description: str = "",
+        inputs_set: str | None = None,
+        description: str | None = None,
         transfer_destination: str | None = None,
         lock: bool = False,
     ) -> dict:
         """Compose an OP_RETURN issuance and return Core's result dict (includes
-        `rawtransaction`). `inputs_set` pins the first UTXO so the RC4 key
-        (= first input's txid) matches the reveal's vin[0]; the issuance message
-        is keyed on it (composer.py: arc4_key = unspent_list[0]["txid"]).
+        `rawtransaction`).
 
-        `lock=True` locks the asset's supply (no future issuance can change it).
+        `inputs_set`, when given, pins the first UTXO so the RC4 key (= first
+        input's txid) matches the reveal's vin[0]; the issuance message is keyed
+        on it (composer.py: arc4_key = unspent_list[0]["txid"]). This is needed
+        for the inscribe reveal but not for a standalone issuance (lock/reissue),
+        where Counterparty funds normally from `source`.
+
+        `description`, when given, is set on the asset. Omit it (None) to keep
+        the asset's current description on a reissue/lock — passing "" would
+        WIPE it. `lock=True` locks the supply (no future issuance can change it).
         """
         params: dict[str, Any] = {
             "asset": asset,
             "quantity": quantity,
             "divisible": "true" if divisible else "false",
             "lock": "true" if lock else "false",
-            "description": description,
             "encoding": "opreturn",
-            "inputs_set": inputs_set,
             "disable_utxo_locks": "true",
             "allow_unconfirmed_inputs": "true",
             "verbose": "true",
         }
+        if inputs_set is not None:
+            params["inputs_set"] = inputs_set
+        if description is not None:
+            params["description"] = description
         if transfer_destination:
             params["transfer_destination"] = transfer_destination
         data = self._get(f"/v2/addresses/{source}/compose/issuance", params=params)
@@ -212,11 +220,15 @@ class CounterpartyClient:
         return data["result"]
 
     def compose_send(
-        self, source: str, asset: str, quantity: int, destination: str
+        self, source: str, asset: str, quantity: int, destination: str,
+        sat_per_vbyte: float | int | None = None,
     ) -> dict:
         """Compose a Counterparty asset *send* (OP_RETURN) from `source` to
         `destination`. `quantity` is in raw units (sats for divisible assets).
         Returns Core's result dict including `rawtransaction` (unsigned).
+
+        `sat_per_vbyte`, when given, sets the BTC fee rate; otherwise Counterparty
+        estimates one from its confirmation target.
         """
         params: dict[str, Any] = {
             "asset": asset,
@@ -226,6 +238,11 @@ class CounterpartyClient:
             "allow_unconfirmed_inputs": "true",
             "verbose": "true",
         }
+        if sat_per_vbyte is not None:
+            # Send whole rates as ints so the API doesn't see "1.0" for `1`.
+            if isinstance(sat_per_vbyte, float) and sat_per_vbyte.is_integer():
+                sat_per_vbyte = int(sat_per_vbyte)
+            params["sat_per_vbyte"] = sat_per_vbyte
         data = self._get(f"/v2/addresses/{source}/compose/send", params=params)
         if not data or "result" not in data:
             raise CounterpartyError(f"compose send failed: {data}")
