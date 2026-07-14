@@ -330,11 +330,13 @@
     </aside>
     <div class="doc"><article>
       <h2 id="what">What a counter is</h2>
-      <p>A <strong>Bitcoin counter</strong> is a numbered inscription: a file committed permanently to Bitcoin, stored in witness data, and bound to a Counterparty asset. The inscription number is assigned one by one in order of inscription; the file is its content; the Counterparty asset name is the handle by which it is identified, owned, and traded.</p>
-      <p>The Counterparty asset does the heavy lifting — identity, ownership, naming, and transfer are all Counterparty's job — so the counters protocol stays small: the COUNT envelope rules, plus indexer.</p>
+      <p>A <strong>Bitcoin counter</strong> is a numbered inscription: a file committed permanently to the Bitcoin blockchain, stored in witness data, linked to a Counterparty asset, and assigned an inscription number in order of minting.</p>
+      <p>The Counterparty asset does the heavy lifting — identity, ownership, naming, and transfer are all Counterparty's job — so the counters protocol stays small: the COUNT envelope rules for valid inscriptions, assigning inscription numbers, and linking inscriptions to Counterparty assets.</p>
+      <p>A Bitcoin counter is made by including a valid COUNT envelope in a transaction, with the inscription data and Counterparty asset name inside. The Counters Indexer parses the entire Bitcoin blockchain, finds all valid inscriptions, and assigns inscription numbers. The Counters Server produces a boilerplate Counters explorer and documentation page. You're looking at it now.</p>
 
       <h2 id="envelope">The COUNT envelope</h2>
-      <p>The file is serialized as data pushes inside a taproot script-path witness, wrapped in a skipped no-op. It is byte-for-byte ord's envelope with a different marker — so existing parsers are reusable.</p>
+      <p>The COUNT envelope is a standard structure that must be included in a transaction and followed exactly in order to mint a Bitcoin counter.</p>
+      <p>It goes as follows:</p>
       <pre>OP_FALSE OP_IF
   OP_PUSH <span class="k">"COUNT"</span>          <span class="c"># marker</span>
   OP_PUSH 0x01           <span class="c"># tag 1 = content type</span>
@@ -343,6 +345,7 @@
   OP_PUSH &lt;file bytes&gt;    <span class="c"># ≤520 bytes per push</span>
 OP_ENDIF
 &lt;pubkey&gt; OP_CHECKSIG</pre>
+      <p>The file is serialized as data pushes inside a taproot script-path witness, wrapped in a skipped no-op. It is byte-for-byte ord's envelope with a different marker — so existing parsers are reusable.</p>
       <p>Three things travel in the envelope: the <code>COUNT</code> marker, the MIME type, and the file. Nothing else — no pointer, parent, or metadata fields, because the asset already carries them.</p>
 
       <h2 id="own">Ownership</h2>
