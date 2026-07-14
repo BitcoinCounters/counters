@@ -25,22 +25,44 @@ class BitcoindClient:
     def __init__(self, config: Config):
         self.url = config.btc_rpc_url
         self.timeout = config.http_timeout
-        self._auth = self._resolve_auth(config)
+        self._cookie_file = Path(config.btc_cookie_file)
+        self._static_auth: tuple[str, str] | None = (
+            (config.btc_rpc_user, config.btc_rpc_password)
+            if config.btc_rpc_user
+            else None
+        )
+        # Cookie auth is re-read on demand (see _resolve_auth): bitcoind writes
+        # a fresh random password to its .cookie on every restart, so caching
+        # it once would 401 forever after a node restart.
+        self._cookie_auth: tuple[str, str] | None = None
+        self._cookie_mtime: float | None = None
         self._session = requests.Session()
         self._id = 0
+        # Fail fast if there is no way to authenticate at all.
+        if self._resolve_auth() is None:
+            raise BitcoindError(
+                f"No bitcoind auth available: cookie file {self._cookie_file} not found "
+                "and BTC_RPC_USER not set."
+            )
 
-    @staticmethod
-    def _resolve_auth(config: Config) -> tuple[str, str]:
-        cookie = Path(config.btc_cookie_file)
-        if cookie.exists():
-            user, _, password = cookie.read_text().strip().partition(":")
-            return (user, password)
-        if config.btc_rpc_user:
-            return (config.btc_rpc_user, config.btc_rpc_password)
-        raise BitcoindError(
-            f"No bitcoind auth available: cookie file {config.btc_cookie_file} not found "
-            "and BTC_RPC_USER not set."
-        )
+    def _resolve_auth(self) -> tuple[str, str] | None:
+        """Current RPC credentials, re-reading the cookie file when it changes.
+
+        bitcoind rewrites its .cookie with a new password on each restart; a
+        client that cached the old value would get 401s forever after the node
+        restarts. Keying off the file's mtime lets us pick up the new cookie
+        automatically (and cheaply — one stat() per call) so the indexer
+        reconnects on its own once bitcoind comes back."""
+        try:
+            mtime = self._cookie_file.stat().st_mtime
+        except OSError:
+            # No cookie file: fall back to configured user/password, if any.
+            return self._static_auth
+        if self._cookie_auth is None or mtime != self._cookie_mtime:
+            user, _, password = self._cookie_file.read_text().strip().partition(":")
+            self._cookie_auth = (user, password)
+            self._cookie_mtime = mtime
+        return self._cookie_auth
 
     def _call(
         self,
@@ -57,7 +79,9 @@ class BitcoindClient:
         # (needed for blocking calls like a full-history importdescriptors rescan).
         effective = self.timeout if timeout == -1.0 else timeout
         try:
-            resp = self._session.post(url, json=payload, auth=self._auth, timeout=effective)
+            resp = self._session.post(
+                url, json=payload, auth=self._resolve_auth(), timeout=effective
+            )
         except requests.ConnectionError as e:
             raise BitcoindError(
                 f"could not reach Bitcoin Core at {self.url} — is bitcoind running "
