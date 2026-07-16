@@ -1,4 +1,4 @@
-"""`counters2 wallet inscribe` — mint a counter from a file (build ref v3 §11).
+"""`counters wallet inscribe` — mint a counter from a file (build ref v3 §11).
 
 Counterparty Core does the heavy lifting: composing the issuance with
 `encoding=taproot` returns the commit/reveal pair — `rawtransaction` is the

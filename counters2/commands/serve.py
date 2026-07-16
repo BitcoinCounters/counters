@@ -1,4 +1,4 @@
-"""`counters2 server` — serve the explorer SPA + read-only JSON API, and (by
+"""`counters server` — serve the explorer SPA + read-only JSON API, and (by
 default) run the indexer alongside it so the explorer stays live.
 
 Thin wrapper: argument parsing/dispatch lives in counters.__main__; the actual

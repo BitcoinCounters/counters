@@ -1,4 +1,4 @@
-"""Configuration for the counters2 indexer (Bitcoin Counters, protocol v3).
+"""Configuration for the counters indexer (Bitcoin Counters, protocol v3).
 
 All values are overridable via environment variables so the same code runs
 against a local node now and a different backend later.
@@ -89,7 +89,7 @@ class Config:
     def __post_init__(self) -> None:
         # N3: nothing can qualify before genesis, so the floor travels with the
         # object — every constructor (CLI, tests, programmatic embedding) gets
-        # the clamp, not just the counters2 entry point. A start height ABOVE
+        # the clamp, not just the counters entry point. A start height ABOVE
         # genesis is legal (resuming operators) but consensus-affecting on a
         # fresh DB; the indexer warns loudly in that case (see sync_to_tip).
         self.start_height = max(self.start_height, GENESIS_HEIGHT)

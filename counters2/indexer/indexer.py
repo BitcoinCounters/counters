@@ -37,7 +37,7 @@ log = logging.getLogger("counters")
 def is_qualifying_issuance(row: dict) -> bool:
     """R1+R2 for an issuance row: valid per Counterparty, and not a fairmint
     (mints carry no content; the collection's counter lands on the deploy).
-    Shared by the indexer and `counters2 validate` so the CLI verdict is
+    Shared by the indexer and `counters validate` so the CLI verdict is
     definitionally the indexer's verdict."""
     return row.get("status") == "valid" and not row.get("fair_minting")
 

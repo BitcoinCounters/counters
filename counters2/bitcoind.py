@@ -115,7 +115,7 @@ class BitcoindClient:
                     )
                 raise BitcoindError(
                     f"wallet {wallet!r} does not exist. "
-                    f"Create it with: counters2 wallet create --name {wallet}"
+                    f"Create it with: counters wallet create --name {wallet}"
                 )
             if code == -5 and method == "getrawtransaction":
                 raise BitcoindError(

@@ -1,4 +1,4 @@
-"""`counters2 wallet send` — transfer a counter (its Counterparty asset).
+"""`counters wallet send` — transfer a counter (its Counterparty asset).
 
 Argument order mirrors `ord wallet send`: DESTINATION first, then ASSET, then
 AMOUNT (`send <ADDRESS> <ASSET> <AMOUNT>`).

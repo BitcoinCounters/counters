@@ -2,7 +2,7 @@
 
 **Status:** current protocol. This document is the authoritative, human-readable
 description of the Counters protocol as implemented in this repository (the
-`counters2` CLI). It supersedes `build-reference-v2.md`; see
+`counters` CLI; python package `counters2`). It supersedes `build-reference-v2.md`; see
 [§12](#12-changes-from-v2) for the delta.
 
 A **counter** is a numbered file event: a file committed permanently to Bitcoin
@@ -292,7 +292,7 @@ recorded.
 Minting requires no protocol-specific construction: compose a Counterparty
 issuance (or fairminter) with `encoding=taproot` and a `mime_type`, passing
 binary content as hex — Counterparty Core builds the commit/reveal pair and
-signs the reveal's script-path input itself. The `counters2 wallet inscribe`
+signs the reveal's script-path input itself. The `counters wallet inscribe`
 command wraps this: it composes via Core, has Bitcoin Core sign/fund the
 commit, package-validates both transactions with `testmempoolaccept`, and
 broadcasts. Constraints inherited from Counterparty: taproot encoding is
@@ -314,7 +314,7 @@ detach.
 | **Ordering** | (block, position-in-block). | (block, Counterparty `tx_index`, `msg_index`). |
 | **Reorgs** | Out of scope. | Log-structured rollback (N4). |
 | **Cross-indexer verification** | — | Rolling consensus hash chain ([§7](#7-consensus-hash-chain)). |
-| **CLI** | `counters` | `counters2` |
+| **CLI** | `counters-proto` (originally `counters`) | `counters` (originally `counters2`; python package stays `counters2`) |
 
 Counters minted under v2 (COUNT envelopes with `encoding=opreturn` issuances
 and no description) do **not** qualify under v3 and are not renumbered — v3

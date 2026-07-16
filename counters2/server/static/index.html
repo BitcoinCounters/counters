@@ -371,23 +371,23 @@ BTC_RPC_URL=http://127.0.0.1:8332
 CP_API_URL=http://127.0.0.1:4000
 
 <span class="c"># confirm bitcoind + Counterparty + index heights line up</span>
-counters2 status
+counters status
 
 <span class="c"># then index, and serve the explorer</span>
-counters2 index
-counters2 server</pre>
+counters index
+counters server</pre>
       <div class="callout"><b>Both nodes must be fully synced.</b> The indexer never advances past Counterparty's height, so a lagging Core simply slows indexing rather than producing wrong results.</div>
 
       <h2 id="mint">Minting</h2>
       <p>A mint is a Counterparty issuance composed with <code>encoding=taproot</code>: Counterparty Core builds the commit/reveal pair, the reveal carrying the file (the asset's description) in its witness envelope and an <code>OP_RETURN</code> holding only the literal <code>CNTRPRTY</code> marker. The wallet just signs the commit and broadcasts both.</p>
       <pre><span class="c"># create a wallet (prints a seed phrase once)</span>
-counters2 wallet create --name me
+counters wallet create --name me
 
 <span class="c"># inscribe a file as a free numeric asset…</span>
-counters2 wallet --name me inscribe --file cat.png
+counters wallet --name me inscribe --file cat.png
 
 <span class="c"># …or as a named asset (costs 0.5 XCP)</span>
-counters2 wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
+counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
 
       <h2 id="valid">Validity</h2>
       <p>A Counterparty message records a counter when all hold:</p>
@@ -401,7 +401,7 @@ counters2 wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
       <h2 id="reinscribe">New content on an existing asset</h2>
       <p>Numbering is <strong>per event</strong>, not per asset: an unlocked asset accumulates a new counter for every qualifying issuance it produces. To attach new content to an asset you own, issue a <strong>reissuance with a fresh taproot-carried description</strong> — it earns its own permanent number, and the asset's page lists all of its counters (the lowest-numbered is the <em>original</em>). Locks, ownership transfers, and destroys never renumber anything.</p>
       <pre><span class="c"># attach new content to an asset you own (a reissuance; supply unchanged)</span>
-counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
+counters wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
 
       <h2 id="api">Server API</h2>
       <p>This explorer reads these endpoints from <code>counters server</code>:</p>
@@ -414,7 +414,7 @@ counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
         <li data-n="›"><code>GET /preview/&lt;number&gt;</code> — the sandboxed render used by this explorer's cards</li>
         <li data-n="›"><code>GET /stamp/&lt;number&gt;</code> — the decoded image of a <code>STAMP:</code> counter</li>
       </ul>
-      <p>Served over HTTP by <code>counters2 server</code>, this explorer talks to its own origin; opened straight from disk it falls back to a bundled sample.</p>
+      <p>Served over HTTP by <code>counters server</code>, this explorer talks to its own origin; opened straight from disk it falls back to a bundled sample.</p>
 
       <h2 id="source">Source</h2>
       <p>Counters is open source — the indexer, CLI, and this explorer all live in one repository: <a href="https://github.com/antron3000/counters" target="_blank" rel="noopener" class="out">github.com/antron3000/counters ↗</a>.</p>

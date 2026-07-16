@@ -2,7 +2,7 @@
   <img src="counters2/server/static/counters-logo-512.png" alt="Bitcoin Counters" width="160">
 </p>
 
-# Bitcoin Counters v3 — Indexer & Wallet (`counters2`)
+# Bitcoin Counters v3 — Indexer & Wallet (`counters`)
 
 **Bitcoin Counters** are numbered file events: files committed permanently to
 Bitcoin as **Counterparty asset descriptions carried in v11 taproot
@@ -56,7 +56,7 @@ advances past Counterparty's parsed height.
 - A synced **Counterparty Core** v11+ API
 
 ```bash
-pip install -e .          # installs deps + the `counters2` console command
+pip install -e .          # installs deps + the `counters` console command
 ```
 
 ## Run with Docker
@@ -101,59 +101,59 @@ Core running on the host.
 
 ## Usage
 
-Invoke as `counters2 <command>` after `pip install -e .`, or equivalently
+Invoke as `counters <command>` after `pip install -e .`, or equivalently
 `python -m counters2 <command>`.
 
 ```bash
 # --- indexing ---
-counters2 index -v                                 # sync from genesis, then follow the tip
-counters2 sync --stop-at 920000                    # one-shot catch-up (bounded for tests)
+counters index -v                                 # sync from genesis, then follow the tip
+counters sync --stop-at 920000                    # one-shot catch-up (bounded for tests)
 
 # --- reads (need only a synced index) ---
-counters2 status                                   # bitcoind / Counterparty / index heights + rolling hash
-counters2 list                                     # 20 most recent
-counters2 list --recent 50
-counters2 list --source bc1q...                    # by mint-time source address
-counters2 list --block 902000-902100               # by block range
-counters2 info 0                                   # metadata by number
-counters2 info XDUALS                              # ...or by asset name / longname
-counters2 info 0 --json                            # metadata as JSON
-counters2 info 0 --raw > file.txt                  # stream the file bytes
-counters2 info 0 --save file.gif                   # write the file to disk
-counters2 validate <txid>                          # does this tx record a counter, and why / why not
+counters status                                   # bitcoind / Counterparty / index heights + rolling hash
+counters list                                     # 20 most recent
+counters list --recent 50
+counters list --source bc1q...                    # by mint-time source address
+counters list --block 902000-902100               # by block range
+counters info 0                                   # metadata by number
+counters info XDUALS                              # ...or by asset name / longname
+counters info 0 --json                            # metadata as JSON
+counters info 0 --raw > file.txt                  # stream the file bytes
+counters info 0 --save file.gif                   # write the file to disk
+counters validate <txid>                          # does this tx record a counter, and why / why not
 
 # --- web explorer + read-only JSON API ---
-counters2 server                                   # indexer + explorer on http://127.0.0.1:8081
-counters2 server --no-index                        # serve only (index runs elsewhere)
-counters2 server --host 0.0.0.0 --port 8081        # bind publicly / pick a port
+counters server                                   # indexer + explorer on http://127.0.0.1:8081
+counters server --no-index                        # serve only (index runs elsewhere)
+counters server --host 0.0.0.0 --port 8081        # bind publicly / pick a port
 
 # --- wallet (taproot BIP86, bc1p; keys held by Bitcoin Core) ---
-counters2 wallet --name mywallet create            # new wallet; prints a 12-word seed ONCE
-counters2 wallet --name mywallet restore           # re-import from a BIP39 seed (read on stdin) + rescan
+counters wallet --name mywallet create            # new wallet; prints a 12-word seed ONCE
+counters wallet --name mywallet restore           # re-import from a BIP39 seed (read on stdin) + rescan
 
 # recover an OLD Counterparty wallet (Counterwallet / Freewallet — pre-BIP39 Electrum v1, legacy 1... addresses).
 # The seed type is auto-detected; --counterwallet only forces it for a phrase valid as BOTH schemes. See wallets.md.
-counters2 wallet --name old restore --dry-run                  # preview the derived 1... addresses; imports nothing
-counters2 wallet --name old restore                            # import the legacy keys into Core + rescan
-counters2 wallet --name mywallet receive           # next taproot (bc1p) address
-counters2 wallet --name mywallet balance           # BTC + aggregated Counterparty balances
-counters2 wallet --name mywallet inscriptions      # counters held by the wallet
-counters2 wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
-counters2 wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign, no broadcast
+counters wallet --name old restore --dry-run                  # preview the derived 1... addresses; imports nothing
+counters wallet --name old restore                            # import the legacy keys into Core + rescan
+counters wallet --name mywallet receive           # next taproot (bc1p) address
+counters wallet --name mywallet balance           # BTC + aggregated Counterparty balances
+counters wallet --name mywallet inscriptions      # counters held by the wallet
+counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
+counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign, no broadcast
 
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.
-counters2 wallet --name mywallet inscribe --file cat.png --dry-run
-counters2 wallet --name mywallet inscribe --file cat.png                     # free numeric asset
-counters2 wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
-counters2 wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reissue with new content (a new counter)
-counters2 wallet --name mywallet inscribe --file cat.png --fee-rate 8
+counters wallet --name mywallet inscribe --file cat.png --dry-run
+counters wallet --name mywallet inscribe --file cat.png                     # free numeric asset
+counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
+counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reissue with new content (a new counter)
+counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
 
 # --- asset management (owner-sourced Counterparty issuances) ---
-counters2 wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
-counters2 wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
-counters2 wallet --name mywallet issue MYCOUNTER 100           # mint more supply (no new counter — no new content)
+counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
+counters wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
+counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply (no new counter — no new content)
 ```
 
 > The 12-word seed is the only backup and is shown once at create time. The

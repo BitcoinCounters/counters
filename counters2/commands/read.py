@@ -66,7 +66,7 @@ def cmd_status(config: Config) -> int:
         if btc_h is not None and index_h is not None and btc_h - index_h > 0:
             warnings.append(
                 f"index is {btc_h - index_h:,} block(s) behind bitcoind — run "
-                f"`counters2 index` (follow tip) or `counters2 sync` (once) to catch up."
+                f"`counters index` (follow tip) or `counters sync` (once) to catch up."
             )
         if btc_h is not None and isinstance(cp_h, int) and btc_h - cp_h > 0:
             warnings.append(

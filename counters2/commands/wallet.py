@@ -1,4 +1,4 @@
-"""`counters2 wallet` commands: create / restore / receive / balance / inscriptions.
+"""`counters wallet` commands: create / restore / receive / balance / inscriptions.
 
 Taproot-only (BIP86, bc1p). We generate the BIP39 mnemonic and derive the
 account key locally (see bip32.py), then import the tr() descriptors into a
@@ -286,7 +286,7 @@ def _bip39_problem(mnemo: Mnemonic, phrase: str) -> str | None:
             f"in the BIP39 word list (e.g. {eg}).\n"
             "Old Counterparty wallets (Counterwallet / Freewallet) use the pre-BIP39 "
             "Electrum-v1 scheme with legacy 1... addresses. Restore those with:\n"
-            "  counters2 wallet --name <name> restore --counterwallet"
+            "  counters wallet --name <name> restore --counterwallet"
         )
     if n not in (12, 15, 18, 21, 24):
         return (f"got {n} words; a BIP39 seed is 12, 15, 18, 21, or 24 words. "
@@ -342,11 +342,11 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
         print(f"could not restore wallet: {e}", file=sys.stderr)
         return 1
     if no_rescan:
-        print(f"restored wallet {name!r} (no rescan). Run `counters2 wallet --name "
+        print(f"restored wallet {name!r} (no rescan). Run `counters wallet --name "
               f"{name} rescan` for a BTC/UTXO view; `... balance --no-rescan` shows "
               "Counterparty assets now.")
     else:
-        print(f"restored wallet {name!r}; rescan complete. Check `counters2 wallet "
+        print(f"restored wallet {name!r}; rescan complete. Check `counters wallet "
               f"--name {name} balance`.")
     return 0
 
@@ -419,11 +419,11 @@ def _restore_counterwallet(config: Config, name: str, phrase: str, addresses: in
           + (" (no rescan)." if no_rescan else "; rescan complete."))
     print(f"  first Counterwallet address: {cw[0]['address']}")
     if no_rescan:
-        print("these are legacy 1... addresses. `counters2 wallet --name "
+        print("these are legacy 1... addresses. `counters wallet --name "
               f"{name} balance --no-rescan` shows Counterparty assets now; run "
               f"`... rescan` when you want a BTC balance or to move funds.")
     else:
-        print("these are legacy 1... addresses. Run `counters2 wallet --name "
+        print("these are legacy 1... addresses. Run `counters wallet --name "
               f"{name} balance` for BTC + Counterparty balances, and `... send` to move "
               "assets (e.g. to a new taproot wallet created here).")
     return 0
@@ -469,10 +469,10 @@ def _restore_electrum2(config: Config, name: str, phrase: str, addresses: int,
           + (" (no rescan)." if no_rescan else "; rescan complete."))
     print(f"  first address: {keys[0]['address']}")
     if no_rescan:
-        print(f"`counters2 wallet --name {name} balance --no-rescan` shows Counterparty "
+        print(f"`counters wallet --name {name} balance --no-rescan` shows Counterparty "
               f"assets now; run `... rescan` for a BTC balance or to move funds.")
     else:
-        print(f"run `counters2 wallet --name {name} balance` for BTC + Counterparty "
+        print(f"run `counters wallet --name {name} balance` for BTC + Counterparty "
               "balances.")
     return 0
 
@@ -503,7 +503,7 @@ def cmd_wallet_rescan(config: Config, name: str, *, start_height: int | None = N
               file=sys.stderr)
         _monitor_rescan(config, name)
         print("rescan complete.")
-        print(f"Check `counters2 wallet --name {name} balance`.")
+        print(f"Check `counters wallet --name {name} balance`.")
         return 0
 
     params: list = []
@@ -531,7 +531,7 @@ def cmd_wallet_rescan(config: Config, name: str, *, start_height: int | None = N
                   file=sys.stderr)
             _monitor_rescan(config, name)
             print("rescan complete.")
-            print(f"Check `counters2 wallet --name {name} balance`.")
+            print(f"Check `counters wallet --name {name} balance`.")
             return 0
         print(f"rescan failed: {e}", file=sys.stderr)
         return 1
@@ -540,7 +540,7 @@ def cmd_wallet_rescan(config: Config, name: str, *, start_height: int | None = N
         print(f"rescan complete (scanned heights {lo}–{hi}).")
     else:
         print("rescan complete.")
-    print(f"Check `counters2 wallet --name {name} balance`.")
+    print(f"Check `counters wallet --name {name} balance`.")
     return 0
 
 

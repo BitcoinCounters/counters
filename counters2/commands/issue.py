@@ -1,4 +1,4 @@
-"""`counters2 wallet lock` and `counters2 wallet issue` — Counterparty asset ops.
+"""`counters wallet lock` and `counters wallet issue` — Counterparty asset ops.
 
 Both are plain Counterparty *issuance* messages: Counterparty Core composes the
 OP_RETURN, the Bitcoin Core wallet (which holds the keys) signs it, we validate

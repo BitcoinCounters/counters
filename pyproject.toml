@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "counters2"
+name = "counters"
 version = "0.1.0"
 description = "Bitcoin Counters v3 — Counterparty taproot-envelope file-event indexer, CLI, and wallet"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-counters2 = "counters2.__main__:main"
+counters = "counters2.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["counters2*"]

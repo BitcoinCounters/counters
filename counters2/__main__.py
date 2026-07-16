@@ -1,6 +1,6 @@
 """CLI entry point.
 
-Invoke as `counters2 <command>` (after `pip install -e .`) or, equivalently,
+Invoke as `counters <command>` (after `pip install -e .`) or, equivalently,
 `python -m counters2 <command>`.
 """
 
@@ -72,12 +72,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser = argparse.ArgumentParser(
-        prog="counters2",
+        prog="counters",
         description="Bitcoin Counters v3 — Counterparty taproot-envelope "
                     "file-event indexer, CLI, and wallet",
         parents=[common],
         formatter_class=_OrdStyleHelp,
-        usage="counters2 [OPTIONS] <COMMAND>",
+        usage="counters [OPTIONS] <COMMAND>",
     )
     parser.set_defaults(verbose=False)
     parser._optionals.title = "Options"
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     p_server.add_argument("--port", type=int, default=8081, help="port (default: 8081)")
     p_server.add_argument(
         "--no-index", action="store_true",
-        help="serve only; do not run the indexer (e.g. when `counters2 index` "
+        help="serve only; do not run the indexer (e.g. when `counters index` "
              "already runs in a separate process)",
     )
 
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     p_val.add_argument("txid")
 
     # --- wallet (taproot BIP86; keys held by Bitcoin Core) ---
-    # --name is a wallet-level option (counters2 wallet --name abc create); it is
+    # --name is a wallet-level option (counters wallet --name abc create); it is
     # also accepted after the subcommand via the SUPPRESS-default parent so it
     # never clobbers the wallet-level value when absent.
     wname = argparse.ArgumentParser(add_help=False)
@@ -146,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         parents=[common],
         help="taproot wallet (keys in Bitcoin Core)",
         formatter_class=_OrdStyleHelp,
-        usage="counters2 wallet [--name NAME] <COMMAND>",
+        usage="counters wallet [--name NAME] <COMMAND>",
     )
     p_wallet.add_argument("--name", default="counter", help="Core wallet name (default: counter)")
     p_wallet._optionals.title = "Options"
@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     p_send = wsub.add_parser(
         "send", parents=[common, wname],
         help="transfer a counter (asset) to an address",
-        usage="counters2 wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
+        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
     )
     p_send.add_argument("destination", metavar="address", help="recipient Bitcoin address")
     p_send.add_argument("asset", help="asset name or longname of the counter")
