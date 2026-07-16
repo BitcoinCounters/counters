@@ -147,3 +147,56 @@ def is_pointer_like(content: bytes, textual: bool) -> bool:
     except UnicodeDecodeError:
         return False
     return bool(_POINTER_RE.match(text)) and len(text.split()) == 1
+
+
+# Stamp-like content (build ref v3 §5.4): a Bitcoin Stamps payload —
+# `STAMP:<base64 image>` in a textual description. Like §5.3 this is display
+# metadata only; it never affects validity, numbering, content bytes, or the
+# rolling hash. Decoding mirrors stamps indexers: case-insensitive prefix,
+# whitespace-tolerant base64 (mints in the wild carry stray spaces), and the
+# decoded bytes must carry a known image magic.
+_STAMP_PREFIX = "stamp:"
+_BASE64_JUNK_RE = re.compile(r"\s+")
+
+# (magic prefix, mime). WebP is RIFF-framed and checked separately.
+_IMAGE_MAGICS = (
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+)
+
+
+def sniff_image(data: bytes) -> str | None:
+    for magic, mime in _IMAGE_MAGICS:
+        if data.startswith(magic):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def stamp_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
+    """Decode a stamp-like payload to `(image bytes, sniffed mime)`, or None.
+
+    None means "display as-is": not textual, no STAMP: prefix, undecodable
+    base64, or decoded bytes that are not a recognized image (e.g. counter #59
+    XCPFTW, whose base64 decodes to a mangled PNG)."""
+    if not textual:
+        return None
+    try:
+        text = content.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if not text[: len(_STAMP_PREFIX)].lower() == _STAMP_PREFIX:
+        return None
+    b64 = _BASE64_JUNK_RE.sub("", text[len(_STAMP_PREFIX):])
+    b64 += "=" * (-len(b64) % 4)
+    try:
+        raw = binascii.a2b_base64(b64.encode("ascii"))
+    except (binascii.Error, ValueError, UnicodeEncodeError):
+        return None
+    mime = sniff_image(raw)
+    if mime is None:
+        return None
+    return raw, mime

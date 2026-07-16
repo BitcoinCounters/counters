@@ -111,13 +111,15 @@ def _doc(number: int, body: str) -> str:
 
 
 def wrapper(kind: str, number: int, content_type: str, extra: str | None,
-            text: str | None = None) -> str:
+            text: str | None = None, src: str | None = None) -> str:
     """Build the same-origin wrapper page for a non-iframe media ``kind``.
 
     The page loads ``/content/<number>`` via a native element. ``text`` is the
     decoded body for text/code/markdown kinds (rendered server-side, escaped).
+    ``src`` overrides the content URL (used for stamp-like counters, whose
+    displayable image is served decoded from ``/stamp/<number>``).
     """
-    src = f"/content/{number}"
+    src = src or f"/content/{number}"
 
     if kind == "image":
         cls = "preview image" + (" pixelated" if extra == "pixelated" else "")

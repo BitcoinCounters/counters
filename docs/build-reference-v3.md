@@ -29,8 +29,10 @@ Counterparty events qualify** and **how they are numbered**.
 - **Data-defined genesis.** Counter `#0` is the first qualifying event at or
   after Counterparty's `taproot_support` activation (block **902,000**). No
   pre-v11 scheme is retro-numbered (Bitcoin Stamps has prior claim on
-  output-side encodings; this protocol is witness-side only and fully disjoint
-  from Stamps).
+  output-side encodings; this protocol is witness-side only, so *classic*
+  stamp numbering and counter numbering never overlap — though a `STAMP:`
+  payload minted through the envelope is also picked up by stamps indexers
+  as a cursed stamp, see §5.4).
 
 ---
 
@@ -157,6 +159,21 @@ Textual content consisting of a single URI-like token (`ipfs:…`, `ar://…`,
 `http(s)://…`) is flagged `is_pointer_like = true` as **display metadata
 only**. It never affects validity or numbering (e.g. counter #77 SURREALPEPE,
 an `ipfs:` pointer, is a full counter).
+
+### 5.4 Stamp-like content (informational)
+
+Textual content of the form `STAMP:<base64>` (case-insensitive prefix,
+whitespace-tolerant base64) whose decoded bytes carry a known image magic
+(GIF, PNG, JPEG, WebP) is a **Bitcoin Stamps payload** minted through the
+taproot envelope. Stamps indexers pick these up too — as *cursed* (negative-
+numbered) stamps, since the data is witness-side rather than in the classic
+output-side encodings (bare multisig, OLGA P2WSH) — so such an event is both
+a cursed stamp and a full counter (e.g. counter #84 STAMPINAL = stamp #-1841).
+
+Like §5.3 this is display metadata only, derived at serve time (`stamp_mime`
+on API records; the decoded image at `/stamp/<n>`). The canonical content
+bytes, sha256, and rolling hash remain those of the *text* per §5.1; a
+payload that fails to decode to a recognized image simply displays as text.
 
 ---
 

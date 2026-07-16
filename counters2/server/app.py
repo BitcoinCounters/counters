@@ -35,6 +35,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import preview
 from ..bitcoind import BitcoindClient
 from ..config import Config
+from ..content import classify_mime_type, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..store import Store
 
@@ -137,8 +138,23 @@ def _live_asset(config: Config, asset: str) -> dict:
         return {}
 
 
+def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
+    """Decoded (image bytes, mime) for a stamp-like counter, else None (build
+    ref v3 §5.4 — display metadata only, derived at serve time)."""
+    ct = row["content_type"] or "text/plain"
+    if classify_mime_type(ct, row["block_index"]) != "text":
+        return None
+    if row["content_length"] > BODY_MAX_BYTES:
+        return None
+    blob = store.read_blob(row["content_sha256"])
+    if blob is None:
+        return None
+    return stamp_image(blob, textual=True)
+
+
 def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
                 with_body: bool = True) -> dict:
+    stamp = _stamp_payload(store, row)
     return {
         "number": row["number"],
         "asset": _display_name(row),
@@ -148,6 +164,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "content_type_raw": row["content_type_raw"],
         "size": row["content_length"],
         "is_pointer_like": bool(row["is_pointer_like"]),
+        "stamp_mime": stamp[1] if stamp else None,
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],
         "txid": row["mint_txid"],
@@ -196,6 +213,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/content/(\d+)", path)
             if m:
                 return self._content(int(m.group(1)))
+            m = re.fullmatch(r"/stamp/(\d+)", path)
+            if m:
+                return self._stamp(int(m.group(1)))
             return self._static(path)
         except BrokenPipeError:
             pass
@@ -332,6 +352,22 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             store.close()
 
+    def _stamp(self, number: int) -> None:
+        """The decoded image of a stamp-like counter (`STAMP:<base64>` body).
+        /content/<n> stays the raw consensus bytes; this is display-only."""
+        store = Store(self.config)
+        try:
+            row = store.get_counter(number)
+            if row is None:
+                return self._send(404, "text/plain; charset=utf-8", b"counter not found")
+            stamp = _stamp_payload(store, row)
+            if stamp is None:
+                return self._send(404, "text/plain; charset=utf-8", b"not stamp-like")
+            raw, mime = stamp
+            self._send(200, mime, raw, immutable=True, extra_headers=CONTENT_HEADERS)
+        finally:
+            store.close()
+
     def _preview(self, number: int) -> None:
         """ord-style preview: raw content for HTML/SVG (rendered as a document
         inside the sandboxed iframe), else a confined same-origin wrapper page
@@ -352,6 +388,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
             text = None
             if kind in ("text", "code", "markdown"):
+                stamp = _stamp_payload(store, row)
+                if stamp is not None:
+                    # Stamp-like: preview the decoded image instead of the
+                    # base64 text (§5.4). Served from /stamp/<n>.
+                    kind, extra = preview.classify(stamp[1])
+                    doc = preview.wrapper(kind, number, stamp[1], extra,
+                                          src=f"/stamp/{number}")
+                    return self._send(
+                        200, "text/html; charset=utf-8", doc.encode("utf-8"),
+                        immutable=True,
+                        extra_headers=[
+                            ("Content-Security-Policy", preview.csp_for(kind)),
+                            ("X-Content-Type-Options", "nosniff"),
+                        ],
+                    )
                 blob = store.read_blob(row["content_sha256"]) or b""
                 text = blob.decode("utf-8", "replace")
             doc = preview.wrapper(kind, number, ctype, extra, text)

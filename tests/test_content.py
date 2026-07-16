@@ -18,6 +18,8 @@ from counters2.content import (  # noqa: E402
     content_bytes,
     is_pointer_like,
     normalize_mime,
+    sniff_image,
+    stamp_image,
 )
 
 PRE = GENESIS_HEIGHT          # 902000: before the extended-MIME gate
@@ -85,6 +87,50 @@ def test_is_pointer_like():
     assert not is_pointer_like(b"ipfs: two tokens", True)
     assert not is_pointer_like(b"\xff\xfe", True)      # not UTF-8
     assert not is_pointer_like(b"https://x", False)    # binary content never flagged
+
+
+# A real 1x1 transparent GIF89a, as minted stamps carry (magic + trailer).
+_GIF = (
+    b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04"
+    b"\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D"
+    b"\x01\x00;"
+)
+
+
+def test_sniff_image():
+    assert sniff_image(_GIF) == "image/gif"
+    assert sniff_image(b"\x89PNG\r\n\x1a\n" + b"\0" * 8) == "image/png"
+    assert sniff_image(b"\xff\xd8\xff\xe0rest") == "image/jpeg"
+    assert sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 ") == "image/webp"
+    assert sniff_image(b"\x89PNF corrupted") is None      # counter #59 XCPFTW
+    assert sniff_image(b"") is None
+
+
+def test_stamp_image():
+    import base64
+
+    b64 = base64.b64encode(_GIF).decode()
+    assert stamp_image(f"STAMP:{b64}".encode(), True) == (_GIF, "image/gif")
+    # prefix is case-insensitive; surrounding whitespace tolerated
+    assert stamp_image(f"stamp:{b64}\n".encode(), True) == (_GIF, "image/gif")
+    # whitespace INSIDE the base64 tolerated (counter #54 MAGICEGG)
+    spaced = b64[:10] + " " + b64[10:]
+    assert stamp_image(f"STAMP:{spaced}".encode(), True) == (_GIF, "image/gif")
+    # missing padding tolerated
+    assert stamp_image(f"STAMP:{b64.rstrip('=')}".encode(), True) == (_GIF, "image/gif")
+
+
+def test_stamp_image_rejects():
+    import base64
+
+    b64 = base64.b64encode(_GIF).decode()
+    assert stamp_image(f"STAMP:{b64}".encode(), False) is None   # binary content
+    assert stamp_image(b64.encode(), True) is None               # no prefix
+    assert stamp_image(b"STAMP:!!!not-base64!!!", True) is None  # undecodable
+    # decodes fine but not a recognized image -> display as text (§5.4)
+    text_b64 = base64.b64encode(b"hello world, not an image").decode()
+    assert stamp_image(f"STAMP:{text_b64}".encode(), True) is None
+    assert stamp_image(b"STAMP:\xff\xfe", True) is None          # not UTF-8
 
 
 if __name__ == "__main__":

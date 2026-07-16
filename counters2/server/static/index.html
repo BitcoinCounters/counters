@@ -535,7 +535,7 @@ const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('e
 
 function card(c){
   return `<div class="card" onclick="go('#/c/${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')go('#/c/${c.number}')">
-    <div class="thumb"><span class="ext">${c.content_type.split('/')[1]||c.content_type}</span>${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':(c.content_type.split('/')[1]||c.content_type)}</span>${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
       <span class="asset">${esc(c.asset)}</span>
@@ -588,12 +588,14 @@ async function renderDetail(id){
       ${c.kind==='fairminter' ? `<span class="vbadge re"><span class="dot"></span>fairminter</span>` : ''}
       ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reissue</span>` : ''}
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
+      ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
+        ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
         ${fact('owner', short(c.owner), true, c.owner)}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
