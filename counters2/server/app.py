@@ -138,6 +138,16 @@ def _live_asset(config: Config, asset: str) -> dict:
         return {}
 
 
+def _block_time(config: Config, height: int) -> int | None:
+    """The counter's creation time = its block's timestamp, per Counterparty
+    (best-effort, like _live_asset; None if Core is unreachable)."""
+    try:
+        blk = CounterpartyClient(config).get_block(height)
+    except CounterpartyError:
+        return None
+    return blk.get("block_time") if blk else None
+
+
 def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
     """Decoded (image bytes, mime) for a stamp-like counter, else None (build
     ref v3 §5.4 — display metadata only, derived at serve time)."""
@@ -291,6 +301,7 @@ class Handler(BaseHTTPRequestHandler):
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
+            rec["block_time"] = _block_time(self.config, row["block_index"])
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:

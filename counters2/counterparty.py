@@ -141,6 +141,14 @@ class CounterpartyClient:
     def is_valid(issuance: dict) -> bool:
         return issuance.get("status") == "valid"
 
+    # --- blocks --------------------------------------------------------------
+
+    def get_block(self, height: int) -> dict | None:
+        """Block metadata (block_hash, block_time, ledger_hash, …) via
+        /v2/blocks/<height>; None for a block Counterparty has not parsed."""
+        data = self._get(f"/v2/blocks/{height}")
+        return data.get("result") if data else None
+
     # --- assets ------------------------------------------------------------
 
     def get_asset(self, asset: str) -> dict | None:

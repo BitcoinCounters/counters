@@ -148,8 +148,11 @@
   .card .num{align-self:flex-start}
   .card .num .d{font-size:13px;width:1.05em;height:1.5em;color:var(--ink)}
   .card .asset{font-family:var(--mono);font-size:13px;color:var(--copper2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .morebtn{display:block;margin:26px auto 0;font-family:var(--mono);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:var(--card);border:1px solid var(--line);padding:11px 22px;border-radius:9px;cursor:pointer;transition:.15s}
-  .morebtn:hover{color:var(--ink);border-color:var(--copper)}
+  .pager{display:flex;justify-content:center;align-items:center;gap:14px;margin:28px 0 64px;font-family:var(--mono);font-size:12.5px}
+  .pager a{color:var(--dim);border:1px solid var(--line);background:var(--card);padding:9px 18px;border-radius:9px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;transition:.15s}
+  .pager a:hover{color:var(--ink);border-color:var(--copper)}
+  .pager a.off{opacity:.35;pointer-events:none}
+  .pager .pinfo{color:var(--faint);letter-spacing:.1em}
 
   /* ---------- content render box ---------- */
   .render{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
@@ -269,6 +272,7 @@
     <nav id="nav">
       <a href="#/" data-r="explore">Explore</a>
       <a href="#/docs" data-r="docs">Docs</a>
+      <a href="https://proto.bitcoincounters.com" target="_blank" rel="noopener" title="Counters Proto — the original COUNT-envelope protocol">Proto ↗</a>
     </nav>
     <form class="search" onsubmit="return doSearch(event)">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -284,6 +288,7 @@
     <div class="sechead"><h2>Counters</h2><div class="rule"></div><div class="meta" id="latest-meta"></div></div>
     <div class="grid" id="grid"></div>
     <div id="emptystate"></div>
+    <div class="pager" id="pager"></div>
   </div>
 </main>
 
@@ -317,7 +322,7 @@
     <aside class="toc">
       <div>Contents</div>
       <a href="#/docs#what">What a counter is</a>
-      <a href="#/docs#envelope">The COUNT envelope</a>
+      <a href="#/docs#envelope">The taproot envelope</a>
       <a href="#/docs#own">Ownership</a>
       <a href="#/docs#number">Numbering</a>
       <a href="#/docs#setup">Setup</a>
@@ -330,32 +335,27 @@
     </aside>
     <div class="doc"><article>
       <h2 id="what">What a counter is</h2>
-      <p>A <strong>Bitcoin counter</strong> is a numbered inscription — a file committed to Bitcoin in witness data and linked to a Counterparty asset. Counters are numbered in order of creation.</p>
-      <p>Any Counterparty asset can carry a counter — named, unnamed, divisible, new, or existing — and one asset can hold many.</p>
-      <p>The asset does the heavy lifting: identity, ownership, naming, and transfer are all Counterparty's job. The protocol stays small — it defines only the COUNT envelope, the validity rules, and the numbering.</p>
-      <p>To mint a counter, include a <strong>valid COUNT envelope</strong> — the inscription data plus the Counterparty asset name — in a transaction. The indexer scans the blockchain, finds every valid inscription, and numbers it; the server renders this explorer and its docs.</p>
+      <p>A <strong>Bitcoin counter</strong> is a numbered file event: a file committed to Bitcoin as a <strong>Counterparty asset description</strong> carried in Counterparty's taproot envelope, numbered in order of creation.</p>
+      <p>Counterparty carries identity, ownership, naming, transfer — and the content itself. A counter's file is exactly what Counterparty consensus stores as the asset's description. The protocol adds nothing on chain; it defines only which Counterparty events qualify and how they are numbered.</p>
+      <p>Any Counterparty asset can carry counters — named, numeric, divisible, new, or existing — and an unlocked asset can hold many (see Reissuance below).</p>
 
-      <h2 id="envelope">The COUNT envelope</h2>
-      <p>The COUNT envelope is a small Bitcoin script — opcodes in the transaction's witness — that carries the inscription as data:</p>
-      <pre>OP_FALSE OP_IF
-  OP_PUSH <span class="k">"COUNT"</span>          <span class="c"># marker</span>
-  OP_PUSH 0x01           <span class="c"># tag 1 = content type</span>
-  OP_PUSH &lt;content_type&gt;  <span class="c"># MIME, e.g. image/png</span>
-  OP_PUSH 0x02           <span class="c"># tag 2 = target asset</span>
-  OP_PUSH &lt;asset&gt;         <span class="c"># e.g. RAREPEPE or A9542…</span>
-  OP_0                   <span class="c"># separator; body begins</span>
-  OP_PUSH &lt;file bytes&gt;    <span class="c"># ≤520 bytes per push</span>
-OP_ENDIF
-&lt;pubkey&gt; OP_CHECKSIG</pre>
-      <p>The <code>OP_FALSE OP_IF … OP_ENDIF</code> block never runs — it is pure data; <code>&lt;pubkey&gt; OP_CHECKSIG</code> is the real spend condition. As a taproot leaf script, it is committed in the commit transaction and revealed in the reveal's witness, where the bytes land on-chain (see Minting). It follows ord's envelope structure, so existing parsers work unchanged.</p>
-      <p>Four things travel in it — the <code>COUNT</code> marker, the MIME type, the <strong>target asset</strong> name, and the file. Naming the asset makes the counter envelope-bound: the indexer trusts the envelope's asset and binds to it (see Validity). No pointer, parent, or metadata; the asset already carries those.</p>
+      <h2 id="envelope">The taproot envelope</h2>
+      <p>The carrier is Counterparty v11's taproot envelope. Every mint is a commit/reveal pair; the counter is keyed to the <strong>reveal</strong>, which has exactly this shape:</p>
+      <pre>reveal transaction
+├─ input 0 witness: 3 items         <span class="c"># taproot script-path spend</span>
+│    [ signature,
+│      tapscript,                   <span class="c"># OP_FALSE OP_IF … OP_ENDIF envelope</span>
+│      control block ]              <span class="c">#   carrying the description bytes</span>
+└─ output: OP_RETURN <span class="k">"CNTRPRTY"</span>     <span class="c"># literal, unencrypted marker</span></pre>
+      <p>The file travels as data pushes inside the tapscript's never-executed <code>OP_FALSE OP_IF … OP_ENDIF</code> block. Two envelope styles exist — Counterparty's size-optimised generic envelope and the ordinals-compatible <code>inscription=true</code> style — and both count equally.</p>
+      <p>The indexer never parses envelope contents. It checks only the carrier — the literal <code>CNTRPRTY</code> <code>OP_RETURN</code> plus the three-item input-0 witness — and reads the content from Counterparty's parsed state. Counterparty is the oracle; the indexer is a numbering lens over it.</p>
 
       <h2 id="own">Ownership</h2>
       <p>Whoever holds the Counterparty asset balance owns the counter. Transfer is an ordinary Counterparty send of that asset; the witness file never moves — it stays as permanent provenance pinned to the mint transaction.</p>
 
       <h2 id="number">Numbering</h2>
-      <p>Counters are numbered globally, gap-free, starting at <strong>0</strong>, ordered by block height then position within the block — the same scheme Ordinals uses. Only <em>valid</em> counters get a number.</p>
-      <div class="callout"><b>Genesis is data-defined.</b> There is no activation height. Counter #0 is simply the first valid counter the indexer finds on-chain.</div>
+      <p>Counters are numbered globally, gap-free, starting at <strong>0</strong>, ordered by <code>(block, tx_index, msg_index)</code> — block height, then Counterparty's global transaction index, then its intra-transaction message index. Only <em>valid</em> counters get a number, and numbers are permanent: later locks, transfers, or destroys never renumber anything. Numbers in the newest few blocks are provisional until buried by confirmations.</p>
+      <div class="callout"><b>Genesis is the taproot activation.</b> The scan floor is block 902,000 — Counterparty v11's <code>taproot_support</code> activation. Counter #0 is XDUALS at block 902,005, the first qualifying event.</div>
 
       <h2 id="setup">Setup</h2>
       <p>The indexer is the only part that needs backends; the explorer alone runs without them. To index, run two fully-synced nodes and point Counters at them.</p>
@@ -392,11 +392,11 @@ counters2 wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
       <h2 id="valid">Validity</h2>
       <p>A Counterparty message records a counter when all hold:</p>
       <ul>
-        <li data-n="1">it is a <strong>valid issuance</strong> (any variant) or a <strong>fairminter deploy</strong> — fairmints never qualify (the collection gets one counter at deploy); broadcasts are excluded;</li>
+        <li data-n="1">it is <strong>valid Counterparty state</strong> — an issuance with <code>status = valid</code> (any variant), or a fairminter deploy. Fairmints never qualify (the collection gets one counter at deploy); broadcasts are excluded;</li>
         <li data-n="2">its <strong>description is non-empty</strong> — the content is exactly what Counterparty consensus stores as the asset's description (1 byte is enough);</li>
-        <li data-n="3">the description is <strong>carried in a taproot envelope</strong> — the transaction is a commit/reveal pair whose reveal shows the literal, unencrypted <code>CNTRPRTY</code> marker in its <code>OP_RETURN</code>. Classic <code>OP_RETURN</code>-carried descriptions do not count.</li>
+        <li data-n="3">the description is <strong>carried in a taproot envelope</strong> — the transaction is a reveal showing the literal, unencrypted <code>CNTRPRTY</code> marker in its <code>OP_RETURN</code>. Classic <code>OP_RETURN</code>-carried descriptions never count.</li>
       </ul>
-      <p>MIME type is never a validity condition, duplicate content is allowed, and the numbering starts at #0 (XDUALS, block 902,005 — five blocks after Counterparty v11's taproot activation). Validity depends on Counterparty's verdict, not an explorer's listing.</p>
+      <p>Non-rules: MIME type never gates validity, duplicate content is allowed, and there is no minimum size. Sweeps and ownership transfers copy descriptions rather than create them — Counterparty refuses taproot encoding for them, so they can never count. Validity is Counterparty's verdict, not an explorer's listing.</p>
 
       <h2 id="reinscribe">New content on an existing asset</h2>
       <p>Numbering is <strong>per event</strong>, not per asset: an unlocked asset accumulates a new counter for every qualifying issuance it produces. To attach new content to an asset you own, issue a <strong>reissuance with a fresh taproot-carried description</strong> — it earns its own permanent number, and the asset's page lists all of its counters (the lowest-numbered is the <em>original</em>). Locks, ownership transfers, and destroys never renumber anything.</p>
@@ -411,8 +411,10 @@ counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
         <li data-n="›"><code>GET /counter/&lt;number|asset&gt;</code> — one counter's record</li>
         <li data-n="›"><code>GET /block/&lt;height&gt;</code> — counters minted in a block</li>
         <li data-n="›"><code>GET /content/&lt;number&gt;</code> — the raw file, served with its stored MIME</li>
+        <li data-n="›"><code>GET /preview/&lt;number&gt;</code> — the sandboxed render used by this explorer's cards</li>
+        <li data-n="›"><code>GET /stamp/&lt;number&gt;</code> — the decoded image of a <code>STAMP:</code> counter</li>
       </ul>
-      <p>Point the <code>API</code> constant at the top of this file's script at your server and the sample data is replaced by live results.</p>
+      <p>Served over HTTP by <code>counters2 server</code>, this explorer talks to its own origin; opened straight from disk it falls back to a bundled sample.</p>
 
       <h2 id="source">Source</h2>
       <p>Counters is open source — the indexer, CLI, and this explorer all live in one repository: <a href="https://github.com/antron3000/counters" target="_blank" rel="noopener" class="out">github.com/antron3000/counters ↗</a>.</p>
@@ -430,6 +432,7 @@ counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
       <a href="#/">Latest counters</a>
       <a href="#/c/0">Counter #0 · XDUALS</a>
       <a href="#/docs">Documentation</a>
+      <a href="https://proto.bitcoincounters.com" target="_blank" rel="noopener">Counters Proto ↗</a>
       <a href="https://t.me/BitcoinCounters" target="_blank" rel="noopener">Telegram ↗</a>
     </div>
     <div class="lk">
@@ -439,6 +442,8 @@ counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
       <a><code>GET /counter/:id</code></a>
       <a><code>GET /block/:height</code></a>
       <a><code>GET /content/:n</code></a>
+      <a><code>GET /preview/:n</code></a>
+      <a><code>GET /stamp/:n</code></a>
     </div>
     <div class="lk colophon">
       The reference frontend for <code style="color:var(--copper2)">counters&nbsp;server</code>. Counters are files in Bitcoin witness data, owned through Counterparty assets, numbered from zero.
@@ -460,9 +465,16 @@ counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
 const API = location.protocol.startsWith('http') ? location.origin : null;
 
 /* ---- live adapters (used when API is set) ---------------- */
-async function fetchRecent(before, limit){
-  const r = await fetch(`${API}/counters?before=${before}&limit=${limit}`);
-  return (await r.json()).counters;          // [{number, asset, content_type, ...}]
+// Pages are aligned to the gap-free number space: page k = counters
+// [k*PAGE, k*PAGE+PAGE). Every page URL is permanent — #/p/0 is always
+// genesis — and #/ shows the newest (possibly partial) page.
+const PAGE = 60;
+async function fetchPage(page, count){
+  const start = page * PAGE;
+  const n = Math.min(PAGE, count - start);         // clamp so the top page never spills over
+  if(n <= 0) return [];
+  const r = await fetch(`${API}/counters?before=${start + PAGE}&limit=${n}`);
+  return (await r.json()).counters;                // newest-first within the page
 }
 async function fetchCounter(id){
   const r = await fetch(`${API}/counter/${id}`);
@@ -488,8 +500,7 @@ async function getCounter(id){
   return (String(id)==="0"||v==="XDUALS") ? structuredClone(ZERO) : null;
 }
 async function listCounters(){
-  if(API){ const r=await fetch(`${API}/counters?limit=120`); return (await r.json()).counters; }
-  return [structuredClone(ZERO)];   // placeholder until the indexer has more
+  return [structuredClone(ZERO)];   // file:// sample; live pages come from fetchPage
 }
 async function getStatus(){
   if(API){ const r=await fetch(`${API}/status`); return await r.json(); }
@@ -531,6 +542,7 @@ function sampleRender(c){
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
 const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
+const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
 const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
 
 function card(c){
@@ -553,7 +565,7 @@ function showView(v){for(const k in views)views[k].classList.toggle('hidden',k!=
   window.scrollTo(0,0);
 }
 
-async function renderExplore(){
+async function renderExplore(page){
   showView('explore');
   const st=await getStatus();
   el('synced').innerHTML = (st && st.indexed>=0)
@@ -561,12 +573,18 @@ async function renderExplore(){
       +`<a class="blk" onclick="go('#/b/${st.indexed}')" title="view this block">${meterDigits(st.indexed)}</a>`
       +`<span class="tick">${st.count} counter${st.count===1?'':'s'} detected</span>`
     : '';
-  if(el('grid').dataset.done) return;
-  const list=await listCounters();
+  const pages=Math.max(1, Math.ceil((st.count||1)/PAGE));
+  const cur=(page==null) ? pages-1 : Math.min(Math.max(0, page), pages-1);
+  const list=API ? await fetchPage(cur, st.count) : await listCounters();
   el('grid').innerHTML=list.map(card).join('');
-  el('latest-meta').textContent=list.length?`${list.length} so far \u00b7 genesis #0`:'';
-  if(list.length<=1) el('emptystate').innerHTML=`<div class="empty"><b>The sequence has just begun</b>Counter #0 is the genesis. New counters appear here as they're minted.</div>`;
-  el('grid').dataset.done=1;
+  el('latest-meta').textContent=list.length
+    ? `#${list[list.length-1].number}\u2013#${list[0].number} \u00b7 page ${cur+1} of ${pages}` : '';
+  el('emptystate').innerHTML=(list.length<=1 && cur===0)
+    ? `<div class="empty"><b>The sequence has just begun</b>Counter #0 is the genesis. New counters appear here as they're minted.</div>` : '';
+  el('pager').innerHTML = pages>1 ? `
+    <a class="${cur===0?'off':''}" onclick="go('#/p/${cur-1}')">\u2190 older</a>
+    <span class="pinfo">page ${cur+1} / ${pages}</span>
+    <a class="${cur>=pages-1?'off':''}" onclick="go('${cur+1===pages-1?'#/':'#/p/'+(cur+1)}')">newer \u2192</a>` : '';
 }
 
 async function renderDetail(id){
@@ -599,6 +617,7 @@ async function renderDetail(id){
         ${fact('size', fmtSize(c.size))}
         ${fact('owner', short(c.owner), true, c.owner)}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
+        ${c.block_time ? fact('created', fmtDate(c.block_time)) : ''}
         ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
         ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats`) : ''}
@@ -643,6 +662,7 @@ function route(){
   const h=location.hash||'#/';
   let m;
   if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}
+  else if(m=h.match(/^#\/p\/(\d+)$/)){renderExplore(+m[1]);}
   else if(m=h.match(/^#\/b\/(\d+)$/)){renderBlock(m[1]);}
   else if(h.startsWith('#/docs')){showView('docs');
     const id=h.split('#')[2];
