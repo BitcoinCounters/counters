@@ -175,6 +175,12 @@ on API records; the decoded image at `/stamp/<n>`). The canonical content
 bytes, sha256, and rolling hash remain those of the *text* per §5.1; a
 payload that fails to decode to a recognized image simply displays as text.
 
+How content is *rendered* — including the deterministic repair of
+transport-damaged stamp base64, magic-number sniffing when the declared MIME
+type is generic or wrong, pointer handling, and caching of derived views —
+is specified separately in [`rules.md`](rules.md) (display rules D1–D12).
+Display rules never affect anything in this document.
+
 ---
 
 ## 6. Numbering
