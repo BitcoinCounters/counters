@@ -1,9 +1,9 @@
 # Bitcoin Counters — Build Reference v2
 
-**Status:** current implementation. This document is the authoritative,
-human-readable description of the Counters protocol as implemented in this
-repository. It supersedes `build-reference.pdf` (v1); see [§12](#12-changes-from-v1)
-for the delta.
+**Status: SUPERSEDED by [`build-reference-v3.md`](build-reference-v3.md).**
+This document describes the retired `COUNT`-envelope protocol and is kept for
+historical reference only. It superseded `build-reference.pdf` (v1); see
+[§12](#12-changes-from-v1) for the v1→v2 delta and v3 §12 for the v2→v3 delta.
 
 A **counter** is a numbered inscription: a file committed permanently to Bitcoin
 in taproot witness data, bound to a Counterparty asset, and assigned a global,

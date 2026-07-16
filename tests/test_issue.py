@@ -12,9 +12,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import counters.commands.issue as I  # noqa: E402
-from counters.config import Config  # noqa: E402
-from counters.counterparty import CounterpartyClient  # noqa: E402
+import counters2.commands.issue as I  # noqa: E402
+from counters2.config import Config  # noqa: E402
+from counters2.counterparty import CounterpartyClient  # noqa: E402
 
 OWNER = "bc1pOwnerAddrxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -122,7 +122,9 @@ def test_lock_supply_composes_zero_quantity_lock_true_dry_run():
         assert k["source"] == OWNER and k["asset"] == "MYASSET"
         assert k["quantity"] == 0 and k["lock"] is True
         assert k["divisible"] is False
-        assert k["description"] == "keep me"     # existing description preserved
+        # description OMITTED (None): under v3 it is file content; omitting it
+        # is how Counterparty preserves it (re-sending would corrupt/fail).
+        assert k["description"] is None
         assert fake_btc.sent is None             # dry-run: nothing broadcast
     finally:
         _restore(orig)

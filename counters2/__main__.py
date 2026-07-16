@@ -1,7 +1,7 @@
 """CLI entry point.
 
-Invoke as `counters <command>` (after `pip install -e .`) or, equivalently,
-`python -m counters <command>`.
+Invoke as `counters2 <command>` (after `pip install -e .`) or, equivalently,
+`python -m counters2 <command>`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import sys
 
 from .commands import inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
-from .config import COUNTERS_GENESIS_HEIGHT, TAPROOT_ACTIVATION_HEIGHT, Config
+from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
 from .indexer import Indexer
 
@@ -72,11 +72,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser = argparse.ArgumentParser(
-        prog="counters",
-        description="Counterparty Inscriptions (Bitcoin Counters) — CLI + indexer",
+        prog="counters2",
+        description="Bitcoin Counters v3 — Counterparty taproot-envelope "
+                    "file-event indexer, CLI, and wallet",
         parents=[common],
         formatter_class=_OrdStyleHelp,
-        usage="counters [OPTIONS] <COMMAND>",
+        usage="counters2 [OPTIONS] <COMMAND>",
     )
     parser.set_defaults(verbose=False)
     parser._optionals.title = "Options"
@@ -87,31 +88,19 @@ def main(argv: list[str] | None = None) -> int:
     parser._action_groups.insert(0, parser._action_groups.pop())
 
     # --- daemon / indexing ---
-    # Where a FIRST-TIME scan begins (ignored once the DB has stored progress).
-    # Default is block 0 (exhaustive); these flags raise the floor.
-    startfrom = argparse.ArgumentParser(add_help=False)
-    g_start = startfrom.add_mutually_exclusive_group()
-    g_start.add_argument(
-        "--from-taproot", action="store_true",
-        help=f"scan from taproot activation (block {TAPROOT_ACTIVATION_HEIGHT}); "
-             f"skips blocks that cannot carry a taproot reveal",
-    )
-    g_start.add_argument(
-        "--from-genesis", action="store_true",
-        help=f"scan from the counters genesis block ({COUNTERS_GENESIS_HEIGHT}, #0); "
-             f"trusts that no valid counter precedes it",
-    )
-
+    # A first-time scan always starts at the protocol genesis (block
+    # 902000): rule N3 — nothing can qualify earlier. Stored sync progress
+    # takes precedence on later runs; COUNTER_START_HEIGHT can raise the floor.
     # `run` is a backward-compatible alias for `index`.
     sub.add_parser(
         "index",
-        parents=[common, startfrom],
+        parents=[common],
         aliases=["run"],
         help="continuously sync to tip and follow new blocks",
     )
 
     p_sync = sub.add_parser(
-        "sync", parents=[common, startfrom], help="sync once up to the tip and exit"
+        "sync", parents=[common], help="sync once up to the tip and exit"
     )
     p_sync.add_argument("--stop-at", type=int, default=None, help="stop at this block height")
 
@@ -123,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     p_server.add_argument("--port", type=int, default=8081, help="port (default: 8081)")
     p_server.add_argument(
         "--no-index", action="store_true",
-        help="serve only; do not run the indexer (e.g. when `counters index` "
+        help="serve only; do not run the indexer (e.g. when `counters2 index` "
              "already runs in a separate process)",
     )
 
@@ -140,14 +129,14 @@ def main(argv: list[str] | None = None) -> int:
     p_list = sub.add_parser("list", parents=[common], help="list counters")
     g_list = p_list.add_mutually_exclusive_group()
     g_list.add_argument("--recent", type=int, metavar="N", help="N most recent (default 20)")
-    g_list.add_argument("--owner", metavar="ADDR", help="counters held at mint by ADDR")
+    g_list.add_argument("--source", metavar="ADDR", help="counters minted from ADDR")
     g_list.add_argument("--block", metavar="A-B", help="counters in a block range, e.g. 800000-800100")
 
     p_val = sub.add_parser("validate", parents=[common], help="is <txid> a valid counter, and why")
     p_val.add_argument("txid")
 
     # --- wallet (taproot BIP86; keys held by Bitcoin Core) ---
-    # --name is a wallet-level option (counters wallet --name abc create); it is
+    # --name is a wallet-level option (counters2 wallet --name abc create); it is
     # also accepted after the subcommand via the SUPPRESS-default parent so it
     # never clobbers the wallet-level value when absent.
     wname = argparse.ArgumentParser(add_help=False)
@@ -157,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         parents=[common],
         help="taproot wallet (keys in Bitcoin Core)",
         formatter_class=_OrdStyleHelp,
-        usage="counters wallet [--name NAME] <COMMAND>",
+        usage="counters2 wallet [--name NAME] <COMMAND>",
     )
     p_wallet.add_argument("--name", default="counter", help="Core wallet name (default: counter)")
     p_wallet._optionals.title = "Options"
@@ -217,32 +206,29 @@ def main(argv: list[str] | None = None) -> int:
         "inscribe", parents=[common, wname], help="mint a counter from a file"
     )
     p_insc.add_argument("--file", required=True, help="file to inscribe")
-    p_insc.add_argument("--asset", help="named asset or PARENT.CHILD subasset; omit for free numeric")
-    p_insc.add_argument("--fee-rate", type=float, default=5.0, help="reveal fee rate (sat/vB)")
-    p_insc.add_argument("--commit-fee-rate", type=float, default=None,
-                        help="commit fee rate (sat/vB); defaults to --fee-rate")
-    p_insc.add_argument("--destination", help="address to own the minted counter (default: wallet)")
+    p_insc.add_argument("--asset",
+                        help="named asset or PARENT.CHILD subasset; omit for free numeric. "
+                             "An EXISTING asset you own gets the content attached via a "
+                             "reissuance (new counter, same asset)")
+    p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
     p_insc.add_argument("--divisible", action="store_true", help="make the asset divisible")
     p_insc.add_argument("--locked", action="store_true",
                         help="lock the asset's supply (no future issuance can change it)")
-    p_insc.add_argument("--reinscribe", action="store_true",
-                        help="attach a counter to an EXISTING asset whose issuance rights you "
-                             "hold (no new asset, no Counterparty message); requires --asset")
-    p_insc.add_argument("--fund-from-address", metavar="ADDRESS",
-                        help="fund the commit from this address's coins (in --name) instead "
-                             "of letting Core pick — useful when the issuer/owner address "
-                             "holds no BTC. Works for any inscription type")
-    p_insc.add_argument("--fund-from-input", metavar="TXID:VOUT",
-                        help="fund the commit from this exact UTXO (in --name) instead of "
-                             "letting Core select coins. Works for any inscription type")
+    p_insc.add_argument("--source", metavar="ADDRESS",
+                        help="Counterparty source address (funds the commit, receives the "
+                             "tokens, pays any XCP burn); default: picked from the wallet")
+    p_insc.add_argument("--inputs-set", metavar="TXID:VOUT[,...]",
+                        help="pin the exact UTXO(s) that fund the commit (Counterparty "
+                             "inputs_set format)")
     p_insc.add_argument("--dry-run", action="store_true",
-                        help="build + sign both txs but do not broadcast; print raw hex")
+                        help="compose + sign but do not broadcast; print raw hex")
 
     p_send = wsub.add_parser(
         "send", parents=[common, wname],
         help="transfer a counter (asset) to an address",
-        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
+        usage="counters2 wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
     )
     p_send.add_argument("destination", metavar="address", help="recipient Bitcoin address")
     p_send.add_argument("asset", help="asset name or longname of the counter")
@@ -286,13 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    config = Config()
-
-    # First-time scan floor (the DB's stored height wins on later runs).
-    if getattr(args, "from_taproot", False):
-        config.start_height = TAPROOT_ACTIVATION_HEIGHT
-    elif getattr(args, "from_genesis", False):
-        config.start_height = COUNTERS_GENESIS_HEIGHT
+    config = Config()  # start_height is clamped to genesis in Config itself
 
     if args.command in ("index", "run"):
         indexer = Indexer(config)
@@ -322,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "list":
-        return read.cmd_list(config, recent=args.recent, owner=args.owner, block=args.block)
+        return read.cmd_list(config, recent=args.recent, source=args.source, block=args.block)
 
     if args.command == "validate":
         return read.cmd_validate(config, args.txid)
@@ -341,11 +321,9 @@ def main(argv: list[str] | None = None) -> int:
                 return inscribe.cmd_inscribe(
                     config, args.name, args.file,
                     asset=args.asset, fee_rate=args.fee_rate,
-                    commit_fee_rate=args.commit_fee_rate, destination=args.destination,
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
-                    reinscribe=args.reinscribe, dry_run=args.dry_run,
-                    fund_from_address=args.fund_from_address,
-                    fund_from_input=args.fund_from_input,
+                    source=args.source, inputs_set=args.inputs_set,
+                    dry_run=args.dry_run,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
