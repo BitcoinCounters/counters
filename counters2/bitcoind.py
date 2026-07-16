@@ -12,7 +12,7 @@ from typing import Any
 import requests
 
 from .config import Config
-from .envelope import find_commit_txid
+from .reveal import commit_txid as reveal_commit_txid
 
 COIN = 100_000_000  # sats per BTC
 
@@ -115,7 +115,7 @@ class BitcoindClient:
                     )
                 raise BitcoindError(
                     f"wallet {wallet!r} does not exist. "
-                    f"Create it with: counters wallet create --name {wallet}"
+                    f"Create it with: counters2 wallet create --name {wallet}"
                 )
             if code == -5 and method == "getrawtransaction":
                 raise BitcoindError(
@@ -154,13 +154,6 @@ class BitcoindClient:
     def get_block_hash(self, height: int) -> str:
         return self._call("getblockhash", [height])
 
-    def get_block(self, block_hash: str, verbosity: int = 2) -> dict:
-        """Verbosity 2 returns full tx data including vin[].txinwitness."""
-        return self._call("getblock", [block_hash, verbosity])
-
-    def get_block_at_height(self, height: int, verbosity: int = 2) -> dict:
-        return self.get_block(self.get_block_hash(height), verbosity)
-
     def get_raw_transaction(self, txid: str, verbose: bool = True) -> dict:
         """Decoded tx (verbose=True) including vin[].txinwitness and, if mined,
         the 'blockhash'. Requires txindex=1 for non-wallet, non-mempool txs."""
@@ -197,14 +190,15 @@ class BitcoindClient:
         """Total fee (sats) and raw size (bytes) to inscribe = commit + reveal.
 
         The reveal is the mint tx; the commit is the tx whose output the reveal
-        script-path-spends (the prevout of the COUNT-envelope input). We sum both
-        so the displayed fee/rate reflect the whole inscription, not just the
-        reveal. Falls back to reveal-only if the commit can't be identified.
+        script-path-spends (input 0's prevout, per the reveal shape in
+        reveal.py). We sum both so the displayed fee/rate reflect the whole
+        inscription, not just the reveal. Falls back to reveal-only if the
+        commit can't be identified.
         """
         if reveal_tx is None:
             reveal_tx = self.get_raw_transaction(reveal_txid, verbose=True)
         fee, size = self.get_fee_and_size(reveal_txid, tx=reveal_tx)
-        commit_txid = find_commit_txid(reveal_tx.get("vin", []))
+        commit_txid = reveal_commit_txid(reveal_tx)
         if commit_txid and commit_txid != reveal_txid:
             cfee, csize = self.get_fee_and_size(commit_txid)
             if fee is not None and cfee is not None:
@@ -212,22 +206,3 @@ class BitcoindClient:
             if size is not None and csize is not None:
                 size += csize
         return fee, size
-
-    def get_input_addresses(self, tx: dict) -> set[str]:
-        """The set of addresses whose UTXOs this tx spends.
-
-        Each input's address is read from its prevout's scriptPubKey (needs
-        txindex=1 for non-wallet prevouts). Used to prove reinscription
-        authorisation: the tx must spend from the asset's owner address.
-        Coinbase inputs and prevouts without a decodable address are skipped.
-        """
-        addrs: set[str] = set()
-        for vin in tx.get("vin", []):
-            if "txid" not in vin:  # coinbase: no prevout
-                continue
-            prev = self.get_raw_transaction(vin["txid"], verbose=True)
-            spk = prev["vout"][vin["vout"]].get("scriptPubKey", {})
-            addr = spk.get("address")
-            if addr:
-                addrs.add(addr)
-        return addrs

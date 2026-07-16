@@ -1,4 +1,4 @@
-"""`counters wallet send` — transfer a counter (its Counterparty asset).
+"""`counters2 wallet send` — transfer a counter (its Counterparty asset).
 
 Argument order mirrors `ord wallet send`: DESTINATION first, then ASSET, then
 AMOUNT (`send <ADDRESS> <ASSET> <AMOUNT>`).
@@ -17,12 +17,10 @@ from __future__ import annotations
 import sys
 from decimal import Decimal, InvalidOperation
 
-from ..bitcoind import BitcoindClient, BitcoindError
+from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
 from ..counterparty import CounterpartyClient, CounterpartyError
 from .wallet import _wallet_addresses
-
-COIN = 100_000_000
 
 
 def _to_raw_quantity(amount: str, divisible: bool) -> int:
@@ -150,6 +148,17 @@ def cmd_send(
         print(f"compose returned no rawtransaction: {composed}", file=sys.stderr)
         return 1
 
+    print(f"send {_fmt_raw(need, divisible)} {asset}")
+    print(f"  from      : {source}")
+    print(f"  to        : {destination}")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
+    return _sign_and_broadcast(btc, wallet, source, rawtx, dry_run)
+
+
+def _sign_and_broadcast(btc, wallet: str, source: str, rawtx: str, dry_run: bool) -> int:
+    """Sign (Core), validate against the mempool, and broadcast — the shared
+    submit path for send, lock-supply, lock-description, and issue."""
     signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [rawtx])
     if not signed.get("complete"):
         print(f"signing failed (does {source} have BTC for the fee?): "
@@ -163,12 +172,6 @@ def cmd_send(
         print(f"testmempoolaccept failed to run: {e}", file=sys.stderr)
         checks = []
     ok = bool(checks) and checks[0].get("allowed")
-
-    print(f"send {_fmt_raw(need, divisible)} {asset}")
-    print(f"  from      : {source}")
-    print(f"  to        : {destination}")
-    if fee_rate is not None:
-        print(f"  fee rate  : {fee_rate} sat/vB")
     if checks:
         c = checks[0]
         verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"

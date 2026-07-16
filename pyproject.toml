@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "counters"
+name = "counters2"
 version = "0.1.0"
-description = "Counterparty Inscriptions (Bitcoin Counters) — CLI and indexer"
+description = "Bitcoin Counters v3 — Counterparty taproot-envelope file-event indexer, CLI, and wallet"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",
@@ -14,11 +14,11 @@ dependencies = [
 ]
 
 [project.scripts]
-counters = "counters.__main__:main"
+counters2 = "counters2.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["counters*"]
+include = ["counters2*"]
 
 [tool.setuptools.package-data]
-"counters.server" = ["static/*"]
-"counters" = ["electrum1_words.txt"]
+"counters2.server" = ["static/*"]
+"counters2" = ["electrum1_words.txt"]

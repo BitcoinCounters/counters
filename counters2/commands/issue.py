@@ -1,4 +1,4 @@
-"""`counters wallet lock` and `counters wallet issue` — Counterparty asset ops.
+"""`counters2 wallet lock` and `counters2 wallet issue` — Counterparty asset ops.
 
 Both are plain Counterparty *issuance* messages: Counterparty Core composes the
 OP_RETURN, the Bitcoin Core wallet (which holds the keys) signs it, we validate
@@ -29,7 +29,7 @@ import sys
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
 from ..counterparty import CounterpartyClient, CounterpartyError
-from .send import _fmt_raw, _to_raw_quantity
+from .send import _fmt_raw, _sign_and_broadcast, _to_raw_quantity
 from .wallet import _wallet_addresses
 
 
@@ -46,7 +46,7 @@ def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
     canonical = info.get("asset") or asset
     # Ownership (issuance rights) moves on transfer; `issuer` is the original,
     # immutable creator. Use `owner`, falling back to `issuer` for never-
-    # transferred assets — matching the reinscribe/indexer authorisation.
+    # transferred assets.
     owner = info.get("owner") or info.get("issuer")
     if not owner:
         print(f"could not determine the issuance-rights owner of {canonical}", file=sys.stderr)
@@ -82,45 +82,6 @@ def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
     return rawtx
 
 
-def _sign_and_broadcast(btc, wallet: str, source: str, rawtx: str, dry_run: bool) -> int:
-    """Sign (Core), validate against the mempool, and broadcast — shared by lock
-    and issue. Mirrors the send command's submit path."""
-    signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [rawtx])
-    if not signed.get("complete"):
-        print(f"signing failed (does {source} have BTC for the fee?): "
-              f"{signed.get('errors')}", file=sys.stderr)
-        return 1
-    tx_hex = signed["hex"]
-
-    try:
-        checks = btc._call("testmempoolaccept", [[tx_hex]])
-    except BitcoindError as e:
-        print(f"testmempoolaccept failed to run: {e}", file=sys.stderr)
-        checks = []
-    ok = bool(checks) and checks[0].get("allowed")
-    if checks:
-        c = checks[0]
-        verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"
-        print(f"  mempool   : {verdict}")
-
-    if dry_run:
-        print(f"\n[dry-run] not broadcast. raw tx:\n{tx_hex}")
-        return 0 if ok else 1
-    if not ok:
-        print("not broadcasting: failed mempool acceptance", file=sys.stderr)
-        print(f"raw tx: {tx_hex}", file=sys.stderr)
-        return 1
-
-    try:
-        txid = btc._call("sendrawtransaction", [tx_hex])
-    except BitcoindError as e:
-        print(f"broadcast failed: {e}", file=sys.stderr)
-        print(f"raw tx: {tx_hex}", file=sys.stderr)
-        return 1
-    print(f"\nbroadcast: {txid}")
-    return 0
-
-
 def cmd_lock_supply(config: Config, wallet: str, asset: str, dry_run: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -135,10 +96,13 @@ def cmd_lock_supply(config: Config, wallet: str, asset: str, dry_run: bool = Fal
         return 1
 
     divisible = bool(info.get("divisible"))
-    # A supply lock is a zero-quantity issuance with lock=true; keep the current
-    # description (omit it → Counterparty preserves it).
+    # A supply lock is a zero-quantity issuance with lock=true. The description
+    # MUST be omitted (None): under v3 it is the counter's file content, and
+    # re-sending it in an OP_RETURN issuance would fail for large content or
+    # rewrite the stored content's MIME classification. Omitted, Counterparty
+    # preserves it.
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=divisible,
-                     lock=True, description=info.get("description"))
+                     lock=True, description=None)
     if rawtx is None:
         return 1
 
@@ -196,8 +160,9 @@ def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
         print(f"error: {e}", file=sys.stderr)
         return 1
 
+    # description omitted (None): preserve the asset's content — see lock-supply.
     rawtx = _compose(cp, owner, asset, quantity=raw, divisible=divisible,
-                     lock=lock, description=info.get("description"))
+                     lock=lock, description=None)
     if rawtx is None:
         return 1
 

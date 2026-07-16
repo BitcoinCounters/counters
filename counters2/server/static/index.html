@@ -371,43 +371,37 @@ BTC_RPC_URL=http://127.0.0.1:8332
 CP_API_URL=http://127.0.0.1:4000
 
 <span class="c"># confirm bitcoind + Counterparty + index heights line up</span>
-counters status
+counters2 status
 
 <span class="c"># then index, and serve the explorer</span>
-counters index --from-genesis
-counters server</pre>
+counters2 index
+counters2 server</pre>
       <div class="callout"><b>Both nodes must be fully synced.</b> The indexer never advances past Counterparty's height, so a lagging Core simply slows indexing rather than producing wrong results.</div>
 
       <h2 id="mint">Minting</h2>
-      <p>A mint is a taproot commit/reveal pair, built and broadcast together. The reveal carries the file in its witness and, for a new asset, the Counterparty issuance as a plain <code>OP_RETURN</code> (a reinscription onto an existing asset carries no issuance — see below).</p>
+      <p>A mint is a Counterparty issuance composed with <code>encoding=taproot</code>: Counterparty Core builds the commit/reveal pair, the reveal carrying the file (the asset's description) in its witness envelope and an <code>OP_RETURN</code> holding only the literal <code>CNTRPRTY</code> marker. The wallet just signs the commit and broadcasts both.</p>
       <pre><span class="c"># create a wallet (prints a seed phrase once)</span>
-counters wallet create --name me
+counters2 wallet create --name me
 
 <span class="c"># inscribe a file as a free numeric asset…</span>
-counters wallet --name me inscribe --file cat.png
+counters2 wallet --name me inscribe --file cat.png
 
 <span class="c"># …or as a named asset (costs 0.5 XCP)</span>
-counters wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
+counters2 wallet --name me inscribe --file cat.png --asset MYCOUNTER</pre>
 
       <h2 id="valid">Validity</h2>
-      <p>A transaction records a counter when all hold:</p>
+      <p>A Counterparty message records a counter when all hold:</p>
       <ul>
-        <li data-n="1">its witness has a well-formed <code>COUNT</code> envelope, and <strong>exactly one</strong> is present across the whole transaction;</li>
-        <li data-n="2">the counter <strong>binds</strong> to an asset (below);</li>
-        <li data-n="3">that asset is not BTC or XCP.</li>
+        <li data-n="1">it is a <strong>valid issuance</strong> (any variant) or a <strong>fairminter deploy</strong> — fairmints never qualify (the collection gets one counter at deploy); broadcasts are excluded;</li>
+        <li data-n="2">its <strong>description is non-empty</strong> — the content is exactly what Counterparty consensus stores as the asset's description (1 byte is enough);</li>
+        <li data-n="3">the description is <strong>carried in a taproot envelope</strong> — the transaction is a commit/reveal pair whose reveal shows the literal, unencrypted <code>CNTRPRTY</code> marker in its <code>OP_RETURN</code>. Classic <code>OP_RETURN</code>-carried descriptions do not count.</li>
       </ul>
-      <p><strong>Binding is envelope-first.</strong> The envelope names its asset (tag <code>0x02</code>), and the counter binds to it when either:</p>
-      <ul>
-        <li data-n="a">a Counterparty issuance in the <strong>same transaction successfully creates</strong> that asset — a <em>creation</em>; or</li>
-        <li data-n="b">the asset <strong>already exists</strong> and the transaction is authorised by its owner — a <em>reinscription</em> (see below).</li>
-      </ul>
-      <p>If the named asset doesn't resolve either way — or a legacy envelope names none — the counter falls back to whatever asset the transaction issues. Otherwise it isn't a counter. Validity depends on Counterparty's verdict, not an explorer's listing — an asset can appear indexed yet be an invalid issuance.</p>
+      <p>MIME type is never a validity condition, duplicate content is allowed, and the numbering starts at #0 (XDUALS, block 902,005 — five blocks after Counterparty v11's taproot activation). Validity depends on Counterparty's verdict, not an explorer's listing.</p>
 
-      <h2 id="reinscribe">Reinscriptions</h2>
-      <p>A counter can also be attached to an <strong>existing</strong> asset you already own — a <em>reinscription</em>. Like every counter, its envelope names the asset (tag <code>0x02</code>); what makes it a reinscription is that the asset already exists and the transaction carries <strong>no Counterparty message</strong>. It's authorised on-chain by spending an input from the asset's <strong>owner (issuance-rights holder) as of that block</strong> — <em>ownership</em>, not token balance, checked at the height of the inscription so a later transfer can't change the verdict.</p>
-      <p>Each reinscription is a new, permanently-numbered counter, so one asset can back many. The lowest-numbered counter on an asset is its <em>original</em>; later ones are reinscriptions, and a counter's page lists them all.</p>
-      <pre><span class="c"># attach a counter to an asset you own (no new asset, no XCP)</span>
-counters wallet --name me inscribe --file v2.png --asset RAREPEPE --reinscribe</pre>
+      <h2 id="reinscribe">New content on an existing asset</h2>
+      <p>Numbering is <strong>per event</strong>, not per asset: an unlocked asset accumulates a new counter for every qualifying issuance it produces. To attach new content to an asset you own, issue a <strong>reissuance with a fresh taproot-carried description</strong> — it earns its own permanent number, and the asset's page lists all of its counters (the lowest-numbered is the <em>original</em>). Locks, ownership transfers, and destroys never renumber anything.</p>
+      <pre><span class="c"># attach new content to an asset you own (a reissuance; supply unchanged)</span>
+counters2 wallet --name me inscribe --file v2.png --asset MYCOUNTER</pre>
 
       <h2 id="api">Server API</h2>
       <p>This explorer reads these endpoints from <code>counters server</code>:</p>
@@ -434,7 +428,7 @@ counters wallet --name me inscribe --file v2.png --asset RAREPEPE --reinscribe</
     <div class="lk">
       <b>Explore</b>
       <a href="#/">Latest counters</a>
-      <a href="#/c/0">Counter #0 · COUNTERZERO</a>
+      <a href="#/c/0">Counter #0 · XDUALS</a>
       <a href="#/docs">Documentation</a>
       <a href="https://t.me/BitcoinCounters" target="_blank" rel="noopener">Telegram ↗</a>
     </div>
@@ -477,21 +471,21 @@ async function fetchCounter(id){
 }
 const contentURL = n => API ? `${API}/content/${n}` : null;
 
-/* ---- the one real counter; placeholder until a server is wired ---- */
+/* ---- counter #0 (genesis); placeholder until a server is wired ---- */
 const ZERO={
-  number:0, asset:"COUNTERZERO", asset_id:"362634122772624",
-  content_type:"text/plain", size:2, body:"0",
-  owner:"bc1pvk6xnanj07h8un6lc25ty0zqd7dfhgh5k5yucztlyut55ynmv66qz8pdf5",
-  txid:"6e6e14470434fd01d1d877ab0754dbc90d31ff33a4bb96a37e026d730762ed1f",
-  commit:"848d059793aa6e9b26b77dd88dc7b43e2e4c92275605abf46a2ea7b609bb7198",
-  block:955251, position:415, tx_index:3143138, fee:1552, tx_size:609, xcp_burned:50000000,
-  supply:1000000000, divisible:true, locked:false,
-  sha256:"9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  number:0, asset:"XDUALS", asset_id:"274994400", kind:"issuance",
+  content_type:"text/plain", size:8, body:"testdual", msg_index:0,
+  owner:"bc1qp0ys5k7uuzhnekcuyymg76ujpgf9ut9j5vf7sd",
+  source:"bc1qp0ys5k7uuzhnekcuyymg76ujpgf9ut9j5vf7sd",
+  txid:"efeb4f6ad804a6716334de029788a1002933325f86c1e99132b32347ac6d7503",
+  block:902005, tx_index:3030441, fee:null, tx_size:null, xcp_burned:50000000,
+  supply:10000, divisible:false, locked:false, is_pointer_like:false,
+  sha256:"806f58fc5f3d4db74df985debab79bad0f8ec1400a11aea349829414cd098287"
 };
 async function getCounter(id){
   if(API) return fetchCounter(id);
   const v=String(id).toUpperCase();
-  return (String(id)==="0"||v==="COUNTERZERO") ? structuredClone(ZERO) : null;
+  return (String(id)==="0"||v==="XDUALS") ? structuredClone(ZERO) : null;
 }
 async function listCounters(){
   if(API){ const r=await fetch(`${API}/counters?limit=120`); return (await r.json()).counters; }
@@ -591,7 +585,9 @@ async function renderDetail(id){
       <div class="dhead">${meterDigits(c.number)}</div>
       <h1>${esc(c.asset)}</h1>
       <span class="vbadge"><span class="dot"></span>valid counter</span>
-      ${c.reinscription ? `<span class="vbadge re"><span class="dot"></span>reinscription</span>` : ''}
+      ${c.kind==='fairminter' ? `<span class="vbadge re"><span class="dot"></span>fairminter</span>` : ''}
+      ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reissue</span>` : ''}
+      ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
@@ -600,19 +596,20 @@ async function renderDetail(id){
         ${fact('content type', c.content_type)}
         ${fact('size', fmtSize(c.size))}
         ${fact('owner', short(c.owner), true, c.owner)}
-        ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a> · pos ${c.position}`)}
+        ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
         ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
         ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats`) : ''}
         ${c.xcp_burned!=null ? fact('xcp burned', tsTx ? `<a href="${tsTx}" target="_blank" rel="noopener" class="out">${+(c.xcp_burned/1e8).toFixed(8)} XCP ↗</a>` : `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
         ${fact('sha-256', short(c.sha256), true, c.sha256)}
+        ${c.rolling_hash ? fact('rolling hash', short(c.rolling_hash), true, c.rolling_hash) : ''}
       </div>
       ${(c.asset_counters && c.asset_counters.length>1) ? `
       <div class="acs">
         <div class="k">${c.asset_counters.length} counters on ${esc(c.asset)}</div>
         <div class="list">
-          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.reinscription?'re':''}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.reinscription?'reinscription':'original'}</em></a>`).join('')}
+          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.original?'':'re'}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.original?'original':(s.kind==='fairminter'?'fairminter':'reissue')}</em></a>`).join('')}
         </div>
       </div>` : ''}
     </div>`;

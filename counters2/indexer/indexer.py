@@ -1,16 +1,20 @@
-"""The indexer pipeline.
+"""The indexer pipeline (build reference v3 §8).
 
-For each block (ascending), join txs that carry exactly one COUNT envelope
-against Counterparty's successful first/creation issuances, assign the next
-global number, and store the record + file content.
+Oracle-first: for each block (ascending), ask Counterparty for the block's
+issuances and fairminter deploys, filter them to the qualifying events
+(R1-R3), verify each survivor's transaction is a taproot REVEAL against
+bitcoind (R4), then number and store in (block, tx_index, msg_index) order.
 
-Validity rules enforced here (MVP):
-  1. tx contains exactly one valid COUNT envelope (tx-wide, all inputs)
-  2. tx has a Counterparty issuance with status == "valid"
-  3. that issuance is the asset's first/creation issuance
-  4. issued asset is not BTC/XCP
-
-Reorg renumbering and the read/serve API are intentionally out of scope.
+Validity rules enforced here:
+  R1  valid Counterparty state only (issuance status == "valid"; a fairminter
+      deploy's presence in the fairminters table IS its validity)
+  R2  issuances + fairminter deploys; fairmints (fair_minting) excluded
+  R3  non-null, non-empty description — content defers to Counterparty state
+  R4  taproot envelope carrier only (reveal.py)
+  R5  permissive content — MIME never gates validity
+  R6  duplicates allowed; dedup is metadata-only
+  N1-N6 numbering per the build reference; N4 reorgs are handled by a
+      log-structured rollback before each sync pass.
 """
 
 from __future__ import annotations
@@ -20,13 +24,27 @@ import signal
 import time
 
 from ..bitcoind import BitcoindClient, BitcoindError
-from ..config import Config, RESERVED_ASSETS
+from ..config import GENESIS_HEIGHT, Config
+from ..content import classify_mime_type, content_bytes, is_pointer_like, normalize_mime
 from ..counterparty import CounterpartyClient, CounterpartyError
-from ..envelope import find_counter_envelopes_in_tx
 from ..progress import ProgressBar
+from ..reveal import is_taproot_reveal
 from ..store import CounterRecord, Store
 
 log = logging.getLogger("counters")
+
+
+def is_qualifying_issuance(row: dict) -> bool:
+    """R1+R2 for an issuance row: valid per Counterparty, and not a fairmint
+    (mints carry no content; the collection's counter lands on the deploy).
+    Shared by the indexer and `counters2 validate` so the CLI verdict is
+    definitionally the indexer's verdict."""
+    return row.get("status") == "valid" and not row.get("fair_minting")
+
+
+def has_content(row: dict) -> bool:
+    """R3: non-null, non-empty description (1 byte qualifies)."""
+    return row.get("description") not in (None, "")
 
 
 class Indexer:
@@ -107,194 +125,171 @@ class Indexer:
     def close(self) -> None:
         self.store.close()
 
-    # --- block processing --------------------------------------------------
+    # --- candidate selection (R1-R3) ----------------------------------------
+
+    @staticmethod
+    def _qualifying_events(issuances: list[dict], fairminters: list[dict]) -> list[tuple[str, dict]]:
+        """Filter the block's Counterparty messages down to qualifying events
+        and return them in N1 order: (tx_index, msg_index). Deduplication by
+        (tx_hash, msg_index) keeps the first occurrence."""
+        candidates: list[tuple[str, dict]] = []
+        for row in issuances:
+            if is_qualifying_issuance(row) and has_content(row):  # R1-R3
+                candidates.append(("issuance", row))
+        for row in fairminters:
+            if has_content(row):  # R3 (presence in the table IS validity, R1)
+                candidates.append(("fairminter", row))
+
+        seen: set[tuple[str, int]] = set()
+        unique: list[tuple[str, dict]] = []
+        for kind, row in candidates:
+            key = (row.get("tx_hash"), int(row.get("msg_index") or 0))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((kind, row))
+
+        # tx_index is consensus ordering input (N1): a missing value must fail
+        # loudly (KeyError aborts the pass for a retry), never default to 0.
+        unique.sort(
+            key=lambda kr: (int(kr[1]["tx_index"]), int(kr[1].get("msg_index") or 0))
+        )
+        return unique
+
+    # --- block processing ----------------------------------------------------
 
     def process_block(self, height: int) -> int:
         """Process a single block; returns the number of counters recorded."""
         block_hash = self.btc.get_block_hash(height)
-        block = self.btc.get_block(block_hash, verbosity=2)
-        txs = block.get("tx", [])
 
-        # Only fetch Counterparty issuances if the block has any candidate
-        # COUNT envelopes — avoids an API call per empty block.
-        candidates: list[tuple[int, dict, object]] = []
-        for position, tx in enumerate(txs):
-            envelopes = find_counter_envelopes_in_tx(tx.get("vin", []))
-            if len(envelopes) == 1:
-                candidates.append((position, tx, envelopes[0]))
-            elif len(envelopes) > 1:
-                log.debug(
-                    "block %d tx %s: %d COUNT envelopes (>1) -> skipped",
-                    height,
-                    tx.get("txid"),
-                    len(envelopes),
-                )
+        issuances = self.cp.get_block_issuances(height)
+        fairminters = self.cp.get_block_fairminters(height)
+        candidates = self._qualifying_events(issuances, fairminters)
 
         recorded = 0
-        if candidates:
-            # Any candidate may be a creation (its envelope's asset matched to a
-            # same-tx issuance) or fall back to whatever the tx issues, so the
-            # block's issuances are needed whenever there is a candidate.
-            issuances = self.cp.get_block_issuances(height)
-            for position, tx, env in candidates:
-                if self._maybe_record(height, position, tx, env, issuances):
-                    recorded += 1
+        for kind, row in candidates:
+            if self._maybe_record(height, kind, row):
+                recorded += 1
 
         self.store.set_last_height(height, block_hash)
         self.store.commit()
         return recorded
 
-    def _maybe_record(self, height, position, tx, env, issuances) -> bool:
-        txid = tx.get("txid")
-        if self.store.has_txid(txid):
-            return False
-        # Binding is envelope-first. If the envelope names an asset, use it when
-        # that binding is valid: either a same-tx issuance that CREATES it (a
-        # creation), or, for a pre-existing asset, a tx authorised by its owner
-        # (a reinscription). If the named asset does not resolve — or the
-        # envelope names none — fall back to whatever asset the tx issues. If
-        # neither holds, it is not a valid counter.
-        if env.asset:
-            try:
-                target = env.asset.decode("utf-8")
-            except UnicodeDecodeError:
-                target = None
-            if target is not None:
-                if self._record_creation(height, position, tx, env, txid,
-                                         issuances, require_asset=target):
-                    return True
-                if self._record_reinscription(height, position, tx, env, txid, target):
-                    return True
-        return self._record_creation(height, position, tx, env, txid, issuances)
-
-    def _record_creation(self, height, position, tx, env, txid, issuances,
-                         require_asset: str | None = None) -> bool:
-        tx_issuances = issuances.get(txid)
-        if not tx_issuances:
+    def _maybe_record(self, height: int, kind: str, row: dict) -> bool:
+        txid = row.get("tx_hash")
+        msg_index = int(row.get("msg_index") or 0)
+        if not txid or self.store.has_event(txid, msg_index):
             return False
 
-        # A tx carries one Counterparty message; pick the issuance row that is
-        # a valid creation. (Defensive: iterate in case of multiple rows.) When
-        # require_asset is set (the envelope named an asset), the issuance must
-        # create THAT asset — matched against its name or longname.
-        issuance = None
-        for row in tx_issuances:
-            if not (self.cp.is_valid(row) and self.cp.is_creation(row)):
-                continue
-            if require_asset is not None and require_asset not in (
-                row.get("asset"), row.get("asset_longname")
-            ):
-                continue
-            issuance = row
-            break
-        if issuance is None:
+        # R4: the message's transaction must be a taproot REVEAL. The raw tx
+        # comes from bitcoind (txindex=1); content is NOT read from it. A
+        # fetch failure must ABORT the block (the run loop retries it):
+        # skipping the event while the cursor advances would permanently fork
+        # this indexer's numbering and rolling hash.
+        tx = self.btc.get_raw_transaction(txid, verbose=True)
+        if not is_taproot_reveal(tx):
+            log.debug("block %d tx %s: %s description not taproot-carried -> no event",
+                      height, txid, kind)
             return False
 
-        asset = issuance["asset"]
-        if asset in RESERVED_ASSETS:
-            return False
+        # Content: invert Core's description serialization at this height (§5.1).
+        description = row.get("description") or ""
+        mime_raw = row.get("mime_type")
+        body, clean = content_bytes(description, mime_raw or "text/plain", height)
+        if not clean:
+            log.warning("block %d tx %s: claimed-binary description is not valid hex; "
+                        "stored UTF-8 fallback bytes", height, txid)
+        content_type, content_type_raw = normalize_mime(mime_raw or "text/plain")
 
+        asset = row.get("asset")
         asset_info = self.cp.get_asset(asset) or {}
-        asset_id = asset_info.get("asset_id")
-        if asset_id in ("0", "1", 0, 1):
-            return False
 
-        return self._store_counter(
-            height=height, position=position, tx=tx, env=env, txid=txid,
-            asset=asset, asset_id=asset_id,
-            asset_longname=issuance.get("asset_longname") or asset_info.get("asset_longname"),
-            owner=asset_info.get("owner") or issuance.get("issuer"),
-            divisible=asset_info.get("divisible"), supply=asset_info.get("supply"),
-            cp_tx_index=issuance.get("tx_index"), xcp_burned=issuance.get("fee_paid"),
-            reinscription=False,  # a creation is always its asset's first counter
-        )
-
-    def _record_reinscription(self, height, position, tx, env, txid, target: str) -> bool:
-        """Record a counter attached to a pre-existing asset. There is NO
-        Counterparty message; the tx must instead prove issuance rights by
-        spending an input from the asset's owner address AS OF THIS BLOCK."""
-        asset_info = self.cp.get_asset(target)
-        if not asset_info:
-            return False  # names a non-existent asset
-        asset = asset_info.get("asset") or target
-        if asset in RESERVED_ASSETS:
-            return False
-        asset_id = asset_info.get("asset_id")
-        if asset_id in ("0", "1", 0, 1):
-            return False
-
-        # Authorisation: owner (issuance-rights holder) as of this block must be
-        # among the addresses the tx spends from. Spending that input required
-        # the owner's key, so the signature proves control at this height.
-        owner = self.cp.issuer_at_height(asset, height)
-        if not owner:
-            return False
-        try:
-            spenders = self.btc.get_input_addresses(tx)
-        except (BitcoindError, KeyError, IndexError, TypeError):
-            # Can't verify authorisation (e.g. missing txindex) -> do not record.
-            log.warning(
-                "block %d tx %s: cannot verify reinscription authorisation for %s "
-                "(prevout lookup failed; is txindex=1 enabled?)", height, txid, asset,
-            )
-            return False
-        if owner not in spenders:
-            log.debug(
-                "block %d tx %s: reinscription of %s NOT authorised "
-                "(owner %s not among tx inputs)", height, txid, asset, owner,
-            )
-            return False
-
-        return self._store_counter(
-            height=height, position=position, tx=tx, env=env, txid=txid,
-            asset=asset, asset_id=asset_id,
-            asset_longname=asset_info.get("asset_longname"),
-            owner=asset_info.get("owner") or owner,
-            divisible=asset_info.get("divisible"), supply=asset_info.get("supply"),
-            cp_tx_index=None, xcp_burned=None,  # no Counterparty message
-            # First counter on the asset = "original"; any later one = reinscription.
-            reinscription=self.store.has_asset(asset),
-        )
-
-    def _store_counter(self, *, height, position, tx, env, txid, asset, asset_id,
-                       asset_longname, owner, divisible, supply, cp_tx_index,
-                       xcp_burned, reinscription) -> bool:
-        """Shared writer: blob + number + enrichment + insert + notify."""
-        sha = self.store.store_blob(env.body)
-        number = self.store.next_number()
-        content_type = env.content_type.decode("utf-8", errors="replace") if env.content_type else None
-        # Inscription cost (commit + reveal) is enrichment, never a blocker: a
-        # fetch failure must not stop a counter from being recorded.
+        # Inscription cost (commit + reveal) is enrichment, never a blocker.
         try:
             fee, tx_size = self.btc.get_inscription_cost(txid, reveal_tx=tx)
         except (BitcoindError, KeyError, IndexError, TypeError):
             fee, tx_size = None, None
+
+        number = self.store.next_number()
+        sha = self.store.store_blob(body)
         rec = CounterRecord(
             asset=asset,
-            asset_id=str(asset_id) if asset_id is not None else None,
-            asset_longname=asset_longname,
+            asset_id=(str(asset_info["asset_id"]) if asset_info.get("asset_id") is not None else None),
+            asset_longname=row.get("asset_longname") or asset_info.get("asset_longname"),
+            kind=kind,
             content_type=content_type,
+            content_type_raw=content_type_raw,
             content_sha256=sha,
-            content_length=len(env.body),
+            content_length=len(body),
+            # Textual per the CONSENSUS classifier (the one that decoded the
+            # bytes), not the display prefix: application/json etc. count.
+            is_pointer_like=is_pointer_like(
+                body,
+                textual=classify_mime_type(mime_raw or "text/plain", height) == "text",
+            ),
             mint_txid=txid,
+            msg_index=msg_index,
             block_index=height,
-            block_position=position,
-            cp_tx_index=cp_tx_index,
-            owner=owner,
-            divisible=divisible,
-            supply=supply,
+            cp_tx_index=int(row["tx_index"]),
+            source=row.get("issuer") or row.get("source"),
+            divisible=(bool(row["divisible"]) if row.get("divisible") is not None
+                       else asset_info.get("divisible")),
+            supply=asset_info.get("supply"),
             fee=fee,
             tx_size=tx_size,
-            xcp_burned=xcp_burned,
-            reinscription=reinscription,
+            xcp_burned=row.get("fee_paid"),
         )
         self.store.add_counter(number, rec)
-        label = "reinscription" if reinscription else "counter"
         self._notify(
-            f"{label} #{number}: {asset} "
-            f"({content_type or 'no content_type'}, {len(env.body)} bytes) @ {txid}"
+            f"counter #{number}: {rec.asset_longname or asset} [{kind}] "
+            f"({content_type or 'no content_type'}, {len(body)} bytes) @ {txid}"
         )
         return True
+
+    # --- reorg handling (N4) --------------------------------------------------
+
+    def check_reorg(self) -> None:
+        """Detect a reorg at the stored tip and roll back to the fork point.
+
+        If the chain's hash at our last indexed height no longer matches what
+        we stored, walk back through the tracked block hashes to the highest
+        height that still agrees, delete everything above it, and rewind the
+        cursor. Numbering re-derives identically on re-index (N4)."""
+        last = self.store.get_last_height(self.config.start_height)
+        if last < self.config.start_height:
+            return
+        stored = self.store.get_last_block_hash()
+        if stored is None:
+            return
+        try:
+            if self.btc.get_block_hash(last) == stored:
+                return
+        except BitcoindError:
+            return  # backend unavailable; the sync pass will surface it
+
+        lowest = self.store.lowest_tracked_height()
+        floor = max(lowest or self.config.start_height, self.config.start_height)
+        fork = last - 1
+        while fork >= floor:
+            ours = self.store.get_indexed_block_hash(fork)
+            if ours is not None and ours == self.btc.get_block_hash(fork):
+                break
+            fork -= 1
+        if fork < floor:
+            # The fork is deeper than the tracked block-hash window: rows below
+            # it may belong to the abandoned chain and reorg detection would be
+            # blind after a partial rollback. Refuse to guess — this needs a
+            # rescan from genesis (delete the data dir).
+            raise SystemExit(
+                f"reorg deeper than the {last - floor}-block tracked window at "
+                f"block {last}: cannot find the fork point. Rebuild the index "
+                f"from genesis (remove the data directory) and restart."
+            )
+        removed = self.store.rollback_to(fork)
+        self._notify(
+            f"reorg detected at block {last}: rolled back to {fork} "
+            f"({removed} counter(s) removed; re-indexing)"
+        )
 
     # --- run loops ---------------------------------------------------------
 
@@ -380,8 +375,18 @@ class Indexer:
         return min(self._btc_tip, self._cp_tip) - self.config.confirmations
 
     def sync_to_tip(self, stop_at: int | None = None) -> int:
+        self.check_reorg()
         start = self.store.get_last_height(self.config.start_height) + 1
         start = max(start, self.config.start_height)
+        if start > GENESIS_HEIGHT and self.store.count() == 0:
+            # Consensus warning: an empty index starting above genesis will
+            # number its first event #0 even though earlier events exist.
+            self._notify(
+                f"WARNING: fresh index starting at block {start} > genesis "
+                f"{GENESIS_HEIGHT}: numbering will NOT match spec-conformant "
+                f"indexers (counter #0 is at block 902005). Unset "
+                f"COUNTER_START_HEIGHT unless you know what you are doing."
+            )
         tip = self._target_tip()
         if stop_at is not None:
             tip = min(tip, stop_at)

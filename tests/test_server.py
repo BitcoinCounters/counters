@@ -19,9 +19,9 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters.config import Config  # noqa: E402
-from counters.server import app as appmod  # noqa: E402
-from counters.store import CounterRecord, Store  # noqa: E402
+from counters2.config import Config  # noqa: E402
+from counters2.server import app as appmod  # noqa: E402
+from counters2.store import CounterRecord, Store  # noqa: E402
 
 
 def _seed_store(data_dir: str) -> Config:
@@ -33,24 +33,25 @@ def _seed_store(data_dir: str) -> Config:
         0,
         CounterRecord(
             asset="TESTASSET", asset_id="123", asset_longname=None,
-            content_type="text/plain", content_sha256=sha, content_length=2,
-            mint_txid="aa" * 32, block_index=800000, block_position=3,
-            cp_tx_index=1, owner="bc1pstored", divisible=False, supply=1,
+            kind="issuance", content_type="text/plain", content_type_raw=None,
+            content_sha256=sha, content_length=2, is_pointer_like=False,
+            mint_txid="aa" * 32, msg_index=0, block_index=902005,
+            cp_tx_index=1, source="bc1pstored", divisible=False, supply=1,
         ),
     )
-    # A reinscription onto the SAME asset (a second counter, no CP message).
+    # A later event on the SAME asset (per-event numbering, N6).
     sha2 = store.store_blob(b"v2")
     store.add_counter(
         1,
         CounterRecord(
             asset="TESTASSET", asset_id="123", asset_longname=None,
-            content_type="text/plain", content_sha256=sha2, content_length=2,
-            mint_txid="bb" * 32, block_index=800001, block_position=1,
-            cp_tx_index=None, owner="bc1pstored", divisible=False, supply=1,
-            reinscription=True,
+            kind="issuance", content_type="text/plain", content_type_raw=None,
+            content_sha256=sha2, content_length=2, is_pointer_like=False,
+            mint_txid="bb" * 32, msg_index=0, block_index=902006,
+            cp_tx_index=2, source="bc1pstored", divisible=False, supply=1,
         ),
     )
-    store.set_last_height(800001, None)   # so /status reports a synced height
+    store.set_last_height(902006, None)   # so /status reports a synced height
     store.set_fee(0, 333, 111)            # mint fee/size (no bitcoind needed in tests)
     store.set_xcp_burned(0, 50000000)     # 0.5 XCP burned (no Counterparty needed)
     store.commit()
@@ -84,32 +85,34 @@ def test_api_and_static():
         status, ctype, body = _get(base, "/counters?limit=5")
         assert status == 200 and "application/json" in ctype
         data = json.loads(body)
-        assert len(data["counters"]) == 2     # original + reinscription
+        assert len(data["counters"]) == 2     # original + a later event (N6)
         recs = {r["number"]: r for r in data["counters"]}
         rec = recs[0]
         assert rec["number"] == 0
         assert rec["asset"] == "TESTASSET"
+        assert rec["kind"] == "issuance"
         assert rec["size"] == 2
         assert rec["body"] == "hi"           # small text inlined
-        assert rec["block"] == 800000 and rec["position"] == 3
+        assert rec["block"] == 902005 and rec["msg_index"] == 0
         assert rec["tx_index"] == 1   # → tokenscan.io/tx/<tx_index>
         assert rec["fee"] == 333 and rec["tx_size"] == 111
         assert rec["xcp_burned"] == 50000000
         assert rec["supply"] == 1 and rec["divisible"] is False
-        assert rec["reinscription"] is False           # #0 is the original
-        assert recs[1]["reinscription"] is True        # #1 is a reinscription
+        assert rec["owner"] == "bc1pstored" and rec["source"] == "bc1pstored"
+        assert rec["is_pointer_like"] is False
+        assert rec["rolling_hash"] and recs[1]["rolling_hash"] != rec["rolling_hash"]
 
         # --- /status: latest synced height + total count ---
         status, ctype, body = _get(base, "/status")
         assert status == 200 and "application/json" in ctype
         st = json.loads(body)
-        assert st["count"] == 2 and st["indexed"] == 800001
+        assert st["count"] == 2 and st["indexed"] == 902006
 
         # --- /block/<height>: counters minted in a block ---
-        status, _, body = _get(base, "/block/800000")
+        status, _, body = _get(base, "/block/902005")
         assert status == 200
         blk = json.loads(body)
-        assert blk["block"] == 800000 and blk["count"] == 1
+        assert blk["block"] == 902005 and blk["count"] == 1
         assert blk["counters"][0]["number"] == 0
         # an empty block reports zero, not an error
         empty = json.loads(_get(base, "/block/123456")[2])
@@ -122,8 +125,8 @@ def test_api_and_static():
         assert c0["supply"] == 1 and c0["divisible"] is False
         assert c0["locked"] is None   # live lookup stubbed offline
         # the single-counter endpoint lists every counter on the asset
-        assert [(a["number"], a["reinscription"]) for a in c0["asset_counters"]] == \
-            [(0, False), (1, True)]
+        assert [(a["number"], a["kind"]) for a in c0["asset_counters"]] == \
+            [(0, "issuance"), (1, "issuance")]
         # resolving by asset name returns the ORIGINAL (lowest number)
         by_asset = json.loads(_get(base, "/counter/TESTASSET")[2])
         assert by_asset["number"] == 0

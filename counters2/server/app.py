@@ -143,21 +143,25 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "number": row["number"],
         "asset": _display_name(row),
         "asset_id": row["asset_id"],
+        "kind": row["kind"],  # 'issuance' | 'fairminter'
         "content_type": row["content_type"],
+        "content_type_raw": row["content_type_raw"],
         "size": row["content_length"],
-        "owner": owner if owner is not None else row["owner"],
+        "is_pointer_like": bool(row["is_pointer_like"]),
+        "owner": owner if owner is not None else row["source"],
+        "source": row["source"],
         "txid": row["mint_txid"],
+        "msg_index": row["msg_index"],
         "block": row["block_index"],
-        "position": row["block_position"],
         "tx_index": row["cp_tx_index"],  # Counterparty tx index → tokenscan.io/tx/<n>
         "sha256": row["content_sha256"],
+        "rolling_hash": row["rolling_hash"],
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
         "locked": None,  # mutable; filled live on the single-counter endpoint
         "fee": row["fee"],
         "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
-        "reinscription": bool(row["reinscription"]),
         "body": _inline_body(store, row) if with_body else None,
     }
 
@@ -207,7 +211,9 @@ class Handler(BaseHTTPRequestHandler):
         store = Store(self.config)
         try:
             payload = {
-                "indexed": store.get_last_height(self.config.start_height),
+                # 0-default => -1 on a fresh DB, which the frontend treats as
+                # "nothing indexed yet" instead of linking a phantom block.
+                "indexed": store.get_last_height(0),
                 "count": store.count(),
                 "genesis": 0,
                 "commit": GIT_COMMIT,
@@ -235,10 +241,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             limit = 120
         before = qs.get("before", [None])[0]
+        if before not in (None, "", "null"):
+            try:
+                before = int(before)
+            except ValueError:
+                return self._json({"error": "before must be an integer"}, status=400)
         store = Store(self.config)
         try:
             if before not in (None, "", "null"):
-                rows = store.list_before(int(before), limit)
+                rows = store.list_before(before, limit)
             else:
                 rows = store.list_recent(limit)
             payload = {"counters": [record_dict(store, r) for r in rows]}
@@ -253,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
             if row is None:
                 return self._json({"error": "not found"}, status=404)
             info = _live_asset(self.config, row["asset"])
-            owner = info.get("owner") or row["owner"]
+            owner = info.get("owner") or row["source"]
             rec = record_dict(store, row, owner=owner)
             rec["locked"] = info.get("locked")
             if info.get("supply") is not None:
@@ -264,12 +275,15 @@ class Handler(BaseHTTPRequestHandler):
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
                 rec["xcp_burned"] = self._ensure_xcp_burned(store, row)
-            # All counters inscribed on this asset (original first, then any
-            # reinscriptions) so the explorer can list them together.
+            # All counters on this asset (the original first, then the later
+            # events it accumulated — N6) so the explorer lists them together.
             siblings = store.get_counters_by_asset(row["asset"])
+            first = siblings[0]["number"] if siblings else row["number"]
+            rec["original"] = row["number"] == first
             rec["asset_counters"] = [
                 {"number": s["number"],
-                 "reinscription": bool(s["reinscription"]),
+                 "kind": s["kind"],
+                 "original": s["number"] == first,
                  "content_type": s["content_type"]}
                 for s in siblings
             ]
@@ -293,10 +307,9 @@ class Handler(BaseHTTPRequestHandler):
         persist it (best effort — null if Core is unreachable)."""
         try:
             cp = CounterpartyClient(self.config)
-            rows = cp.get_block_issuances(row["block_index"]).get(row["mint_txid"], [])
             burned = next(
-                (int(r["fee_paid"]) for r in rows
-                 if cp.is_creation(r) and r.get("fee_paid") is not None),
+                (int(r["fee_paid"]) for r in cp.get_issuances_by_tx(row["mint_txid"])
+                 if r.get("fee_paid") is not None),
                 None,
             )
             store.set_xcp_burned(row["number"], burned)
@@ -391,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(config: Config, host: str = "127.0.0.1", port: int = 8081) -> ThreadingHTTPServer:
     """Build (but do not start) the explorer HTTP server. The caller drives it —
     either blocking via run() for a serve-only process, or on a background thread
-    when `counters server` also runs the indexer in the foreground."""
+    when `counters2 server` also runs the indexer in the foreground."""
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.config = config  # type: ignore[attr-defined]
     return httpd
