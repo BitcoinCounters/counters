@@ -58,7 +58,7 @@ chain by a fresh sync. Only Bitcoin's copy is load-bearing.
 
 | Term | Meaning |
 |------|---------|
-| **Taproot envelope** | Counterparty v11's witness data encoding: an `OP_FALSE OP_IF … OP_ENDIF`/`OP_CHECKSIG` tapscript revealed by a commit/reveal pair. Two styles exist — the size-optimised **generic** envelope and the ordinals-compatible **"ord/xcp"** envelope (emitted with `inscription=true`). Both count equally. |
+| **Taproot envelope** | Counterparty v11's witness data encoding: an `OP_FALSE OP_IF … OP_ENDIF`/`OP_CHECKSIG` tapscript revealed by a commit/reveal pair. Two styles exist — the size-optimised **generic** envelope and the ordinals-compatible **"ord/xcp"** envelope (emitted with `inscription=true`). Both count equally; the style is recorded as enrichment (`envelope`, [§10](#10-enrichment-non-consensus)). An ord/xcp-style event is **also an ordinals inscription** — ord indexes the same reveal — the same dual-identity §5.4 describes for `STAMP:` payloads (34 of the first 87 counters are ord-style; #83/#84 are all three at once: counter, cursed stamp, and ordinals inscription). |
 | **Commit tx** | Pays to the P2TR address committing to the envelope tapscript. |
 | **Reveal tx** | Script-path-spends the commit output, exposing the envelope in **input 0's witness**, and carries an `OP_RETURN` holding only the literal marker `CNTRPRTY`. This is the transaction Counterparty parses and the one a counter is keyed to. |
 | **File event** | A qualifying Counterparty message (issuance or fairminter deploy) whose description is non-empty and taproot-carried. One counter per file event. |
