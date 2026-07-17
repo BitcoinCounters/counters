@@ -468,7 +468,7 @@ const API = location.protocol.startsWith('http') ? location.origin : null;
 // Pages are aligned to the gap-free number space: page k = counters
 // [k*PAGE, k*PAGE+PAGE). Every page URL is permanent — #/p/0 is always
 // genesis — and #/ shows the newest (possibly partial) page.
-const PAGE = 60;
+const PAGE = 100;
 async function fetchPage(page, count){
   const start = page * PAGE;
   const n = Math.min(PAGE, count - start);         // clamp so the top page never spills over
