@@ -8,12 +8,35 @@
 
 A **Bitcoin counter** - A.K.A. Counter Inscription - is a file permanently inscribed on the Bitcoin Blockchain, linked to a counterparty asset, and assigned a number in order of inscription. 
 
-To be a valid counter, a file must satisfy both conditions at once: it must be written in witness data on the Bitcoin Blockchain, and it must be written inside the description of a **Counterparty asset** at the same time. 
+To be a valid counter, a file must be written inside the description of a **Counterparty asset** via a Counterparty message written into the **witness data** of a Bitcoin transaction. 
 
 The Counterparty protocol takes care of asset naming, ownership, and transfer. The counters protocol defines what is a valid counter, and the counters indexer scans the blockchain and finds all valid counters, and assigns inscription numbers.  
 
+All Counterparty asset types are valid, including named, unnamed, subassets, divisible, and so on. Unlimited counters can be reissued on the same asset. 
 
 
+## Why Witness Data
+
+Counters are intended to make maximum use of the Segwit discount. Witness data is the cheapest place to inscribe files (4x cheaper than usual). 
+
+## Ordinals & Stamps comparison
+
+Bitcoin Stamps use Counterparty Assets, but the data lives in transaction outputs. Ordinal inscriptions live in witness data, but they are bound to individual sats instead of counterparty assets. The Counters protocol is designed to make full use of counterparty functionality while also using the cheapest way to inscribe onto the Bitcoin Blockchain. 
+
+| Protocol | File stored in | Identity / asset layer |
+|---|---|---|
+| **Counters** | witness data (cheap) | Counterparty asset |
+| Ordinals | witness data (cheap) | individual sats (rare sats) |
+| Bitcoin Stamps | transaction outputs (full price) | Counterparty asset |
+| Cursed Stamps | witness data (cheap) | Counterparty asset |
+
+*Cursed stamps* are `STAMP:` image payloads inscribed in witness data rather than the classic output encodings — mechanically the same as a counter, which is why a `STAMP:` counter is also a cursed stamp.
+
+## Technical Notes
+
+A Counter can be inscribed via 2 counterparty messages. Issue, and Fairminter Deploy. 
+
+Files written in the description of a **Counterparty asset** via a counterparty message written into Op return are not valid
 
 ▎ An asset's description can change — the owner can reissue with new content. That never invalidates anything, because a counter is not the asset's current description; it is the event of inscribing one. Each counter is pinned forever to its own transaction: the file sits in that transaction's witness data, and the number records its place in history. Updating a description writes a new page — a new counter — it never erases an old one.
 
