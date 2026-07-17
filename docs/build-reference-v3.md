@@ -240,7 +240,7 @@ Display rules never affect anything in this document.
   transfers, or destroys never renumber or invalidate an existing counter.
 - **N6 — Per-event numbering.** Numbering is per qualifying *event*, not per
   asset: an unlocked asset accumulates a new counter for every qualifying
-  reissuance (and fairminter deploy) it produces. The lowest-numbered counter
+  reinscription — a Counterparty reissuance — (or fairminter deploy) it produces. The lowest-numbered counter
   on an asset is its *original*; the explorer lists all of an asset's counters
   together.
 
@@ -347,7 +347,7 @@ detach.
 | **Envelope** | Own `COUNT` envelope, parsed by this indexer. | Counterparty's taproot envelope; content deferred to Counterparty state. |
 | **Content** | Envelope body bytes. | The asset's `description` as stored by Counterparty ([§5](#5-content)). |
 | **Qualifying events** | Asset creations + owner-signed reinscriptions. | Valid issuances (all variants, fairmints excluded) + fairminter deploys ([§3](#3-qualifying-events-validity-rules)). |
-| **Reinscriptions** | Message-less, authorised by owner signature. | Removed — every counter is a Counterparty message. A reissuance with a new taproot-carried description is the nearest equivalent (N6). |
+| **Reinscriptions** | Message-less, authorised by owner signature. | A **reinscription** attaches new content to an asset you own — composed as a Counterparty reissuance with a fresh taproot-carried description, and numbered like any other counter (N6). |
 | **Genesis** | Block 955,251 (`COUNTERZERO`). | Block 902,000 (`taproot_support` activation); #0 = XDUALS @ 902,005. |
 | **Ordering** | (block, position-in-block). | (block, Counterparty `tx_index`, `msg_index`). |
 | **Reorgs** | Out of scope. | Log-structured rollback (N4). |

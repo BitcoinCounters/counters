@@ -504,7 +504,7 @@ async function renderDetail(id){
       <h1>${esc(c.asset)}</h1>
       <span class="vbadge"><span class="dot"></span>valid counter</span>
       ${c.kind==='fairminter' ? `<span class="vbadge re"><span class="dot"></span>fairminter</span>` : ''}
-      ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reissue</span>` : ''}
+      ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reinscribe</span>` : ''}
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
@@ -532,7 +532,7 @@ async function renderDetail(id){
       <div class="acs">
         <div class="k">${c.asset_counters.length} counters on ${esc(c.asset)}</div>
         <div class="list">
-          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.original?'':'re'}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.original?'original':(s.kind==='fairminter'?'fairminter':'reissue')}</em></a>`).join('')}
+          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.original?'':'re'}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.original?'original':(s.kind==='fairminter'?'fairminter':'reinscribe')}</em></a>`).join('')}
         </div>
       </div>` : ''}
     </div>`;

@@ -209,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--asset",
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
-                             "reissuance (new counter, same asset)")
+                             "reinscription (new counter, same asset)")
     p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")

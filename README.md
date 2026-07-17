@@ -44,8 +44,8 @@ the separate Bitcoin node; the two are always named in full to avoid
 confusion.)
 
 Numbering is **per event**: an unlocked asset accumulates a new counter for
-every qualifying issuance (e.g. a reissuance with fresh taproot-carried
-content). Reorgs roll back log-structured (the fork point is found from
+every qualifying issuance (e.g. a reinscription — a Counterparty reissuance —
+with fresh taproot-carried content). Reorgs roll back log-structured (the fork point is found from
 stored block hashes; numbering re-derives identically), and the index never
 advances past Counterparty's parsed height.
 
@@ -147,7 +147,7 @@ counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign
 counters wallet --name mywallet inscribe --file cat.png --dry-run
 counters wallet --name mywallet inscribe --file cat.png                     # free numeric asset
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
-counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reissue with new content (a new counter)
+counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
 
 # --- asset management (owner-sourced Counterparty issuances) ---

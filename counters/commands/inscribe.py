@@ -16,7 +16,7 @@ already signed with its ephemeral envelope key. Our job is only to:
 
 Key custody stays in Bitcoin Core. There is no local envelope construction.
 
-New content on an EXISTING asset is a plain reissuance with a fresh
+New content on an EXISTING asset is a reinscription — a Counterparty reissuance with a fresh
 taproot-carried description (quantity 0 keeps the supply): under per-event
 numbering (N6) it earns a new counter. The wallet must hold the asset's
 issuance rights. Constraints inherited from Counterparty: no
@@ -133,13 +133,13 @@ def cmd_inscribe(
         return 1
 
     # Resolve the asset. Three shapes:
-    #   - existing asset you own: reissue with the new description (quantity 0)
+    #   - existing asset you own: reinscribe with the new description (quantity 0)
     #   - new named asset (0.5 XCP burn): source must hold the XCP
     #   - no asset given: free numeric asset
     if supply < 1:
         print(f"--supply must be a positive whole number, got {supply}", file=sys.stderr)
         return 1
-    reissue = False
+    reinscribe = False
     named = False
     quantity = supply * COIN if divisible else supply
     if asset is not None:
@@ -149,18 +149,18 @@ def cmd_inscribe(
             return 1
         info = cp.get_asset(asset)
         if info:
-            # Existing asset -> reissuance carrying new content.
+            # Existing asset -> reinscription (a Counterparty reissuance) carrying new content.
             owner = info.get("owner") or info.get("issuer")
             if owner not in wallet_addrs:
                 print(f"asset {asset} exists and its issuance rights are held by "
                       f"{owner}, which is not in wallet {wallet!r}. Only the owner "
-                      f"can attach new content (a reissuance).", file=sys.stderr)
+                      f"can attach new content (a reinscription).", file=sys.stderr)
                 return 1
             if info.get("description_locked"):
                 print(f"{asset}'s description is locked; no new content can ever "
                       f"be attached to it.", file=sys.stderr)
                 return 1
-            reissue = True
+            reinscribe = True
             asset = info.get("asset") or asset
             divisible = bool(info.get("divisible"))
             quantity = 0  # keep the supply; the event is the description change
@@ -246,15 +246,15 @@ def cmd_inscribe(
     all_ok = bool(checks) and all(c.get("allowed") for c in checks)
 
     # report
-    if reissue:
-        kind = " (reissuance — new content on your existing asset)"
+    if reinscribe:
+        kind = " (reinscription — new content on your existing asset)"
     elif named:
         kind = " (named)"
     else:
         kind = " (numeric, free)"
     print(f"asset            : {asset}{kind}")
     print(f"content_type     : {mime_type}  ({len(body)} bytes)")
-    if not reissue:
+    if not reinscribe:
         print(f"supply           : {supply}{' divisible' if divisible else ''}"
               f"{' (LOCKED)' if lock else ''}")
     print(f"source           : {source}")
