@@ -568,15 +568,63 @@ function route(){
 }
 window.addEventListener('hashchange',route);
 
-/* Docs live in static/docs.html — a plain HTML fragment, edited without
-   touching this file — fetched once and injected on first visit. */
+/* Docs live in static/docs.md — plain markdown, edited without touching this
+   file — fetched once on first visit and rendered by the mini-renderer below.
+   Conventions: "## Title {#anchor}" = section (TOC auto-generated);
+   "> **Lead.** text" = callout; fences highlight trailing # comments;
+   ordered lists get copper numbers, bullets get ›. */
+/* md-render-start */
+function mdToHtml(md){
+  const escMd=s=>s.replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
+  const inline=s=>escMd(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+    .replace(/\*([^*]+)\*/g,'<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(_,t,u)=>
+      `<a href="${u}"${/^https?:/.test(u)?' target="_blank" rel="noopener" class="out"':''}>${t}</a>`);
+  const out=[],toc=[];
+  let para=[],list=null,quote=[],fence=null;
+  const flushPara=()=>{if(para.length){out.push(`<p>${inline(para.join(' '))}</p>`);para=[];}};
+  const flushList=()=>{if(list){out.push('<ul>'+list.map(([n,t])=>`<li data-n="${n}">${inline(t)}</li>`).join('')+'</ul>');list=null;}};
+  const flushQuote=()=>{if(quote.length){out.push(`<div class="callout">${inline(quote.join(' '))}</div>`);quote=[];}};
+  const flushAll=()=>{flushPara();flushList();flushQuote();};
+  for(const line of md.replace(/<!--[\s\S]*?-->/g,'').split('\n')){
+    if(fence!==null){
+      if(/^```/.test(line)){out.push('<pre>'+fence.join('\n')+'</pre>');fence=null;}
+      else fence.push(escMd(line).replace(/(#.*)$/,'<span class="c">$1</span>'));
+      continue;
+    }
+    let m;
+    if(m=line.match(/^```/)){flushAll();fence=[];}
+    else if(m=line.match(/^##\s+(.+?)(?:\s*\{#([\w-]+)\})?\s*$/)){
+      flushAll();
+      const id=m[2]||m[1].toLowerCase().replace(/[^\w]+/g,'-').replace(/^-|-$/g,'');
+      toc.push(`<a href="#/docs#${id}">${inline(m[1])}</a>`);
+      out.push(`<h2 id="${id}">${inline(m[1])}</h2>`);
+    }
+    else if(m=line.match(/^###\s+(.+)$/)){flushAll();out.push(`<h3>${inline(m[1])}</h3>`);}
+    else if(m=line.match(/^>\s?(.*)$/)){flushPara();flushList();if(m[1])quote.push(m[1]);}
+    else if(m=line.match(/^(\d+)\.\s+(.+)$/)){flushPara();flushQuote();(list=list||[]).push([m[1],m[2]]);}
+    else if(m=line.match(/^-\s+(.+)$/)){flushPara();flushQuote();(list=list||[]).push(['›',m[1]]);}
+    else if(/^\s{2,}\S/.test(line)&&list){list[list.length-1][1]+=' '+line.trim();}
+    else if(!line.trim()){flushAll();}
+    else{flushList();flushQuote();para.push(line.trim());}
+  }
+  flushAll();
+  if(fence!==null)out.push('<pre>'+fence.join('\n')+'</pre>');
+  return {html:out.join('\n'),toc:toc.join('')};
+}
+/* md-render-end */
 let docsLoaded=false;
 async function loadDocs(){
   if(docsLoaded) return;
   try{
-    const r=await fetch('docs.html');
+    const r=await fetch('docs.md');
     if(!r.ok) throw new Error(r.status);
-    el('view-docs').innerHTML=await r.text();
+    const {html,toc}=mdToHtml(await r.text());
+    el('view-docs').innerHTML=
+      `<div class="wrap docs"><aside class="toc"><div>Contents</div>${toc}</aside>`+
+      `<div class="doc"><article>${html}</article></div></div>`;
     docsLoaded=true;
   }catch(_){
     el('view-docs').innerHTML='<div class="wrap docs"><div class="empty"><b>Docs unavailable</b>Serve the explorer with <code>counters server</code> to read the docs.</div></div>';

@@ -102,6 +102,7 @@ STATIC_TYPES = {
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".webmanifest": "application/manifest+json",
+    ".md": "text/markdown; charset=utf-8",
 }
 
 # Inline only small textual blobs in JSON responses; larger or binary content
