@@ -12,6 +12,24 @@ order of creation. Counterparty carries identity, ownership, naming, transfer,
 *and the content itself*; the counters protocol only defines **which
 Counterparty events qualify** and **how they are numbered**.
 
+Equivalently: a counter is one payload passing **two tests at once** —
+
+1. it is the **description of a Counterparty asset**, recorded by a valid
+   issuance or fairminter deploy (R1–R3); and
+2. those description bytes reached the chain **inside witness data**, via the
+   taproot envelope (R4).
+
+Either test alone is nothing. A witness-data file with no asset description
+(an ordinals inscription, a raw envelope) fails the first; the same
+description delivered by classic `OP_RETURN` encoding is a valid Counterparty
+description but fails the second. Only the intersection is numbered.
+
+On storage: the file's **canonical copy is Bitcoin's**, in witness data —
+permanent and consensus-critical. Every Counterparty node's ledger also holds
+the bytes (the `issuances.description` column), as does this indexer's blob
+store, but those are *derived* copies, rebuilt byte-identically from the
+chain by a fresh sync. Only Bitcoin's copy is load-bearing.
+
 ---
 
 ## 1. Design principles
