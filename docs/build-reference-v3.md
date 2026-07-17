@@ -137,6 +137,22 @@ R4. Copied state is not new content.
 
 ### 5.1 Bytes (canonical)
 
+**Wire anatomy.** Under v11 taproot encoding the issuance message is a
+message-type id followed by a CBOR array (Core's `issuance.py` compose):
+
+```
+[ asset_id, quantity, divisible, lock, reset, mime_type, description ]
+```
+
+The `description` slot holds the **raw file bytes, verbatim** — no filename,
+no length marker, no wrapper. Metadata such as the MIME type rides alongside
+as sibling fields, never as a prefix on the content; whatever bytes occupy
+the description slot *are* the counter's content, exactly (a minter-supplied
+prefix like `STAMP:` is part of the file). The whole message travels inside
+the reveal transaction's witness envelope, so the description write and the
+witness write are the same bytes in the same transaction — the two-test
+definition above is satisfied by a single payload.
+
 Counterparty's API returns `description` as a string whose encoding follows
 Core's consensus helper `bytes_to_content` (`helpers.py`):
 
