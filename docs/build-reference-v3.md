@@ -315,7 +315,11 @@ lifecycle events are never conditions.
 Each stored counter also carries best-effort metadata that never gates
 validity: `asset_id`, `asset_longname`, `source` (issuer), `divisible`,
 `supply`, inscription cost (commit + reveal fee and serialized size),
-`xcp_burned` (`fee_paid`), `content_type_raw`, and `is_pointer_like`. A
+`xcp_burned` (`fee_paid`), `content_type_raw`, `is_pointer_like`, and
+`envelope` — the carrier's style, `ord` (the ordinals-compatible envelope;
+such an event is *also* an ordinals inscription, the same dual-identity §5.4
+describes for stamps) or `generic`, detected exactly as counterparty-rs
+classifies it (third tapscript push == `"ord"`, fourth == `0x07`). A
 failure to fetch enrichment must not prevent a valid counter from being
 recorded.
 

@@ -175,6 +175,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "content_type_raw": row["content_type_raw"],
         "size": row["content_length"],
         "is_pointer_like": bool(row["is_pointer_like"]),
+        "envelope": row["envelope"],  # 'ord' | 'generic' | null (pre-backfill)
         "stamp_mime": stamp[1] if stamp else None,
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],

@@ -136,6 +136,26 @@ def is_taproot_reveal(tx: dict) -> bool:
     return len(witness) == 3
 
 
+def envelope_style(tx: dict) -> str | None:
+    """'ord' | 'generic' for a taproot reveal, None for non-reveals.
+
+    Mirrors counterparty-rs's own classifier (bitcoin_client.rs): the envelope
+    is ord-style iff the tapscript's third instruction pushes the literal
+    b"ord" and the fourth pushes the single byte 0x07 (the metaprotocol tag,
+    followed by "xcp"). Enrichment metadata only — both styles count equally
+    (R4), so this never gates validity or numbering."""
+    if not is_taproot_reveal(tx):
+        return None
+    witness = (tx.get("vin") or [{}])[0].get("txinwitness") or []
+    try:
+        ops = parse_script(bytes.fromhex(witness[1]))
+    except (ScriptParseError, ValueError, IndexError):
+        return "generic"
+    if len(ops) >= 4 and ops[2][1] == b"ord" and ops[3][1] == b"\x07":
+        return "ord"
+    return "generic"
+
+
 def commit_txid(tx: dict) -> str | None:
     """The commit transaction's txid for a reveal: the prevout of input 0
     (which script-path-spends the commit output). None for non-reveals."""

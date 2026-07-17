@@ -6,7 +6,40 @@
 
 ## What a counter is {#what}
 
-A **Bitcoin counter** is a numbered file event: a file committed to Bitcoin as a **Counterparty asset description** carried in Counterparty's taproot envelope, numbered in order of creation.
+A **Bitcoin counter** - A.K.A. Counter Inscription - is a file permanently inscribed on the Bitcoin Blockchain, linked to a counterparty asset, and assigned a number in order of inscription. 
+
+To be a valid counter, a file must satisfy both conditions at once: it must be written in witness data on the Bitcoin Blockchain, and it must be written inside the description of a **Counterparty asset** at the same time. 
+
+The Counterparty protocol takes care of asset naming, ownership, and transfer. The counters protocol defines what is a valid counter, and the counters indexer scans the blockchain and finds all valid counters, and assigns inscription numbers.  
+
+
+
+
+▎ An asset's description can change — the owner can reissue with new content. That never invalidates anything, because a counter is not the asset's current description; it is the event of inscribing one. Each counter is pinned forever to its own transaction: the file sits in that transaction's witness data, and the number records its place in history. Updating a description writes a new page — a new counter — it never erases an old one.
+
+And if you want the one-line contrast that makes it click:
+
+▎ Counterparty state answers "what is the description now?" Counters answer "what was ever inscribed, and in what order?"
+
+If you want something warmer, the profile-picture analogy lands well with non-technical readers: changing your profile picture doesn't delete the old photos — the asset's description is the current picture; counters are the album.
+
+Two placement thoughts: this belongs right after your two-conditions sentence (it preempts the obvious "but descriptions can change?!" objection), and it dovetails with the existing "New content on an existing asset" section — which already says numbering is per-event and that the asset page lists all its counters with the lowest number as the original. You might end the new paragraph with "(see New content on an existing asset)" so the two link up.
+
+
+- numbered inscription
+- stored inside bitcoin blockchain
+- carried in counterparty asset description
+- inscribed on top of counterparty asset. 
+- forever associated with counterparty asset
+- in witness data
+- counterparty protocol is used for asset identity, ownership, naming, transfer
+- assigned a number in order of inscription
+
+
+  as a **Counterparty asset description** carried in Counterparty's taproot envelope, numbered in order of creation.
+
+- a file commited on chain, 
+
 
 Counterparty carries identity, ownership, naming, transfer — and the content itself. A counter's file is exactly what Counterparty consensus stores as the asset's description. The protocol adds nothing on chain; it defines only which Counterparty events qualify and how they are numbered.
 

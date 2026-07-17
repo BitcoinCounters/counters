@@ -28,7 +28,7 @@ from ..config import GENESIS_HEIGHT, Config
 from ..content import classify_mime_type, content_bytes, is_pointer_like, normalize_mime
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..progress import ProgressBar
-from ..reveal import is_taproot_reveal
+from ..reveal import envelope_style, is_taproot_reveal
 from ..store import CounterRecord, Store
 
 log = logging.getLogger("counters")
@@ -227,6 +227,7 @@ class Indexer:
                 body,
                 textual=classify_mime_type(mime_raw or "text/plain", height) == "text",
             ),
+            envelope=envelope_style(tx),
             mint_txid=txid,
             msg_index=msg_index,
             block_index=height,
@@ -429,8 +430,30 @@ class Indexer:
                 self._progress = None
         return total
 
+    def backfill_envelopes(self) -> int:
+        """Fill the envelope style for counters indexed before the column
+        existed. One raw-tx fetch per missing row, once, then never again —
+        best-effort (enrichment): a failure leaves the row NULL for next time."""
+        missing = self.store.rows_missing_envelope()
+        done = 0
+        for row in missing:
+            try:
+                style = envelope_style(
+                    self.btc.get_raw_transaction(row["mint_txid"], verbose=True)
+                )
+            except BitcoindError:
+                continue
+            if style is not None:
+                self.store.set_envelope(row["number"], style)
+                done += 1
+        if done:
+            self.store.commit()
+            log.info("backfilled envelope style for %d counter(s)", done)
+        return done
+
     def run(self) -> None:
         self._install_signal_handler()
+        self.backfill_envelopes()
         resume = self.store.get_last_height(self.config.start_height) + 1
         resume = max(resume, self.config.start_height)
         log.debug(
