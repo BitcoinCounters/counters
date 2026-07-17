@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2 import counterwallet  # noqa: E402
+from counters import counterwallet  # noqa: E402
 
 # Sample 12-word Counterwallet phrase from the official Counterparty forum
 # recovery FAQ (all words are in the 1626-word Electrum-v1 list).

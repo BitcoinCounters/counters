@@ -12,8 +12,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2.config import EXTENDED_MIME_GATE, GENESIS_HEIGHT  # noqa: E402
-from counters2.content import (  # noqa: E402
+from counters.config import EXTENDED_MIME_GATE, GENESIS_HEIGHT  # noqa: E402
+from counters.content import (  # noqa: E402
     classify_mime_type,
     content_bytes,
     is_pointer_like,

@@ -1,4 +1,4 @@
-"""Bitcoin Counters v3 (counters2) — Counterparty taproot-envelope file-event
+"""Bitcoin Counters v3 (counters) — Counterparty taproot-envelope file-event
 indexer, explorer, and wallet.
 
 A counter is a numbered file event: a Counterparty asset description carried

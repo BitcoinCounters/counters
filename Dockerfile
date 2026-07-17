@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml .
-COPY counters2/ counters2/
+COPY counters/ counters/
 
 RUN pip install --no-cache-dir -e .
 

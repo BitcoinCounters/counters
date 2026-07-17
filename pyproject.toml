@@ -14,11 +14,11 @@ dependencies = [
 ]
 
 [project.scripts]
-counters = "counters2.__main__:main"
+counters = "counters.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["counters2*"]
+include = ["counters*"]
 
 [tool.setuptools.package-data]
-"counters2.server" = ["static/*"]
-"counters2" = ["electrum1_words.txt"]
+"counters.server" = ["static/*"]
+"counters" = ["electrum1_words.txt"]

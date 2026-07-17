@@ -10,8 +10,8 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2.commands import serve  # noqa: E402
-from counters2.config import Config  # noqa: E402
+from counters.commands import serve  # noqa: E402
+from counters.config import Config  # noqa: E402
 
 
 class _FakeHttpd:

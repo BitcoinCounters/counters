@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="counters2/server/static/counters-logo-512.png" alt="Bitcoin Counters" width="160">
+  <img src="counters/server/static/counters-logo-512.png" alt="Bitcoin Counters" width="160">
 </p>
 
 # Bitcoin Counters v3 — Indexer & Wallet (`counters`)
@@ -102,7 +102,7 @@ Core running on the host.
 ## Usage
 
 Invoke as `counters <command>` after `pip install -e .`, or equivalently
-`python -m counters2 <command>`.
+`python -m counters <command>`.
 
 ```bash
 # --- indexing ---
@@ -176,7 +176,7 @@ python tests/test_reveal.py   # zero-dependency runners (also: test_content.py, 
 ## Layout
 
 ```
-counters2/
+counters/
   config.py         protocol constants (genesis, marker, MIME gate) + env-driven Config
   reveal.py         script tokenizer + taproot-reveal (carrier) detection — rule R4
   content.py        deterministic content derivation + MIME normalization — §5

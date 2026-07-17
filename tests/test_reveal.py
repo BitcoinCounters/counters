@@ -10,8 +10,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2.config import REVEAL_OP_RETURN_SCRIPT  # noqa: E402
-from counters2.reveal import (  # noqa: E402
+from counters.config import REVEAL_OP_RETURN_SCRIPT  # noqa: E402
+from counters.reveal import (  # noqa: E402
     ScriptParseError,
     commit_txid,
     is_marker_op_return,

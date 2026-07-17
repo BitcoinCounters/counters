@@ -14,12 +14,12 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2.bitcoind import BitcoindError  # noqa: E402
-from counters2.config import Config  # noqa: E402
-from counters2.counterparty import CounterpartyError  # noqa: E402
-from counters2.indexer import Indexer  # noqa: E402
-from counters2.progress import ProgressBar  # noqa: E402
-from counters2.store import Store  # noqa: E402
+from counters.bitcoind import BitcoindError  # noqa: E402
+from counters.config import Config  # noqa: E402
+from counters.counterparty import CounterpartyError  # noqa: E402
+from counters.indexer import Indexer  # noqa: E402
+from counters.progress import ProgressBar  # noqa: E402
+from counters.store import Store  # noqa: E402
 
 
 class _FakeTTY(io.StringIO):

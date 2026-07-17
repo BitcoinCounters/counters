@@ -17,9 +17,9 @@ import io  # noqa: E402
 
 from mnemonic import Mnemonic  # noqa: E402
 
-from counters2.commands import wallet  # noqa: E402
-from counters2.commands.wallet import _bip39_problem  # noqa: E402
-from counters2.config import Config  # noqa: E402
+from counters.commands import wallet  # noqa: E402
+from counters.commands.wallet import _bip39_problem  # noqa: E402
+from counters.config import Config  # noqa: E402
 
 MN = Mnemonic("english")
 
@@ -177,7 +177,7 @@ def test_balance_no_rescan_derives_and_queries_counterparty(monkeypatch, capsys)
 def test_balance_reports_ownership_rights_assets(monkeypatch, capsys):
     # Assets the wallet owns (ownership rights) must appear in their own
     # section, whether or not any supply is held, and without a held-flag.
-    from counters2.commands.wallet import _report_cp_balances
+    from counters.commands.wallet import _report_cp_balances
 
     class FakeCp:
         def get_address_balances(self, addr):

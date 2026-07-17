@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2 import electrum1  # noqa: E402
+from counters import electrum1  # noqa: E402
 
 SEED = "powerful random nobody notice nothing important anyway look away hidden message over"
 HEX_SEED = "acb740e454c3134901d7c8f16497cc1c"

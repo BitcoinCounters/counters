@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2 import electrum2  # noqa: E402
+from counters import electrum2  # noqa: E402
 
 STANDARD = "cycle rocket west magnet parrot shuffle foot correct salt library feed song"
 SEGWIT = "bitter grass shiver impose acquire brush forget axis eager alone wine silver"

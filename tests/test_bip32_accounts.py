@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mnemonic import Mnemonic  # noqa: E402
 
-from counters2 import bip32  # noqa: E402
+from counters import bip32  # noqa: E402
 
 SEED = Mnemonic("english").to_seed(
     "abandon abandon abandon abandon abandon abandon "

@@ -12,9 +12,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import counters2.commands.issue as I  # noqa: E402
-from counters2.config import Config  # noqa: E402
-from counters2.counterparty import CounterpartyClient  # noqa: E402
+import counters.commands.issue as I  # noqa: E402
+from counters.config import Config  # noqa: E402
+from counters.counterparty import CounterpartyClient  # noqa: E402
 
 OWNER = "bc1pOwnerAddrxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 

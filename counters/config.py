@@ -96,7 +96,7 @@ class Config:
 
     @property
     def db_path(self) -> Path:
-        return Path(self.data_dir) / "counters2.db"
+        return Path(self.data_dir) / "counters.db"
 
     @property
     def blobs_dir(self) -> Path:

@@ -11,10 +11,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import counters2.commands.send as S  # noqa: E402
-from counters2.commands.send import _find_source, _to_raw_quantity  # noqa: E402
-from counters2.config import Config  # noqa: E402
-from counters2.counterparty import CounterpartyClient  # noqa: E402
+import counters.commands.send as S  # noqa: E402
+from counters.commands.send import _find_source, _to_raw_quantity  # noqa: E402
+from counters.config import Config  # noqa: E402
+from counters.counterparty import CounterpartyClient  # noqa: E402
 
 DEST = "bc1pdestxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ADDR_IN_WRONG_SLOT = "1FfZErPEuKK613V3CjViQfECQKmGsby7nR"

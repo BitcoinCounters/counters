@@ -1,11 +1,11 @@
 # Wallets & seed-phrase support
 
-How `counters2 wallet` turns a seed phrase into addresses, which wallet types it
+How `counters wallet` turns a seed phrase into addresses, which wallet types it
 can import today, and which are candidates. **Keys are always held by Bitcoin
 Core** — this tool derives the keys/descriptors, hands them to Core, and never
-signs itself (see `counters2/bip32.py`, `counters2/electrum1.py`, `counters2/electrum2.py`).
+signs itself (see `counters/bip32.py`, `counters/electrum1.py`, `counters/electrum2.py`).
 
-Restore is automatic: `counters2 wallet --name <name> restore` reads the phrase
+Restore is automatic: `counters wallet --name <name> restore` reads the phrase
 from stdin and **detects the seed type** (see [Detection](#how-detection-works)).
 
 ## At a glance
@@ -43,9 +43,9 @@ under any of them (Core allows one active descriptor per output type):
 | taproot (BIP86) | `m/86'/0'/0'` | `tr(…)` | `bc1p…` |
 
 ```bash
-counters2 wallet --name me create      # prints a 12-word seed ONCE
-counters2 wallet --name me restore --dry-run   # preview one address per account type (offline)
-counters2 wallet --name me restore             # import all four accounts → rescan
+counters wallet --name me create      # prints a 12-word seed ONCE
+counters wallet --name me restore --dry-run   # preview one address per account type (offline)
+counters wallet --name me restore             # import all four accounts → rescan
 ```
 
 - **Backup:** the 12/24-word phrase. Any BIP39 wallet regenerates the same
@@ -58,7 +58,7 @@ counters2 wallet --name me restore             # import all four accounts → re
 ### 2. Counterwallet / Freewallet (Electrum v1)
 
 Old Counterparty wallets predate BIP39/BIP32. They use the **Electrum v1**
-scheme, implemented in `counters2/electrum1.py`:
+scheme, implemented in `counters/electrum1.py`:
 
 1. a 12-word mnemonic over a **1626-word list** (`electrum1_words.txt`) encodes a
    128-bit hex seed (`mn_decode`);
@@ -72,10 +72,10 @@ We derive the first `N` keys of both chains and import them into Core as
 single-key `pkh(WIF)` descriptors, so Core holds and signs them.
 
 ```bash
-counters2 wallet --name old restore --dry-run          # preview 1… addresses; imports nothing, no node needed
-counters2 wallet --name old restore                    # import legacy keys + rescan
-counters2 wallet --name old restore --addresses 100    # derive 100 per chain (default 20)
-counters2 wallet --name old restore --counterwallet    # force this path (see Detection)
+counters wallet --name old restore --dry-run          # preview 1… addresses; imports nothing, no node needed
+counters wallet --name old restore                    # import legacy keys + rescan
+counters wallet --name old restore --addresses 100    # derive 100 per chain (default 20)
+counters wallet --name old restore --counterwallet    # force this path (see Detection)
 ```
 
 - **Verified** against Electrum's own vector: seed
@@ -89,7 +89,7 @@ counters2 wallet --name old restore --counterwallet    # force this path (see De
 
 ### 3. Electrum 2.x (standard & segwit)
 
-Electrum's post-2.0 seeds are **not** BIP39 (`counters2/electrum2.py`): the words
+Electrum's post-2.0 seeds are **not** BIP39 (`counters/electrum2.py`): the words
 carry a version number in a hash prefix, and the binary seed is
 `PBKDF2-HMAC-SHA512(phrase, "electrum"+passphrase, 2048)`. A BIP32 root is then
 derived with Electrum's own path + script type, addresses at `<node>/0/i` and

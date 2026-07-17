@@ -1,7 +1,7 @@
 """CLI entry point.
 
 Invoke as `counters <command>` (after `pip install -e .`) or, equivalently,
-`python -m counters2 <command>`.
+`python -m counters <command>`.
 """
 
 from __future__ import annotations

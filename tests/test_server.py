@@ -20,9 +20,9 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2.config import Config  # noqa: E402
-from counters2.server import app as appmod  # noqa: E402
-from counters2.store import CounterRecord, Store  # noqa: E402
+from counters.config import Config  # noqa: E402
+from counters.server import app as appmod  # noqa: E402
+from counters.store import CounterRecord, Store  # noqa: E402
 
 
 # 1x1 transparent GIF89a — the decoded payload of the stamp-like counter.

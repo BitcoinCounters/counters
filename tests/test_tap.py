@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from counters2 import tap  # noqa: E402
+from counters import tap  # noqa: E402
 
 
 def test_taproot_tweak_and_address_bip86_vector():
