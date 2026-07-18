@@ -254,9 +254,14 @@
     .toc a{border-left:none;padding-left:0}
   }
   @media(max-width:620px){
-    nav{display:none}
-    .search{flex-basis:150px}
-    .bar{gap:12px}
+    /* header stacks into rows (brand / nav / search) instead of hiding nav —
+       nothing competes for the single 62px line anymore. */
+    header{position:static}
+    .bar{flex-wrap:wrap;height:auto;padding:12px 0;gap:11px 14px}
+    .brand{order:1}
+    nav{order:2;width:100%;margin-left:0;gap:6px;flex-wrap:wrap}
+    nav a{padding:8px 12px;font-size:13px}
+    .search{order:3;flex-basis:100%;margin-left:0}
   }
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
