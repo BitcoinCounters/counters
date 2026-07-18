@@ -252,6 +252,8 @@
     .toc{position:static;display:flex;flex-wrap:wrap;gap:4px 14px}
     .toc div{width:100%;margin-bottom:4px}
     .toc a{border-left:none;padding-left:0}
+    /* pack footer columns left instead of spreading them to the edges */
+    .frow{justify-content:flex-start;gap:28px 52px}
   }
   @media(max-width:620px){
     /* header stacks into rows (brand / nav / search) instead of hiding nav —
@@ -262,6 +264,9 @@
     nav{order:2;width:100%;margin-left:0;gap:6px;flex-wrap:wrap}
     nav a{padding:8px 12px;font-size:13px}
     .search{order:3;flex-basis:100%;margin-left:0}
+    /* one column per row so nothing gets shoved off to the side */
+    .frow{gap:30px}
+    footer .lk,footer .colophon{flex-basis:100%;max-width:none}
   }
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
