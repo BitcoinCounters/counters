@@ -37,6 +37,7 @@ from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..content import classify_mime_type, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..proto import has_count_envelope
 from ..store import Store
 
 log = logging.getLogger("counters")
@@ -182,6 +183,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "is_pointer_like": bool(row["is_pointer_like"]),
         "envelope": row["envelope"],  # 'ord' | 'generic' | null (pre-backfill)
         "stamp_mime": stamp[1] if stamp else None,
+        # Also a proto-counter? A serve-time check (bitcoind), filled only on the
+        # single-counter endpoint; null elsewhere (unknown, not "no").
+        "proto": None,
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],
         "txid": row["mint_txid"],
@@ -309,6 +313,7 @@ class Handler(BaseHTTPRequestHandler):
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
             rec["block_time"] = _block_time(self.config, row["block_index"])
+            rec["proto"] = self._is_proto(row)
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
@@ -328,6 +333,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json(rec)
         finally:
             store.close()
+
+    def _is_proto(self, row) -> bool | None:
+        """Does this counter's transaction ALSO carry a COUNT envelope — i.e. is
+        it *also* a proto-counter (the first-version protocol)? A serve-time
+        check like stamp decoding; never affects validity or numbering. Returns
+        None (unknown) if bitcoind is unreachable, so the UI can distinguish
+        "no" from "couldn't check"."""
+        try:
+            tx = BitcoindClient(self.config).get_raw_transaction(row["mint_txid"], verbose=True)
+            return has_count_envelope(tx)
+        except Exception:
+            log.debug("proto check failed for #%s", row["number"], exc_info=True)
+            return None
 
     def _ensure_fee(self, store: Store, row) -> tuple[int | None, int | None]:
         """Compute the inscription cost (commit + reveal fee/size) from bitcoind
