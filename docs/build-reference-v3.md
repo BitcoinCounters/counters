@@ -321,19 +321,23 @@ recorded.
 
 ### 10.1 Dual-identity tags (serve-time display)
 
-A counter can *also* be another kind of on-chain object — an **ordinals
-inscription** (`envelope: ord`, the ord-compatible carrier), a **Bitcoin
-Stamp** (a `STAMP:` payload, §5.4), or a **proto-counter** (its transaction
-also carries a `COUNT` envelope — the first-version protocol; see the
-counters-proto repo). These are **display tags determined by the server at
-serve time, not indexed** — pure functions of data the server can re-derive
-(the content blob for stamps; the reveal transaction's witness for `envelope`
-and `proto`), so they never live in the consensus store and a rules change
-needs no reindex. `envelope` is classified exactly as counterparty-rs does
-(third tapscript push == `"ord"`, fourth == `0x07`); `proto` is a structural
-`OP_FALSE OP_IF "COUNT" … OP_ENDIF` match. Because the reveal-tx tags cost a
-bitcoind fetch, they are filled only on the single-counter endpoint (null in
-list responses — unknown, not "no").
+The same on-chain bytes a counter commits can *also* be read by another
+protocol — an **ordinals inscription** (`envelope: ord`, the ord-compatible
+carrier) or a **Bitcoin Stamp** (a `STAMP:` payload, §5.4). These are genuine
+dual-identities: one content commitment, multiple readers — the ord envelope
+*is* the Counterparty taproot envelope, and a `STAMP:` payload *is* the
+description text. (A proto-counter — the first-version `COUNT`-envelope
+protocol — is **not** in this class: it reads a *separate* `COUNT` envelope
+with its own body, so a single counter can never also be one without
+duplicating the file into a second inscription.)
+
+These tags are **determined by the server at serve time, not indexed** — pure
+functions of data the server can re-derive (the content blob for stamps; the
+reveal transaction's witness for `envelope`), so they never live in the
+consensus store and a rules change needs no reindex. `envelope` is classified
+exactly as counterparty-rs does (third tapscript push == `"ord"`, fourth ==
+`0x07`). Because it costs a bitcoind fetch, it is filled only on the
+single-counter endpoint (null in list responses — unknown, not "no").
 
 ---
 
