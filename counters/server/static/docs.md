@@ -4,9 +4,11 @@
      blocks highlight trailing # comments; numbered/bulleted lists get the
      explorer's copper markers. -->
 
-## What is a Counter {#what}
+## What are Counters {#what}
 
-A **Bitcoin Counter** - A.K.A. Counter Inscription - is a file inscription permanently stored on the Bitcoin Blockchain, linked to a counterparty asset, and assigned a number in order of inscription. 
+**Bitcoin Counters** - A.K.A. Counter Inscriptions - are numbered on chain NFTs using counterparty assets. 
+
+Every Counter is a file inscription permanently stored on the Bitcoin Blockchain, linked to a counterparty asset, and assigned a number in order of inscription. 
 
 ## The Counters Protocol
 The counters protocol defines what is a valid counter, and the counters indexer scans the blockchain and finds all valid counters, and assigns inscription numbers.  
