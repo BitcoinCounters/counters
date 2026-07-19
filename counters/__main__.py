@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
+from pathlib import Path
 
 from .commands import inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
@@ -62,6 +64,27 @@ class _OrdStyleHelp(argparse.RawDescriptionHelpFormatter):
         return text
 
 
+def _wipe_index(config: Config) -> None:
+    """Delete the local index — the SQLite DB (with its WAL/SHM sidecars) and the
+    content-addressed blob store — so the next run rebuilds from genesis (N3).
+    Only the counters data dir is touched; the flag is the confirmation, so this
+    prints what it removed rather than prompting."""
+    db = config.db_path
+    removed: list[str] = []
+    for p in (db, Path(f"{db}-wal"), Path(f"{db}-shm")):
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+    if config.blobs_dir.exists():
+        shutil.rmtree(config.blobs_dir)
+        removed.append("blobs/")
+    where = config.data_dir
+    if removed:
+        print(f"--restart: wiped {', '.join(removed)} from {where}", file=sys.stderr)
+    else:
+        print(f"--restart: nothing to wipe in {where}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     # A parent parser carries -v so it is accepted both before AND after the
     # subcommand. SUPPRESS default means an absent flag won't overwrite a value
@@ -92,22 +115,29 @@ def main(argv: list[str] | None = None) -> int:
     # 902000): rule N3 — nothing can qualify earlier. Stored sync progress
     # takes precedence on later runs; COUNTER_START_HEIGHT can raise the floor.
     # `run` is a backward-compatible alias for `index`.
-    sub.add_parser(
+    # `--restart` wipes the local index (DB + content blobs) and rebuilds from
+    # genesis — handy after a schema change or to re-derive from scratch.
+    restart_help = "delete the local index (DB + blobs) and rebuild from genesis"
+
+    p_index = sub.add_parser(
         "index",
         parents=[common],
         aliases=["run"],
         help="continuously sync to tip and follow new blocks",
     )
+    p_index.add_argument("--restart", action="store_true", help=restart_help)
 
     p_sync = sub.add_parser(
         "sync", parents=[common], help="sync once up to the tip and exit"
     )
     p_sync.add_argument("--stop-at", type=int, default=None, help="stop at this block height")
+    p_sync.add_argument("--restart", action="store_true", help=restart_help)
 
     p_server = sub.add_parser(
         "server", parents=[common],
         help="run the indexer AND serve the web explorer + read-only JSON API",
     )
+    p_server.add_argument("--restart", action="store_true", help=restart_help)
     p_server.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     p_server.add_argument("--port", type=int, default=8081, help="port (default: 8081)")
     p_server.add_argument(
@@ -273,6 +303,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = Config()  # start_height is clamped to genesis in Config itself
+
+    if getattr(args, "restart", False):
+        _wipe_index(config)
 
     if args.command in ("index", "run"):
         indexer = Indexer(config)
