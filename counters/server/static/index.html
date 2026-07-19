@@ -542,6 +542,7 @@ async function renderDetail(id){
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
+      ${c.proto ? `<span class="vbadge re"><span class="dot"></span>proto-counter</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
@@ -549,6 +550,7 @@ async function renderDetail(id){
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
         ${c.envelope ? fact('envelope', c.envelope==='ord' ? 'ord/xcp — also an ordinals inscription' : 'generic taproot') : ''}
+        ${c.proto ? fact('proto', 'also a proto-counter — carries a COUNT envelope') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
         ${fact('owner', short(c.owner), true, c.owner)}
