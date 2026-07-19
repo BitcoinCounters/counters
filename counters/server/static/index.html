@@ -195,39 +195,34 @@
   .copy{cursor:pointer;color:var(--faint);border:none;background:none;padding:0 0 0 7px;font-family:var(--mono);font-size:11px}
   .copy:hover{color:var(--patina)}
 
-  /* ---------- docs ---------- */
-  /* padding-top/bottom only: the horizontal gutter comes from .wrap (0 22px);
-     the old `padding:34px 0 90px` shorthand zeroed it, so docs text ran flush
-     to the screen edge on mobile. */
-  .docs{padding-top:34px;padding-bottom:90px;display:grid;grid-template-columns:200px 1fr;gap:46px;align-items:start}
-  /* grid children default to min-width:auto and refuse to shrink below a wide
-     child (a code block or the comparison table), which blows the page past
-     the viewport on mobile. min-width:0 lets them shrink so those blocks
-     scroll inside their own overflow-x box instead. */
-  .docs>*{min-width:0}
-  .doc{overflow-wrap:break-word}
-  /* Contents: a sticky sidebar on desktop; a collapsible <details> on mobile
-     (see the ≤860 block). It's always a <details>; JS opens it on desktop. */
-  .toc{position:sticky;top:84px;font-family:var(--mono);font-size:13px}
-  .toc>summary{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin:0 0 12px;cursor:pointer;list-style:none}
+  /* ---------- docs ----------
+     Prose + a Contents aside. Mobile-first: one flex column with Contents as a
+     collapsible <details> card. A single breakpoint (min-width:861px, below)
+     turns the aside into a sticky sidebar. .wrap supplies the side gutter
+     (0 22px), so .docs sets vertical padding only. A 3-line JS opens the
+     <details> on desktop (media-conditional default state needs JS). */
+  .docs{display:flex;flex-direction:column;gap:18px;padding-top:22px;padding-bottom:70px}
+  .doc{min-width:0;overflow-wrap:break-word}
+  .doc article{max-width:none}
+  .toc{font-family:var(--mono);font-size:13px;border:1px solid var(--line2);border-radius:11px;background:var(--card)}
+  .toc>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;color:var(--dim);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
   .toc>summary::-webkit-details-marker{display:none}
-  /* the TOC is a <nav>, so override the global `nav{display:flex}` (header nav)
-     — desktop wants a vertical list; mobile re-flexes it in the ≤860 block. */
-  .toclist{display:block}
-  .toclist a{display:block;color:var(--dim);padding:5px 0;border-left:1px solid var(--line);padding-left:14px;margin-left:-1px;transition:.15s}
-  .toclist a:hover,.toclist a.on{color:var(--copper);border-color:var(--copper)}
-  .doc article{max-width:62ch}
-  .doc h2{font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--copper);margin:46px 0 14px;padding-top:8px}
+  .toc>summary::after{content:'▾';color:var(--faint);transition:transform .2s}
+  .toc[open]>summary::after{transform:rotate(180deg)}
+  .toclist{display:flex;flex-wrap:wrap;gap:8px 16px;padding:0 16px 14px}
+  .toclist a{color:var(--dim);transition:.15s}
+  .toclist a:hover,.toclist a.on{color:var(--copper)}
+  .doc h2{font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--copper);margin:34px 0 12px;padding-top:8px}
   .doc h2:first-child{margin-top:0}
-  .doc h3{font-family:var(--mono);font-weight:600;font-size:15px;margin:26px 0 8px}
-  .doc p{color:var(--dim);margin:0 0 14px}
+  .doc h3{font-family:var(--mono);font-weight:600;font-size:16.5px;margin:24px 0 8px}
+  .doc p{color:var(--dim);margin:0 0 16px;font-size:16px;line-height:1.75}
   .doc strong{color:var(--ink);font-weight:600}
   .doc code{font-family:var(--mono);font-size:.86em;background:var(--bg2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--copper2)}
   .doc pre{font-family:var(--mono);font-size:12.5px;line-height:1.65;background:#100d09;border:1px solid var(--line);border-radius:11px;padding:16px 18px;overflow-x:auto;color:#d8cdbb;margin:0 0 18px}
   .doc pre .c{color:var(--faint)}
   .doc pre .k{color:var(--copper2)}
   .doc ul{color:var(--dim);margin:0 0 16px;padding-left:0;list-style:none}
-  .doc ul li{padding-left:24px;position:relative;margin-bottom:9px}
+  .doc ul li{padding-left:24px;position:relative;margin-bottom:11px;font-size:16px;line-height:1.75}
   .doc ul li::before{content:attr(data-n);position:absolute;left:0;top:0;font-family:var(--mono);font-size:11px;color:var(--copper);top:.18em}
   .doc .tablewrap{overflow-x:auto;margin:0 0 18px}
   .doc table{border-collapse:collapse;width:100%;font-size:13px}
@@ -235,8 +230,26 @@
   .doc th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:500;background:var(--bg2);white-space:nowrap}
   .doc td{color:var(--dim)}
   .doc tbody tr:first-child td{color:var(--ink)}
-  .doc .callout{background:var(--card);border-left:2px solid var(--patina);border-radius:0 10px 10px 0;padding:13px 18px;margin:0 0 18px;color:var(--dim);font-size:14px}
+  .doc .callout{background:var(--card);border-left:2px solid var(--patina);border-radius:0 10px 10px 0;padding:14px 16px;margin:0 0 18px;color:var(--dim);font-size:15px}
   .doc .callout b{color:var(--patina)}
+  /* desktop: the aside becomes a sticky sidebar; prose trims to its reading
+     size. The one and only docs breakpoint. */
+  @media(min-width:861px){
+    .docs{flex-direction:row;gap:46px;padding-top:34px;padding-bottom:90px}
+    .doc{flex:1}
+    .doc article{max-width:62ch}
+    .doc p,.doc ul li{font-size:15px;line-height:1.6}
+    .doc ul li{margin-bottom:9px}
+    .doc h2{margin:46px 0 14px}
+    .doc h3{font-size:15px;margin:26px 0 8px}
+    .doc .callout{font-size:14px;padding:13px 18px}
+    .toc{flex:0 0 200px;position:sticky;top:84px;border:0;background:none;border-radius:0}
+    .toc>summary{padding:0;margin-bottom:12px;pointer-events:none;color:var(--faint);letter-spacing:.16em;font-size:11px}
+    .toc>summary::after{content:none}
+    .toclist{display:block;padding:0}
+    .toclist a{display:block;padding:5px 0 5px 14px;border-left:1px solid var(--line);margin-left:-1px}
+    .toclist a:hover,.toclist a.on{border-color:var(--copper)}
+  }
 
   /* ---------- footer ---------- */
   footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint)}
@@ -263,15 +276,6 @@
     .featured{grid-template-columns:1fr}
     .dwrap{grid-template-columns:1fr;gap:26px}
     .stage{position:static}
-    .docs{grid-template-columns:1fr;gap:24px}
-    /* Contents collapses into a tappable card (JS leaves it closed on mobile,
-       open on desktop). The links live in .toclist so summary stays the bar. */
-    .toc{position:static;border:1px solid var(--line2);border-radius:11px;background:var(--card)}
-    .toc>summary{margin:0;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;color:var(--dim);font-size:12px}
-    .toc>summary::after{content:'▾';color:var(--faint);transition:transform .2s}
-    .toc[open]>summary::after{transform:rotate(180deg)}
-    .toclist{display:flex;flex-wrap:wrap;gap:8px 16px;padding:0 16px 14px}
-    .toclist a{border-left:none;padding:3px 0}
     /* pack footer columns left instead of spreading them to the edges */
     .frow{justify-content:flex-start;gap:28px 52px}
   }
@@ -287,17 +291,6 @@
     /* one column per row so nothing gets shoved off to the side */
     .frow{gap:30px}
     footer .lk,footer .colophon{flex-basis:100%;max-width:none}
-    /* docs: the desktop density reads cramped on a phone — larger body text,
-       more line-height, tighter heading rhythm. padding-top/bottom only so the
-       .wrap gutter survives. */
-    .docs{padding-top:22px;padding-bottom:70px;gap:18px}
-    .doc article{max-width:none}
-    .doc p,.doc ul li{font-size:16px;line-height:1.75}
-    .doc p{margin:0 0 16px}
-    .doc h2{margin:34px 0 12px}
-    .doc h3{font-size:16.5px;margin:24px 0 8px}
-    .doc ul li{margin-bottom:11px}
-    .doc .callout{font-size:15px;padding:14px 16px}
   }
   @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
