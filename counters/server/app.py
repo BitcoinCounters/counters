@@ -23,6 +23,7 @@ worker threads and SQLite connections are not shareable across threads.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -116,6 +117,36 @@ BODY_MAX_BYTES = 256 * 1024
 # change has to take effect promptly. /content stays immutable (content-addressed).
 DERIVED_MAX_AGE = 300
 INLINE_TYPES = ("text/", "application/json", "image/svg+xml")
+
+
+# The social/meta block in index.html is wrapped in these markers so a counter
+# page can swap in per-counter Open Graph tags without touching anything else.
+_SOCIAL_RE = re.compile(r"<!-- social:start.*?social:end -->", re.DOTALL)
+
+
+def _social_meta(*, title: str, description: str, url: str, image: str,
+                 big_image: bool) -> str:
+    """The <title> + canonical + Open Graph + Twitter block for one counter."""
+    t = html.escape(title, quote=True)
+    d = html.escape(description, quote=True)
+    u = html.escape(url, quote=True)
+    i = html.escape(image, quote=True)
+    card = "summary_large_image" if big_image else "summary"
+    return (
+        f"<title>{html.escape(title)}</title>\n"
+        f'<meta name="description" content="{d}">\n'
+        f'<link rel="canonical" href="{u}">\n'
+        f'<meta property="og:type" content="article">\n'
+        f'<meta property="og:site_name" content="Bitcoin Counters">\n'
+        f'<meta property="og:title" content="{t}">\n'
+        f'<meta property="og:description" content="{d}">\n'
+        f'<meta property="og:url" content="{u}">\n'
+        f'<meta property="og:image" content="{i}">\n'
+        f'<meta name="twitter:card" content="{card}">\n'
+        f'<meta name="twitter:title" content="{t}">\n'
+        f'<meta name="twitter:description" content="{d}">\n'
+        f'<meta name="twitter:image" content="{i}">'
+    )
 
 
 def _display_name(row: sqlite3.Row) -> str:
@@ -238,6 +269,12 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/stamp/(\d+)", path)
             if m:
                 return self._stamp(int(m.group(1)))
+            # A counter's own page: the SPA, but server-rendered with per-counter
+            # Open Graph tags so a shared link previews *that counter's* image
+            # (crawlers don't run the JS or see the #/c/<id> hash).
+            m = re.fullmatch(r"/c/(.+)", path)
+            if m:
+                return self._counter_page(unquote(m.group(1)))
             return self._static(path)
         except BrokenPipeError:
             pass
@@ -468,6 +505,43 @@ class Handler(BaseHTTPRequestHandler):
             store.close()
 
     # --- static assets -----------------------------------------------------
+
+    def _counter_page(self, ident: str) -> None:
+        """Serve the explorer for /c/<id> with per-counter Open Graph tags, so a
+        shared counter link previews that counter's image. Humans get the same
+        SPA (its router renders the detail view from the path); crawlers read
+        the injected tags. Unknown ids fall back to the default (site) tags."""
+        store = Store(self.config)
+        try:
+            page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+            row = store.find(ident)
+            if row is not None:
+                host = self.headers.get("Host") or "www.bitcoincounters.com"
+                proto = self.headers.get("X-Forwarded-Proto") or "https"
+                base = f"{proto}://{host}"
+                n = row["number"]
+                name = _display_name(row)
+                ct = (row["content_type"] or "").split(";")[0].strip().lower()
+                # og:image must be a real image URL. Stamps decode to one;
+                # raster image counters serve theirs at /content; everything
+                # else (text, svg, html, pointer) falls back to the site logo.
+                if _stamp_payload(store, row):
+                    image, big = f"{base}/stamp/{n}", True
+                elif ct.split("/")[0] == "image" and ct != "image/svg+xml":
+                    image, big = f"{base}/content/{n}", True
+                else:
+                    image, big = f"{base}/counters-logo-512.png", False
+                block = _social_meta(
+                    title=f"Counter #{n} · {name} — Bitcoin Counters",
+                    description=f"Counter #{n}: {name} — a file inscribed on "
+                                f"Bitcoin, owned through Counterparty, numbered from zero.",
+                    url=f"{base}/c/{n}", image=image, big_image=big,
+                )
+                page = _SOCIAL_RE.sub(lambda _m: block, page, count=1)
+            self._send(200, "text/html; charset=utf-8", page.encode("utf-8"),
+                       max_age=DERIVED_MAX_AGE)
+        finally:
+            store.close()
 
     def _static(self, path: str) -> None:
         rel = "index.html" if path == "/" else path.lstrip("/")
