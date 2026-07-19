@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- social:start · `counters server` swaps this whole block for per-counter
+     Open Graph tags at /c/<id> so shared links preview that counter. -->
 <title>Bitcoin Counters — Explorer</title>
 <meta name="description" content="Explore Bitcoin Counters: numbered inscriptions stored in Bitcoin witness data and owned through Counterparty assets, numbered from zero.">
 <link rel="canonical" href="https://www.bitcoincounters.com/">
@@ -24,10 +26,12 @@
 <meta name="twitter:description" content="Numbered inscriptions stored in Bitcoin witness data and owned through Counterparty assets, numbered from zero.">
 <meta name="twitter:image" content="https://www.bitcoincounters.com/counters-logo-512.png">
 <meta name="twitter:image:alt" content="Bitcoin Counters logo">
+<!-- social:end -->
 
-<link rel="icon" type="image/svg+xml" href="counters-icon.svg">
-<link rel="icon" type="image/png" sizes="32x32" href="counters-icon-32.png">
-<link rel="apple-touch-icon" href="counters-logo-512.png">
+<!-- absolute so they resolve under /c/<id> too (no <base> needed) -->
+<link rel="icon" type="image/svg+xml" href="/counters-icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/counters-icon-32.png">
+<link rel="apple-touch-icon" href="/counters-logo-512.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
@@ -364,7 +368,7 @@
     <div class="lk">
       <b>Explore</b>
       <a href="#/">Latest counters</a>
-      <a href="#/c/0">Counter #0 · XDUALS</a>
+      <a href="/c/0" onclick="goCounter('0');return false">Counter #0 · XDUALS</a>
       <a href="#/docs">Documentation</a>
       <a href="https://proto.bitcoincounters.com" target="_blank" rel="noopener">Counters Proto ↗</a>
       <a href="https://t.me/BitcoinCounters" target="_blank" rel="noopener">Telegram ↗</a>
@@ -480,7 +484,7 @@ const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' U
 const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
 
 function card(c){
-  return `<div class="card" onclick="go('#/c/${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')go('#/c/${c.number}')">
+  return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
     <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
@@ -496,6 +500,7 @@ const views={explore:el('view-explore'),detail:el('view-detail'),block:el('view-
 function el(id){return document.getElementById(id);}
 function showView(v){for(const k in views)views[k].classList.toggle('hidden',k!==v);
   document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.r===v||((v==='detail'||v==='block')&&a.dataset.r==='explore')));
+  if(v!=='detail')document.title='Bitcoin Counters — Explorer';   // renderDetail sets the per-counter title after
   window.scrollTo(0,0);
 }
 
@@ -524,6 +529,7 @@ async function renderExplore(page){
 async function renderDetail(id){
   const c=await getCounter(id);
   showView('detail');
+  document.title = c ? `Counter #${c.number} · ${c.asset} — Bitcoin Counters` : 'Bitcoin Counters — Explorer';
   if(!c){el('detail').innerHTML=`<div class="empty" style="grid-column:1/-1"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
   const mp=`https://mempool.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
@@ -566,7 +572,7 @@ async function renderDetail(id){
       <div class="acs">
         <div class="k">${c.asset_counters.length} counters on ${esc(c.asset)}</div>
         <div class="list">
-          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.original?'':'re'}" onclick="go('#/c/${s.number}')">#${s.number}<em>${s.original?'original':(s.kind==='fairminter'?'fairminter':'reinscribe')}</em></a>`).join('')}
+          ${c.asset_counters.map(s=>`<a class="${s.number===c.number?'cur ':''}${s.original?'':'re'}" onclick="goCounter('${s.number}')">#${s.number}<em>${s.original?'original':(s.kind==='fairminter'?'fairminter':'reinscribe')}</em></a>`).join('')}
         </div>
       </div>` : ''}
     </div>`;
@@ -593,11 +599,19 @@ function fact(k,v,copyable,raw){
 /* ============================================================
    ROUTER  ·  #/  ·  #/docs  ·  #/c/<id>
    ============================================================ */
-function go(h){location.hash=h;}
+/* Counters live at a real path (/c/<id>) so a shared link is crawlable and gets
+   per-counter OG tags; everything else stays hash-routed. go() handles the hash
+   routes and clears any /c/ path first; goCounter() pushes the counter path. */
+function go(h){
+  if(location.pathname!=='/'){history.pushState({},'','/'+h);route();}
+  else{location.hash=h;}
+}
+function goCounter(id){history.pushState({},'','/c/'+encodeURIComponent(id));route();}
 function route(){
-  const h=location.hash||'#/';
   let m;
-  if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}
+  if(m=location.pathname.match(/^\/c\/(.+)$/)){return renderDetail(decodeURIComponent(m[1]));}
+  const h=location.hash||'#/';
+  if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}   // legacy hash links still work
   else if(m=h.match(/^#\/p\/(\d+)$/)){renderExplore(+m[1]);}
   else if(m=h.match(/^#\/b\/(\d+)$/)){renderBlock(m[1]);}
   else if(h.startsWith('#/docs')){showView('docs');
@@ -609,6 +623,7 @@ function route(){
   else{renderExplore();}
 }
 window.addEventListener('hashchange',route);
+window.addEventListener('popstate',route);
 
 /* Docs live in static/docs.md — plain markdown, edited without touching this
    file — fetched once on first visit and rendered by the mini-renderer below.
@@ -676,7 +691,7 @@ let docsLoaded=false;
 async function loadDocs(){
   if(docsLoaded) return;
   try{
-    const r=await fetch('docs.md');
+    const r=await fetch('/docs.md');
     if(!r.ok) throw new Error(r.status);
     const {html,toc}=mdToHtml(await r.text());
     el('view-docs').innerHTML=
@@ -695,7 +710,7 @@ function doSearch(e){
   e.preventDefault();
   const v=el('q').value.trim();
   if(!v)return false;
-  go('#/c/'+encodeURIComponent(v));
+  goCounter(v);
   el('q').blur();
   return false;
 }
