@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS counters (
     content_sha256   TEXT    NOT NULL,
     content_length   INTEGER NOT NULL,
     is_pointer_like  INTEGER NOT NULL DEFAULT 0,
-    envelope         TEXT,                         -- 'ord' | 'generic' (enrichment)
     mint_txid        TEXT    NOT NULL,
     msg_index        INTEGER NOT NULL DEFAULT 0,
     block_index      INTEGER NOT NULL,
@@ -81,7 +80,6 @@ class CounterRecord:
     block_index: int
     cp_tx_index: int
     source: str | None
-    envelope: str | None = None    # 'ord' | 'generic' (enrichment; not hashed)
     divisible: bool | None = None
     supply: int | None = None
     fee: int | None = None
@@ -101,11 +99,6 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.executescript(SCHEMA)
-        # Migration for DBs created before the envelope column (enrichment
-        # only — never part of the rolling hash, so adding it is safe).
-        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(counters)")}
-        if "envelope" not in cols:
-            self.db.execute("ALTER TABLE counters ADD COLUMN envelope TEXT")
         self.db.commit()
 
     def close(self) -> None:
@@ -131,17 +124,6 @@ class Store:
         return path.read_bytes() if path.exists() else None
 
     # --- counters ----------------------------------------------------------
-
-    def rows_missing_envelope(self) -> list[sqlite3.Row]:
-        """Counters indexed before the envelope column existed (backfill)."""
-        return self.db.execute(
-            "SELECT number, mint_txid FROM counters WHERE envelope IS NULL"
-        ).fetchall()
-
-    def set_envelope(self, number: int, style: str) -> None:
-        self.db.execute(
-            "UPDATE counters SET envelope = ? WHERE number = ?", (style, number)
-        )
 
     def next_number(self) -> int:
         row = self.db.execute("SELECT MAX(number) AS m FROM counters").fetchone()
@@ -201,10 +183,10 @@ class Store:
             INSERT INTO counters (
                 number, asset, asset_id, asset_longname, kind, content_type,
                 content_type_raw, content_sha256, content_length,
-                is_pointer_like, envelope, mint_txid, msg_index, block_index,
+                is_pointer_like, mint_txid, msg_index, block_index,
                 cp_tx_index, source, divisible, supply, fee, tx_size,
                 xcp_burned, rolling_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 number,
@@ -217,7 +199,6 @@ class Store:
                 rec.content_sha256,
                 rec.content_length,
                 int(rec.is_pointer_like),
-                rec.envelope,
                 rec.mint_txid,
                 rec.msg_index,
                 rec.block_index,

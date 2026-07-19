@@ -315,13 +315,25 @@ lifecycle events are never conditions.
 Each stored counter also carries best-effort metadata that never gates
 validity: `asset_id`, `asset_longname`, `source` (issuer), `divisible`,
 `supply`, inscription cost (commit + reveal fee and serialized size),
-`xcp_burned` (`fee_paid`), `content_type_raw`, `is_pointer_like`, and
-`envelope` — the carrier's style, `ord` (the ordinals-compatible envelope;
-such an event is *also* an ordinals inscription, the same dual-identity §5.4
-describes for stamps) or `generic`, detected exactly as counterparty-rs
-classifies it (third tapscript push == `"ord"`, fourth == `0x07`). A
+`xcp_burned` (`fee_paid`), `content_type_raw`, and `is_pointer_like`. A
 failure to fetch enrichment must not prevent a valid counter from being
 recorded.
+
+### 10.1 Dual-identity tags (serve-time display)
+
+A counter can *also* be another kind of on-chain object — an **ordinals
+inscription** (`envelope: ord`, the ord-compatible carrier), a **Bitcoin
+Stamp** (a `STAMP:` payload, §5.4), or a **proto-counter** (its transaction
+also carries a `COUNT` envelope — the first-version protocol; see the
+counters-proto repo). These are **display tags determined by the server at
+serve time, not indexed** — pure functions of data the server can re-derive
+(the content blob for stamps; the reveal transaction's witness for `envelope`
+and `proto`), so they never live in the consensus store and a rules change
+needs no reindex. `envelope` is classified exactly as counterparty-rs does
+(third tapscript push == `"ord"`, fourth == `0x07`); `proto` is a structural
+`OP_FALSE OP_IF "COUNT" … OP_ENDIF` match. Because the reveal-tx tags cost a
+bitcoind fetch, they are filled only on the single-counter endpoint (null in
+list responses — unknown, not "no").
 
 ---
 
