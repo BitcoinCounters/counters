@@ -19,6 +19,7 @@ from counters.content import (  # noqa: E402
     is_pointer_like,
     normalize_mime,
     sniff_image,
+    sniff_media,
     stamp_image,
 )
 
@@ -106,18 +107,25 @@ def test_sniff_image():
     assert sniff_image(b"") is None
 
 
+def test_sniff_media():
+    # superset of sniff_image: images still match
+    assert sniff_media(_GIF) == "image/gif"
+    assert sniff_media(b"\x89PNG\r\n\x1a\n" + b"\0" * 8) == "image/png"
+    # Ogg container (Opus/Vorbis) -> audio (counters #45/#51, minted as
+    # application/octet-stream / image/jpeg but actually Ogg Opus)
+    assert sniff_media(b"OggS\x00\x02" + b"\0" * 20) == "audio/ogg"
+    # no signature -> None, so the declared type is used
+    assert sniff_media(b"just some text") is None
+    assert sniff_media(b"") is None
+
+
 def test_stamp_image():
     import base64
 
     b64 = base64.b64encode(_GIF).decode()
     assert stamp_image(f"STAMP:{b64}".encode(), True) == (_GIF, "image/gif")
-    # prefix is case-insensitive; surrounding whitespace tolerated
+    # prefix is case-insensitive; whitespace around the whole body tolerated
     assert stamp_image(f"stamp:{b64}\n".encode(), True) == (_GIF, "image/gif")
-    # whitespace INSIDE the base64 tolerated (counter #54 MAGICEGG)
-    spaced = b64[:10] + " " + b64[10:]
-    assert stamp_image(f"STAMP:{spaced}".encode(), True) == (_GIF, "image/gif")
-    # missing padding tolerated
-    assert stamp_image(f"STAMP:{b64.rstrip('=')}".encode(), True) == (_GIF, "image/gif")
 
 
 def test_stamp_image_rejects():
@@ -127,6 +135,12 @@ def test_stamp_image_rejects():
     assert stamp_image(f"STAMP:{b64}".encode(), False) is None   # binary content
     assert stamp_image(b64.encode(), True) is None               # no prefix
     assert stamp_image(b"STAMP:!!!not-base64!!!", True) is None  # undecodable
+    # Rule 3 (strict, no repair): whitespace INSIDE the base64 -> text, not a
+    # repaired image (counter #54 MAGICEGG's stray space).
+    spaced = b64[:10] + " " + b64[10:]
+    assert stamp_image(f"STAMP:{spaced}".encode(), True) is None
+    # missing/damaged padding is not reconstructed -> text
+    assert stamp_image(f"STAMP:{b64.rstrip('=')}".encode(), True) is None
     # decodes fine but not a recognized image -> display as text (§5.4)
     text_b64 = base64.b64encode(b"hello world, not an image").decode()
     assert stamp_image(f"STAMP:{text_b64}".encode(), True) is None

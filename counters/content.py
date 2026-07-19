@@ -14,6 +14,7 @@ metadata only.
 
 from __future__ import annotations
 
+import base64
 import binascii
 import re
 
@@ -156,7 +157,10 @@ def is_pointer_like(content: bytes, textual: bool) -> bool:
 # whitespace-tolerant base64 (mints in the wild carry stray spaces), and the
 # decoded bytes must carry a known image magic.
 _STAMP_PREFIX = "stamp:"
-_BASE64_JUNK_RE = re.compile(r"\s+")
+
+# Strict base64: alphabet only, padding (if any) at the very end. No
+# whitespace, no stray characters (rule 3 — no repair of damaged data).
+_STRICT_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
 # (magic prefix, mime). WebP is RIFF-framed and checked separately.
 _IMAGE_MAGICS = (
@@ -165,6 +169,13 @@ _IMAGE_MAGICS = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"\xff\xd8\xff", "image/jpeg"),
 )
+
+# Non-image container signatures for display sniffing (rule 2). Deliberately
+# tiny and fixed so any server reproduces the same choice. Ogg (Opus/Vorbis)
+# is shown with a native <audio> element; a signature never resolves to a
+# textual or executable type, so it is always safe to trust over the declared
+# MIME.
+_MEDIA_MAGICS = ((b"OggS", "audio/ogg"),)
 
 
 def sniff_image(data: bytes) -> str | None:
@@ -176,12 +187,26 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
+def sniff_media(data: bytes) -> str | None:
+    """A recognized image/audio/video signature for `data`, else None
+    (rule 2). Superset of `sniff_image`: a match wins over the declared
+    `mime_type` when choosing how to render, and is never a textual type."""
+    image = sniff_image(data)
+    if image is not None:
+        return image
+    for magic, mime in _MEDIA_MAGICS:
+        if data.startswith(magic):
+            return mime
+    return None
+
+
 def stamp_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
     """Decode a stamp-like payload to `(image bytes, sniffed mime)`, or None.
 
-    None means "display as-is": not textual, no STAMP: prefix, undecodable
-    base64, or decoded bytes that are not a recognized image (e.g. counter #59
-    XCPFTW, whose base64 decodes to a mangled PNG)."""
+    None means "display as-is" (rule 3): not textual, no STAMP: prefix, base64
+    that is not strictly well-formed (e.g. #54 MAGICEGG's stray space, #59
+    XCPFTW's stray prefix), or decoded bytes that are not a recognized image.
+    Damaged data is never repaired — it falls back to text."""
     if not textual:
         return None
     try:
@@ -190,11 +215,12 @@ def stamp_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
         return None
     if not text[: len(_STAMP_PREFIX)].lower() == _STAMP_PREFIX:
         return None
-    b64 = _BASE64_JUNK_RE.sub("", text[len(_STAMP_PREFIX):])
-    b64 += "=" * (-len(b64) % 4)
+    b64 = text[len(_STAMP_PREFIX):]
+    if not _STRICT_BASE64_RE.match(b64):
+        return None
     try:
-        raw = binascii.a2b_base64(b64.encode("ascii"))
-    except (binascii.Error, ValueError, UnicodeEncodeError):
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
         return None
     mime = sniff_image(raw)
     if mime is None:

@@ -35,7 +35,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import preview
 from ..bitcoind import BitcoindClient
 from ..config import Config
-from ..content import classify_mime_type, stamp_image
+from ..content import classify_mime_type, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..store import Store
 
@@ -108,6 +108,11 @@ STATIC_TYPES = {
 # Inline only small textual blobs in JSON responses; larger or binary content
 # is served on demand from /content/<number>.
 BODY_MAX_BYTES = 256 * 1024
+
+# Derived views (/preview, /stamp) are functions of the rendering rules, not of
+# immutable content, so they must never be cached `immutable` (rule 7): a rules
+# change has to take effect promptly. /content stays immutable (content-addressed).
+DERIVED_MAX_AGE = 300
 INLINE_TYPES = ("text/", "application/json", "image/svg+xml")
 
 
@@ -360,7 +365,13 @@ class Handler(BaseHTTPRequestHandler):
             blob = store.read_blob(row["content_sha256"])
             if blob is None:
                 return self._send(404, "text/plain; charset=utf-8", b"content unavailable")
-            ctype = row["content_type"] or "application/octet-stream"
+            # Rule 2: a recognized on-chain signature wins over the declared
+            # mime_type, so a mislabeled file (e.g. Ogg audio minted as
+            # image/jpeg, #51) is served with a type the browser can render.
+            # The bytes are still the exact canonical blob; the JSON API keeps
+            # reporting the declared content_type. Deterministic in the bytes,
+            # so the content-addressed immutable cache still holds.
+            ctype = sniff_media(blob) or row["content_type"] or "application/octet-stream"
             self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
         finally:
             store.close()
@@ -377,7 +388,7 @@ class Handler(BaseHTTPRequestHandler):
             if stamp is None:
                 return self._send(404, "text/plain; charset=utf-8", b"not stamp-like")
             raw, mime = stamp
-            self._send(200, mime, raw, immutable=True, extra_headers=CONTENT_HEADERS)
+            self._send(200, mime, raw, max_age=DERIVED_MAX_AGE, extra_headers=CONTENT_HEADERS)
         finally:
             store.close()
 
@@ -391,14 +402,20 @@ class Handler(BaseHTTPRequestHandler):
             if row is None:
                 return self._send(404, "text/html; charset=utf-8",
                                   b"<!doctype html><meta charset=utf-8><title>404</title>not found")
-            ctype = row["content_type"] or "application/octet-stream"
+            blob = store.read_blob(row["content_sha256"])
+            # Rule 2: sniff the bytes; a recognized signature wins over the
+            # declared type when picking the native element — so #51's Ogg
+            # renders as <audio>, not a broken <img>. HTML/SVG/text carry no
+            # signature, so they keep their declared type.
+            declared = row["content_type"] or "application/octet-stream"
+            ctype = (sniff_media(blob) if blob else None) or declared
             kind, extra = preview.classify(ctype)
             if kind == preview.IFRAME:
-                blob = store.read_blob(row["content_sha256"])
                 if blob is None:
                     return self._send(404, "text/html; charset=utf-8",
                                       b"<!doctype html><meta charset=utf-8><title>404</title>content unavailable")
-                return self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
+                return self._send(200, ctype, blob, max_age=DERIVED_MAX_AGE,
+                                  extra_headers=CONTENT_HEADERS)
             text = None
             if kind in ("text", "code", "markdown"):
                 stamp = _stamp_payload(store, row)
@@ -410,17 +427,17 @@ class Handler(BaseHTTPRequestHandler):
                                           src=f"/stamp/{number}")
                     return self._send(
                         200, "text/html; charset=utf-8", doc.encode("utf-8"),
-                        immutable=True,
+                        max_age=DERIVED_MAX_AGE,
                         extra_headers=[
                             ("Content-Security-Policy", preview.csp_for(kind)),
                             ("X-Content-Type-Options", "nosniff"),
                         ],
                     )
-                blob = store.read_blob(row["content_sha256"]) or b""
-                text = blob.decode("utf-8", "replace")
+                text = (blob or b"").decode("utf-8", "replace")
             doc = preview.wrapper(kind, number, ctype, extra, text)
             self._send(
-                200, "text/html; charset=utf-8", doc.encode("utf-8"), immutable=True,
+                200, "text/html; charset=utf-8", doc.encode("utf-8"),
+                max_age=DERIVED_MAX_AGE,
                 extra_headers=[
                     ("Content-Security-Policy", preview.csp_for(kind)),
                     ("X-Content-Type-Options", "nosniff"),
@@ -448,6 +465,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, "application/json; charset=utf-8", json.dumps(obj).encode())
 
     def _send(self, status: int, ctype: str, body: bytes, *, immutable: bool = False,
+              max_age: int | None = None,
               extra_headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -455,6 +473,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         if immutable:
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif max_age is not None:
+            self.send_header("Cache-Control", f"public, max-age={max_age}")
         for name, value in (extra_headers or []):
             self.send_header(name, value)
         self.end_headers()

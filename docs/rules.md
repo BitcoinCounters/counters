@@ -99,13 +99,13 @@ server already does this · **FIX**: server needs the rule below.
 | 31–42 | (12 assets) | text/plain | pointer | 4 | OK |
 | 43 | ORDINALMINT | image/jpeg | JPEG image | 2 | OK |
 | 44 | TRUDEEPEPE | text/plain | pointer | 4 | OK |
-| 45 | OPUSKHE | application/octet-stream | **audio** — bytes are Ogg Opus | 2 | **FIX** |
+| 45 | OPUSKHE | application/octet-stream | **audio** — bytes are Ogg Opus | 2 | OK |
 | 46 | OPUSAUDIO | audio/opus | audio | 2 | OK |
 | 47 | A171… | text/plain | text | 6 | OK |
 | 48–50 | A171…×3 | image/jpeg | JPEG image | 2 | OK |
-| 51 | A171… | image/jpeg | **audio** — declared jpeg, bytes are Ogg Opus | 2 | **FIX** |
+| 51 | A171… | image/jpeg | **audio** — declared jpeg, bytes are Ogg Opus | 2 | OK |
 | 52–53 | HUNGRYPARTY/NINJAFREN | text/plain | pointer | 4 | OK |
-| 54 | MAGICEGG | text/plain | **text** — `STAMP:` base64 is damaged (stray space) | 3 | **FIX** |
+| 54 | MAGICEGG | text/plain | **text** — `STAMP:` base64 is damaged (stray space) | 3 | OK |
 | 55–56 | PEPEPANIC/FROGSOUPYUM | text/plain | pointer | 4 | OK |
 | 57–58 | A967…×2 | text/plain | decoded PNG (`STAMP:`) | 3 | OK |
 | 59 | XCPFTW | text/plain | text — `STAMP:` base64 is damaged (stray prefix) | 3 | OK |
@@ -119,24 +119,24 @@ server already does this · **FIX**: server needs the rule below.
 Totals: 87 counters — 46 pointers, 19 text (incl. #54/#59 damaged stamps →
 text), 11 images, 3 audio, 4 HTML, 6 shown-image stamps.
 
-## Gaps between these rules and today's server
+## Implementation notes
 
-Serve-time changes only (`content.py` / `preview.py` / `app.py`) — no reindex.
+The three gaps this audit found were serve-time only (`content.py` / `app.py`,
+no reindex) and are now closed:
 
-1. **Sniffing (rule 2) isn't wired past images.** #45 shows a Download page
-   and #51 a broken `<img>`, though both are Ogg Opus audio. Add `OggS` (and
-   any other on-chain signatures) to the sniffer and let a recognized
-   signature override the declared type when building the preview.
-2. **`STAMP:` decode is too lax (rule 3).** `stamp_image()` strips whitespace
-   before decoding, so #54's damaged base64 yields a corrupt PNG that the
-   server serves as a broken image. Require strict base64 (reject stray
-   whitespace/characters); #54 then falls back to text, matching rule 3.
-   (#59 already falls back to text — no change.)
-3. **`/preview` and `/stamp` are cached `immutable` (rule 7).** `app.py` sends
-   `max-age=31536000, immutable` on derived views, so a browser that visited
-   before a rules change keeps the old rendering for a year (seen live on #84
-   after the stamp feature shipped). Drop `immutable` there; use a short
-   max-age or a `?v=<commit>` key.
+1. **Sniffing (rule 2) wired past images.** `sniff_media()` adds the `OggS`
+   signature; a recognized signature overrides the declared type both when
+   choosing the preview element and when `/content/<n>` sets its `Content-Type`.
+   #45 and #51 (Ogg Opus minted as `application/octet-stream` / `image/jpeg`)
+   now render with `<audio>` instead of a broken `<img>` / download page.
+2. **`STAMP:` decode is strict (rule 3).** `stamp_image()` no longer strips
+   whitespace or reconstructs padding: the base64 must match a strict alphabet
+   with padding only at the end, or the counter falls back to text. #54's stray
+   space and #59's stray prefix both show as text; the six clean stamps are
+   unaffected.
+3. **Derived views are no longer `immutable` (rule 7).** `/preview` and
+   `/stamp` are served `max-age=300`; only the content-addressed `/content/<n>`
+   stays `immutable`, so a rules change takes effect promptly.
 
 Cosmetic: #3 is declared `image/gif` but is a PNG — browsers render it either
 way; rule 2's sniffed type just makes the displayed label honest.
