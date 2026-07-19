@@ -38,7 +38,6 @@ from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..content import classify_mime_type, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
-from ..proto import has_count_envelope
 from ..reveal import envelope_style
 from ..store import Store
 
@@ -184,11 +183,10 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "size": row["content_length"],
         "is_pointer_like": bool(row["is_pointer_like"]),
         "stamp_mime": stamp[1] if stamp else None,
-        # Dual-identity tags computed from the reveal tx (a bitcoind fetch), so
-        # filled only on the single-counter endpoint; null in lists (unknown,
-        # not "no"). Determined by the server, never indexed.
+        # Envelope style is computed from the reveal tx (a bitcoind fetch), so
+        # it is filled only on the single-counter endpoint; null in lists
+        # (unknown, not "no"). Server-determined, never indexed.
         "envelope": None,  # 'ord' | 'generic'
-        "proto": None,     # also a proto-counter?
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],
         "txid": row["mint_txid"],
@@ -316,12 +314,11 @@ class Handler(BaseHTTPRequestHandler):
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
             rec["block_time"] = _block_time(self.config, row["block_index"])
-            # Dual-identity tags: one reveal-tx fetch feeds both. Server-side,
-            # serve-time — never indexed; never affects validity or numbering.
+            # Envelope style (ord/generic) from the reveal tx — server-side,
+            # serve-time; never indexed; never affects validity or numbering.
             tx = self._reveal_tx(row)
             if tx is not None:
                 rec["envelope"] = envelope_style(tx)      # 'ord' | 'generic'
-                rec["proto"] = has_count_envelope(tx)     # also a proto-counter?
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
@@ -344,9 +341,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reveal_tx(self, row) -> dict | None:
         """The counter's reveal transaction (bitcoind, verbose) — the source for
-        the serve-time dual-identity tags (envelope style, proto-counter). None
-        if bitcoind is unreachable, so the UI can tell "no" from "couldn't
-        check". These tags are display-only; never validity or numbering."""
+        the serve-time envelope-style tag. None if bitcoind is unreachable, so
+        the UI can tell "no" from "couldn't check". Display-only; never affects
+        validity or numbering."""
         try:
             return BitcoindClient(self.config).get_raw_transaction(row["mint_txid"], verbose=True)
         except Exception:
