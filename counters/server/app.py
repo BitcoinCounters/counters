@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -508,11 +509,25 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("%s %s", self.address_string(), fmt % args)
 
 
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that doesn't dump a traceback when a client hangs up
+    mid-request (a browser tab closing / navigating away). Those
+    ConnectionReset/BrokenPipe/Timeout errors are the peer's doing, not a
+    server fault — real handler errors still print."""
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, BrokenPipeError, TimeoutError)):
+            log.debug("client %s dropped the connection: %r", client_address, exc)
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(config: Config, host: str = "127.0.0.1", port: int = 8081) -> ThreadingHTTPServer:
     """Build (but do not start) the explorer HTTP server. The caller drives it —
     either blocking via run() for a serve-only process, or on a background thread
     when `counters server` also runs the indexer in the foreground."""
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = _QuietThreadingHTTPServer((host, port), Handler)
     httpd.config = config  # type: ignore[attr-defined]
     return httpd
 
