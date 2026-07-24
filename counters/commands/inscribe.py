@@ -178,6 +178,7 @@ def cmd_inscribe(
     source: str | None = None,
     inputs_set: str | None = None,
     dry_run: bool = False,
+    no_mempool_check: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -316,13 +317,21 @@ def cmd_inscribe(
     reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
     reveal_txid = reveal_dec["txid"]
 
-    # Validate BOTH transactions as a package without broadcasting.
-    try:
-        checks = btc._call("testmempoolaccept", [[commit_hex, reveal_hex]])
-    except BitcoindError as e:
-        print(f"testmempoolaccept failed to run: {e}", file=sys.stderr)
-        checks = []
-    all_ok = bool(checks) and all(c.get("allowed") for c in checks)
+    # Validate BOTH transactions as a package without broadcasting — unless the
+    # caller opts out. An oversized inscription is a VALID transaction that
+    # simply exceeds Bitcoin's standard-relay weight (400k WU), so
+    # testmempoolaccept rejects it with `tx-size` and the local node won't relay
+    # it; --no-mempool-check skips the check so a --dry-run just emits the signed
+    # commit/reveal hex for you to submit directly to a miner.
+    checks: list = []
+    all_ok = True
+    if not no_mempool_check:
+        try:
+            checks = btc._call("testmempoolaccept", [[commit_hex, reveal_hex]])
+        except BitcoindError as e:
+            print(f"testmempoolaccept failed to run: {e}", file=sys.stderr)
+            checks = []
+        all_ok = bool(checks) and all(c.get("allowed") for c in checks)
 
     # report
     if reinscribe:
@@ -350,10 +359,14 @@ def cmd_inscribe(
     if named:
         print("XCP cost         : 0.5 XCP (named-asset issuance burn)")
 
-    print("\npackage validity (testmempoolaccept):")
-    for c in checks:
-        verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"
-        print(f"  {c.get('txid', '?')[:16]}…  {verdict}")
+    if no_mempool_check:
+        print("\npackage validity : skipped (--no-mempool-check); submit the hex "
+              "below directly to a miner")
+    else:
+        print("\npackage validity (testmempoolaccept):")
+        for c in checks:
+            verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"
+            print(f"  {c.get('txid', '?')[:16]}…  {verdict}")
 
     if dry_run:
         print("\n--- DRY RUN (nothing broadcast) ---")
