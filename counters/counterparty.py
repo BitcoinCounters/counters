@@ -44,9 +44,23 @@ class CounterpartyClient:
         self._asset_cache: dict[str, dict | None] = {}
 
     def _get(self, path: str, params: dict | None = None) -> Any:
+        return self._request("GET", path, params)
+
+    def _post(self, path: str, params: dict | None = None) -> Any:
+        # POST carries params in the request BODY, so a large payload (a taproot
+        # inscription's hex-encoded content) doesn't inflate the URL and trip the
+        # server's request-line/header size cap (waitress max_header, ~256 KB).
+        # Counterparty reads compose params from the form body on POST, bounded
+        # instead by the server's max_form_memory_size. Used for compose calls.
+        return self._request("POST", path, params)
+
+    def _request(self, method: str, path: str, params: dict | None = None) -> Any:
         url = f"{self.base}{path}"
         try:
-            resp = self._session.get(url, params=params, timeout=self.timeout)
+            if method == "POST":
+                resp = self._session.post(url, data=params, timeout=self.timeout)
+            else:
+                resp = self._session.get(url, params=params, timeout=self.timeout)
         except requests.ConnectionError as e:
             raise CounterpartyError(
                 f"could not reach Counterparty at {self.base} — is counterparty-server "
@@ -207,7 +221,7 @@ class CounterpartyClient:
             params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
         if transfer_destination:
             params["transfer_destination"] = transfer_destination
-        data = self._get(f"/v2/addresses/{source}/compose/issuance", params=params)
+        data = self._post(f"/v2/addresses/{source}/compose/issuance", params=params)
         if not data or "result" not in data:
             raise CounterpartyError(f"compose issuance failed: {data}")
         return data["result"]

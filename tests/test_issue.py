@@ -233,7 +233,9 @@ class _CapCp(CounterpartyClient):
     def __init__(self):
         self.captured = None
 
-    def _get(self, path, params=None):
+    def _post(self, path, params=None):
+        # compose_issuance POSTs (params in the body) so large inscription
+        # content isn't capped by the server's URL/header size limit.
         self.captured = (path, params)
         return {"result": {"rawtransaction": "00"}}
 
