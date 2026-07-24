@@ -259,12 +259,18 @@ def cmd_wallet_create(config: Config, name: str) -> int:
     except BitcoindError as e:
         print(f"could not create wallet: {e}", file=sys.stderr)
         return 1
+    # A taproot (bc1p) address by default, plus a legacy 1... one: the legacy
+    # descriptor is imported active too, and legacy addresses are needed to
+    # receive from Counterwallet-family wallets (Freewallet), which only send to
+    # 1... — mirrors `wallet receive`.
     first = btc.wallet_call(name, "getnewaddress", ["", "bech32m"])
+    legacy = btc.wallet_call(name, "getnewaddress", ["", "legacy"])
     print(f"created taproot wallet {name!r}.\n")
     print("=== WRITE DOWN YOUR SEED PHRASE (shown once) ===")
     print(f"  {mnemonic}")
     print("================================================\n")
-    print(f"first receive address: {first}")
+    print(f"first receive address (taproot): {first}")
+    print(f"legacy receive address:          {legacy}")
     return 0
 
 
