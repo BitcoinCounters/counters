@@ -478,12 +478,21 @@ def _restore_electrum2(config: Config, name: str, phrase: str, addresses: int,
 
 
 def cmd_wallet_receive(config: Config, name: str) -> int:
+    # Two fresh addresses from the same wallet: the taproot bc1p (this tool's
+    # default), and a legacy 1... P2PKH from the wallet's legacy descriptor.
+    # The legacy one is for sending FROM Counterwallet-family wallets (Freewallet
+    # etc.), which are Electrum-v1 and only send to legacy 1... addresses.
+    # Both descriptors are imported active by _import_account, so Core can hand
+    # out either type.
     btc = BitcoindClient(config)
     try:
-        print(btc.wallet_call(name, "getnewaddress", ["", "bech32m"]))
+        taproot = btc.wallet_call(name, "getnewaddress", ["", "bech32m"])
+        legacy = btc.wallet_call(name, "getnewaddress", ["", "legacy"])
     except BitcoindError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+    print(f"taproot: {taproot}")
+    print(f"legacy:  {legacy}")
     return 0
 
 
