@@ -62,16 +62,77 @@ def _spendable_addresses(btc: BitcoindClient, wallet: str) -> dict[str, int]:
     return totals
 
 
-def _find_xcp_address(cp: CounterpartyClient, addresses: list[str],
-                      min_xcp: int = NAMED_ISSUANCE_FEE_XCP) -> str | None:
-    """First address holding >= min_xcp XCP (balances are address-level)."""
+def _is_segwit_address(addr: str) -> bool:
+    """True if coins on `addr` can fund a taproot-encoded commit. Taproot
+    encoding rejects legacy (P2PKH, 1...) inputs; native segwit (bc1q), taproot
+    (bc1p), and nested segwit (3...) all spend with a witness and qualify."""
+    return not addr.startswith("1")
+
+
+def _xcp_holders(cp: CounterpartyClient, addresses: list[str],
+                 min_xcp: int = NAMED_ISSUANCE_FEE_XCP) -> list[str]:
+    """Addresses holding >= min_xcp XCP, in the order given (Counterparty
+    balances are per-address)."""
+    holders: list[str] = []
     for addr in addresses:
         try:
             if cp.get_xcp_balance(addr) >= min_xcp:
-                return addr
+                holders.append(addr)
         except CounterpartyError:
             continue
-    return None
+    return holders
+
+
+def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
+                 spendable: dict[str, int], *, named: bool,
+                 inputs_set: str | None) -> tuple[str | None, str | None]:
+    """Auto-select a Counterparty source that can actually fund a TAPROOT
+    inscription. The commit is funded from the source's OWN coins, so a working
+    source needs spendable SEGWIT BTC — a legacy 1... address can't fund taproot
+    encoding (build ref v3 §11). A NAMED asset additionally needs >= 0.5 XCP on
+    that SAME address, since issuance is single-source. The richest eligible
+    address wins, so the commit has the most room to fund. When --inputs-set
+    pins the funding UTXOs, the spendable-BTC requirement is relaxed (the caller
+    vouches for the pinned coins). Returns (source, error): exactly one is set."""
+    addrs = sorted(wallet_addrs)
+    funded = sorted(
+        (a for a in addrs if spendable.get(a, 0) > 0 and _is_segwit_address(a)),
+        key=lambda a: spendable[a], reverse=True,
+    )
+    pinned = inputs_set is not None
+
+    if named:
+        holders = _xcp_holders(cp, addrs)
+        if not holders:
+            return None, (
+                f"no wallet address holds the {NAMED_ISSUANCE_FEE_XCP / COIN:.1f} "
+                f"XCP required to register a named asset. Fund a wallet address "
+                f"with XCP first, then retry (or omit --asset for a free numeric "
+                f"asset)."
+            )
+        if pinned:
+            return holders[0], None
+        holder_set = set(holders)
+        for a in funded:  # richest segwit address that also holds the XCP
+            if a in holder_set:
+                return a, None
+        return None, (
+            f"the 0.5 XCP for a named asset sits on {holders[0]}, but no "
+            f"XCP-holding address also has spendable segwit BTC to fund the "
+            f"taproot commit (a named issuance is single-source). Move the XCP "
+            f"onto a segwit (bc1q/bc1p) address that has BTC — or pass --source "
+            f"with --inputs-set to fund it explicitly."
+        )
+
+    # Free numeric asset: only needs spendable segwit BTC.
+    if funded:
+        return funded[0], None
+    if pinned and addrs:
+        return addrs[0], None
+    return None, (
+        "wallet has no spendable segwit BTC to fund the commit (taproot encoding "
+        "can't use legacy 1... coins); fund a bc1q/bc1p address and retry."
+    )
 
 
 def _description_for(body: bytes, mime_type: str, height: int) -> str | None:
@@ -84,6 +145,25 @@ def _description_for(body: bytes, mime_type: str, height: int) -> str | None:
         except UnicodeDecodeError:
             return None
     return body.hex()
+
+
+def _reveal_fee_sat(commit_dec: dict, reveal_dec: dict) -> int | None:
+    """Fee of the reveal transaction, in sats. The reveal is a CPFP child that
+    spends the commit's envelope output(s), so its inputs all come from the
+    commit — which isn't confirmed yet, hence we read their values from the
+    decoded commit rather than the chain. fee = spent commit outputs − reveal
+    outputs. Returns None if a reveal input can't be resolved from the commit
+    (unexpected shape), so the caller can just omit the line."""
+    commit_txid = commit_dec["txid"]
+    outs = {o["n"]: o["value"] for o in commit_dec["vout"]}
+    total_in = 0.0
+    for vin in reveal_dec.get("vin", []):
+        if vin.get("txid") == commit_txid and vin.get("vout") in outs:
+            total_in += outs[vin["vout"]]
+        else:
+            return None
+    total_out = sum(o.get("value", 0) for o in reveal_dec.get("vout", []))
+    return round((total_in - total_out) * COIN)
 
 
 def cmd_inscribe(
@@ -170,28 +250,26 @@ def cmd_inscribe(
     else:
         asset = random_numeric_asset()
 
-    # Pick the source: it funds the commit from its own coins, so it needs BTC
-    # (and the XCP burn for a named asset).
+    # Pick the source: it funds the commit from its own coins, so it needs
+    # spendable segwit BTC (and, for a named asset, the 0.5 XCP burn) on the
+    # SAME address. Auto-selection skips addresses that can't fund a taproot
+    # commit — notably legacy 1... addresses holding only XCP.
     if source is None:
-        if named:
-            source = _find_xcp_address(cp, sorted(wallet_addrs))
-            if source is None:
-                print(f"no wallet address holds the {NAMED_ISSUANCE_FEE_XCP / COIN:.1f} "
-                      f"XCP required to register a named asset. Fund a wallet address "
-                      f"with XCP first, then retry (or omit --asset for a free "
-                      f"numeric asset).", file=sys.stderr)
-                return 1
-        else:
-            # Address with the most spendable BTC.
-            source = max(spendable, key=spendable.get) if spendable else None
-            if source is None:
-                print(f"wallet {wallet!r} has no spendable BTC to fund the commit; "
-                      f"fund it and retry.", file=sys.stderr)
-                return 1
-    elif source not in wallet_addrs:
-        print(f"--source {source} is not an address of wallet {wallet!r}",
-              file=sys.stderr)
-        return 1
+        source, err = _pick_source(
+            cp, wallet_addrs, spendable, named=named, inputs_set=inputs_set
+        )
+        if source is None:
+            print(err, file=sys.stderr)
+            return 1
+    else:
+        if source not in wallet_addrs:
+            print(f"--source {source} is not an address of wallet {wallet!r}",
+                  file=sys.stderr)
+            return 1
+        if not _is_segwit_address(source) and inputs_set is None:
+            print(f"note: --source {source} is a legacy address; taproot encoding "
+                  f"can't fund a commit from 1... coins, so compose will likely "
+                  f"fail. Use a bc1q/bc1p source (or --inputs-set).", file=sys.stderr)
     if not spendable.get(source) and inputs_set is None:
         print(f"note: source {source} has no spendable BTC on record; compose may "
               f"fail — fund it or pass --inputs-set TXID:VOUT", file=sys.stderr)
@@ -235,7 +313,8 @@ def cmd_inscribe(
         print("internal error: commit txid changed on signing; the pre-signed "
               "reveal would be orphaned. Nothing was broadcast.", file=sys.stderr)
         return 1
-    reveal_txid = btc._call("decoderawtransaction", [reveal_hex])["txid"]
+    reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
+    reveal_txid = reveal_dec["txid"]
 
     # Validate BOTH transactions as a package without broadcasting.
     try:
@@ -260,8 +339,14 @@ def cmd_inscribe(
     print(f"source           : {source}")
     print(f"commit txid      : {unsigned_txid}")
     print(f"reveal txid      : {reveal_txid}")
-    if composed.get("btc_fee") is not None:
-        print(f"commit fee       : {composed['btc_fee']} sat")
+    commit_fee = composed.get("btc_fee")
+    reveal_fee = _reveal_fee_sat(commit_dec, reveal_dec)
+    if commit_fee is not None:
+        print(f"commit fee       : {commit_fee} sat")
+    if reveal_fee is not None:
+        print(f"reveal fee       : {reveal_fee} sat")
+    if commit_fee is not None and reveal_fee is not None:
+        print(f"total fee        : {commit_fee + reveal_fee} sat")
     if named:
         print("XCP cost         : 0.5 XCP (named-asset issuance burn)")
 
