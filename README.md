@@ -141,6 +141,10 @@ counters wallet --name mywallet inscriptions      # counters held by the wallet
 counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
 counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign, no broadcast
 
+# plain BTC: put BTC in the ASSET slot (amount in BTC; Bitcoin Core picks the inputs)
+counters wallet --name mywallet send bc1p... BTC 0.001
+counters wallet --name mywallet send bc1p... BTC 0.001 --fee-rate 3 --dry-run
+
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.

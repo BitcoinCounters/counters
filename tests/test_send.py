@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -183,6 +184,119 @@ def test_send_happy_path_passes_fee_rate_and_dry_run():
         assert k["asset"] == "RAREPEPE" and k["quantity"] == 1
         assert k["sat_per_vbyte"] == 2.0
         assert btc.sent is None            # dry-run: nothing broadcast
+    finally:
+        _restore(orig)
+
+
+class _FakeBtcWallet:
+    """Bitcoin Core stand-in for the plain-BTC path (`send <ADDR> BTC <AMT>`)."""
+
+    def __init__(self, trusted="0.5"):
+        self.trusted = trusted
+        self.send_params = None
+
+    def _call(self, method, params=None):
+        if method == "validateaddress":
+            return {"isvalid": params[0].startswith("bc1")}
+        if method == "testmempoolaccept":
+            return [{"allowed": True, "vsize": 141, "fees": {"base": 0.00000282}}]
+        raise AssertionError(f"unexpected _call {method}")
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "getbalances":
+            return {"mine": {"trusted": self.trusted, "untrusted_pending": 0}}
+        if method == "send":
+            self.send_params = params
+            if (params[4] or {}).get("add_to_wallet") is False:
+                return {"complete": True, "hex": "signedbtc00"}
+            return {"complete": True, "txid": "btctxid"}
+        if method == "gettransaction":
+            return {"fee": -0.00000282}
+        raise AssertionError(f"unexpected wallet_call {method}")
+
+
+def test_to_btc_amount():
+    assert S._to_btc_amount("0.001") == Decimal("0.001")
+    assert S._to_btc_amount("1") == Decimal("1")
+    for bad in ("0", "-1", "abc", "0.000000001"):   # last is sub-satoshi
+        try:
+            S._to_btc_amount(bad)
+            assert False, f"{bad!r} should have raised"
+        except ValueError:
+            pass
+
+
+def test_send_btc_dry_run_does_not_broadcast():
+    btc = _FakeBtcWallet()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        # lowercase "btc" routes to the plain-bitcoin path too
+        rc = S.cmd_send(Config(), "me", DEST, "btc", "0.001", fee_rate=8.0, dry_run=True)
+        assert rc == 0
+        outputs, conf_target, mode, fee_rate, options = btc.send_params
+        assert outputs == {DEST: "0.001"} and conf_target is None
+        assert fee_rate == 8.0 and options == {"add_to_wallet": False}
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_broadcasts():
+    btc = _FakeBtcWallet()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "BTC", "0.001")
+        assert rc == 0
+        assert btc.send_params[4] == {}          # broadcast: no add_to_wallet override
+        assert btc.send_params[3] is None        # no fee rate -> Core estimates
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_refuses_more_than_the_balance():
+    btc = _FakeBtcWallet(trusted="0.5")
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        # 100000 reads as BTC, not sats — caught before any `send` RPC.
+        rc = S.cmd_send(Config(), "me", DEST, "BTC", "100000")
+        assert rc == 1 and btc.send_params is None
+    finally:
+        _restore(orig)
+
+
+class _NoLegacyChangeBtc(_FakeBtcWallet):
+    """A taproot-only wallet on a node whose default change type is legacy:
+    the first `send` fails, and only a bech32m change type can work."""
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": [
+                {"desc": "tr(xpub.../0/*)", "active": True, "internal": False},
+                {"desc": "tr(xpub.../1/*)", "active": True, "internal": True},
+            ]}
+        if method == "send" and "change_type" not in (params[4] or {}):
+            raise S.BitcoindError("bitcoind RPC error for send: Transaction needs a "
+                                  "change address, but we can't generate it. Error: "
+                                  "No legacy addresses available.")
+        return super().wallet_call(wallet, method, params, timeout)
+
+
+def test_send_btc_retries_with_a_change_type_the_wallet_has():
+    btc = _NoLegacyChangeBtc()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "BTC", "0.001", dry_run=True)
+        assert rc == 0
+        assert btc.send_params[4]["change_type"] == "bech32m"
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_rejects_bad_destination():
+    btc = _FakeBtcWallet()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", "not-an-address", "BTC", "0.001")
+        assert rc == 1 and btc.send_params is None
     finally:
         _restore(orig)
 

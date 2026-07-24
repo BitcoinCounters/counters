@@ -262,12 +262,15 @@ def main(argv: list[str] | None = None) -> int:
 
     p_send = wsub.add_parser(
         "send", parents=[common, wname],
-        help="transfer a counter (asset) to an address",
-        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET> <AMOUNT>",
+        help="transfer a counter (asset), or plain BTC, to an address",
+        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET|BTC> <AMOUNT>",
     )
     p_send.add_argument("destination", metavar="address", help="recipient Bitcoin address")
-    p_send.add_argument("asset", help="asset name or longname of the counter")
-    p_send.add_argument("amount", help="quantity to send (e.g. 1, or 0.5 for a divisible asset)")
+    p_send.add_argument("asset", metavar="asset",
+                        help="asset name or longname of the counter, or BTC for a "
+                             "plain bitcoin payment")
+    p_send.add_argument("amount", help="quantity to send (e.g. 1, 0.5 for a divisible "
+                                       "asset, or an amount in BTC when asset is BTC)")
     p_send.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_send.add_argument("--dry-run", action="store_true",
