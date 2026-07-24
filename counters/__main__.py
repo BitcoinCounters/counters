@@ -254,6 +254,11 @@ def main(argv: list[str] | None = None) -> int:
                              "inputs_set format)")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="compose + sign but do not broadcast; print raw hex")
+    p_insc.add_argument("--no-mempool-check", action="store_true",
+                        help="skip testmempoolaccept — for an oversized (non-standard, "
+                             "over 400k WU) inscription that the local node won't relay; "
+                             "use with --dry-run to get the commit/reveal hex to submit "
+                             "directly to a miner")
 
     p_send = wsub.add_parser(
         "send", parents=[common, wname],
@@ -356,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
                     asset=args.asset, fee_rate=args.fee_rate,
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
                     source=args.source, inputs_set=args.inputs_set,
-                    dry_run=args.dry_run,
+                    dry_run=args.dry_run, no_mempool_check=args.no_mempool_check,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
