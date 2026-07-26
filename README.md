@@ -153,6 +153,11 @@ counters wallet --name mywallet cancel --txid <txid> --dry-run
 # package being cancelled is large; prints hex to hand to a miner directly
 counters wallet --name mywallet cancel --no-mempool-check --fee-rate 3
 
+# make an unconfirmed transaction confirm faster, by CPFP: pick it, name the fee
+# rate the whole package should reach, confirm, and a child is broadcast
+counters wallet --name mywallet bump
+counters wallet --name mywallet bump --txid <txid> --fee-rate 5
+
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.
@@ -186,6 +191,14 @@ counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply
 > miner resells for far more than the fees given up. `--no-mempool-check` prices
 > the replacement at its own size and a competitive rate instead, and prints the
 > signed hex for direct submission, since no ordinary node will relay it.
+
+> **An inscription's reveal cannot be sped up or replaced.** Counterparty signs
+> it with an ephemeral envelope key, so it cannot be re-signed (no RBF), and it
+> spends its whole input to fee, emitting only an `OP_RETURN` — so it has no
+> output to attach a CPFP child to. A child on the *commit* is the reveal's
+> sibling, not its ancestor, and does not lift it; replacing the commit changes
+> its txid and merely invalidates the reveal. A reveal broadcast too cheaply can
+> only be waited out, or abandoned with `cancel` on the commit and re-minted.
 
 ## Tests
 
@@ -221,6 +234,7 @@ counters/
     issue.py        lock-supply / lock-description / issue (owner-sourced)
     send.py         transfer a counter (Counterparty send)
     cancel.py       abandon an unconfirmed transaction by RBF replacement
+    bump.py         speed up an unconfirmed transaction by CPFP child
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
 docs/
