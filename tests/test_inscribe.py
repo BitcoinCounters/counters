@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from counters.commands.inscribe import (  # noqa: E402
     NAMED_ISSUANCE_FEE_XCP,
+    _estimate_source_need,
+    _fund_source,
     _is_segwit_address,
     _pick_source,
     _reveal_fee_sat,
@@ -124,3 +126,72 @@ def test_reveal_fee_unresolvable_input_returns_none():
     commit = {"txid": "aa", "vout": [{"n": 0, "value": 0.001}]}
     reveal = {"vin": [{"txid": "bb", "vout": 0}], "vout": []}
     assert _reveal_fee_sat(commit, reveal) is None
+
+
+# --- funding a source that holds the XCP but no BTC -------------------------
+
+class _FundBtc:
+    """Bitcoin Core stand-in for the consolidation transfer."""
+
+    def __init__(self, utxos=None):
+        self.utxos = utxos if utxos is not None else [
+            {"txid": "cc", "vout": 0, "address": "bc1pRich", "amount": 0.01,
+             "spendable": True},
+        ]
+        self.sent = None
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listunspent":
+            return list(self.utxos)
+        if method == "listdescriptors":
+            return {"descriptors": [{"desc": "tr(xpub.../1/*)", "active": True,
+                                     "internal": True}]}
+        if method == "send":
+            self.sent = params
+            return {"complete": True, "txid": "fundtxid"}
+        raise AssertionError(f"unexpected wallet_call {method}")
+
+
+def test_estimate_covers_the_real_inscription_cost():
+    # Observed on-chain: a 62919-byte image composed to 15934 vB reveal + 154 vB
+    # commit, so 16088 vB. The estimate must exceed that at any rate.
+    for rate in (0.55, 1, 3, 10):
+        assert _estimate_source_need(62919, rate) > (15934 + 154) * rate
+
+
+def test_fund_source_pins_the_named_address_coins():
+    btc = _FundBtc()
+    txid = _fund_source(btc, "me", "bc1pXcpHolder", 5000, "bc1pRich", 3.0)
+    assert txid == "fundtxid"
+    outputs, _conf, _mode, fee_rate, options = btc.sent
+    assert outputs == {"bc1pXcpHolder": "0.00005"}
+    assert fee_rate == 3.0
+    assert options["inputs"] == [{"txid": "cc", "vout": 0}]
+    assert options["add_inputs"] is False          # only the named address pays
+    assert options["change_type"] == "bech32m"
+
+
+def test_fund_source_auto_lets_core_choose():
+    btc = _FundBtc()
+    assert _fund_source(btc, "me", "bc1pXcpHolder", 5000, None, None) == "fundtxid"
+    _outputs, _conf, _mode, _rate, options = btc.sent
+    assert "inputs" not in options                 # wallet-wide selection
+    assert "add_inputs" not in options
+
+
+def test_fund_source_refuses_an_address_with_no_coins():
+    btc = _FundBtc(utxos=[])
+    assert _fund_source(btc, "me", "bc1pXcpHolder", 5000, "bc1pRich", None) is None
+    assert btc.sent is None
+
+
+def test_pick_source_accepts_an_unfunded_xcp_holder_when_funding():
+    # The whole point of --fund-from: the XCP holder has no BTC *yet*.
+    cp = _DuckCp({"bc1pXcp": NAMED_ISSUANCE_FEE_XCP})
+    src, err = _pick_source(cp, {"bc1pXcp", "bc1pRich"}, {"bc1pRich": 100000},
+                            named=True, inputs_set=None, funding=True)
+    assert src == "bc1pXcp" and err is None
+    # ...and without it, the same wallet is refused.
+    src2, err2 = _pick_source(cp, {"bc1pXcp", "bc1pRich"}, {"bc1pRich": 100000},
+                              named=True, inputs_set=None)
+    assert src2 is None and "single-source" in err2

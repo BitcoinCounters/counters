@@ -174,6 +174,10 @@ counters wallet --name mywallet inscribe --file cat.png                     # fr
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
 counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
+# XCP on one address, BTC on another? Counterparty takes the issuance fee from the
+# FIRST INPUT's address, so the source must own its coins — this moves them there first
+counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from auto
+counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from bc1p...
 
 # --- asset management (owner-sourced Counterparty issuances) ---
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
@@ -186,6 +190,15 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > keys are imported into a Bitcoin Core descriptor wallet, which holds them and
 > does all signing; this tool never touches private keys after derivation.
 > `--name` defaults to `counter`.
+
+> **A named mint is single-source.** Counterparty derives an issuance's source
+> from the transaction's FIRST INPUT (`first_input_is_source`) and burns the
+> 0.5 XCP from exactly that address; the composer enforces it ("source address
+> does not match the first input address"). Extra inputs may come from other
+> addresses, but since the composer orders inputs by value, the source's own
+> coin has to be the largest — so funding a poor XCP address from a rich one
+> does not work directly. `--fund-from` moves the shortfall to the source first
+> and then inscribes.
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
 > with a destination output (so no `transfer_destination` on an inscription
