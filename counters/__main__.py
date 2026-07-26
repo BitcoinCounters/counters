@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .commands import inscribe, issue, read, send, serve, wallet
+from .commands import cancel, inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -303,6 +303,29 @@ def main(argv: list[str] | None = None) -> int:
     p_issue.add_argument("--dry-run", action="store_true",
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_cancel = wsub.add_parser(
+        "cancel", parents=[common, wname],
+        help="replace an unconfirmed transaction to abandon it (RBF)",
+        usage="counters wallet [--name NAME] cancel [--txid TXID]",
+    )
+    p_cancel.add_argument("--txid", help="cancel this transaction instead of choosing "
+                                         "from the pending list")
+    p_cancel.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                          help="minimum fee rate for the replacement (default: just "
+                               "over the original's); the replacement always pays "
+                               "enough to out-bid everything it evicts")
+    p_cancel.add_argument("--yes", action="store_true",
+                          help="skip the confirmation prompt")
+    p_cancel.add_argument("--dry-run", action="store_true",
+                          help="build + sign + validate but do not broadcast; print raw hex")
+    p_cancel.add_argument("--no-mempool-check", action="store_true",
+                          help="price the replacement for a MINER instead of for relay "
+                               "policy: it pays its own size at a competitive rate rather "
+                               "than out-bidding everything it evicts, which is far "
+                               "cheaper when cancelling a big low-fee package. Ordinary "
+                               "nodes will not relay it, so the signed hex is printed for "
+                               "direct submission to a miner instead of broadcast")
+
     args = parser.parse_args(argv)
     _setup_logging(args.verbose)
 
@@ -383,6 +406,12 @@ def main(argv: list[str] | None = None) -> int:
                 return issue.cmd_issue(
                     config, args.name, args.asset, args.amount,
                     lock=args.lock, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "cancel":
+                return cancel.cmd_cancel(
+                    config, args.name, txid=args.txid, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                    no_mempool_check=args.no_mempool_check,
                 )
             if args.wallet_command == "restore":
                 return wallet.cmd_wallet_restore(

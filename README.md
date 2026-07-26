@@ -145,6 +145,14 @@ counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign
 counters wallet --name mywallet send bc1p... BTC 0.001
 counters wallet --name mywallet send bc1p... BTC 0.001 --fee-rate 3 --dry-run
 
+# abandon an UNCONFIRMED transaction by replacing it (RBF): pick from the pending
+# list, confirm, and the inputs come back to the wallet
+counters wallet --name mywallet cancel
+counters wallet --name mywallet cancel --txid <txid> --dry-run
+# ...or price it for a MINER rather than for relay policy — far cheaper when the
+# package being cancelled is large; prints hex to hand to a miner directly
+counters wallet --name mywallet cancel --no-mempool-check --fee-rate 3
+
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.
@@ -169,6 +177,15 @@ counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply
 > with a destination output (so no `transfer_destination` on an inscription
 > mint), and attaching new content to an existing asset requires its
 > description to be unlocked.
+
+> **Cancelling costs what relay policy demands, not what a miner needs.** A
+> replacement must out-pay every transaction it evicts (BIP125 rule 3) — so
+> cancelling a stuck inscription must beat commit + reveal *combined*, which is
+> most of what the mint committed. That floor is anti-DoS relay policy, not
+> economics: the replacement also hands back the package's block space, which a
+> miner resells for far more than the fees given up. `--no-mempool-check` prices
+> the replacement at its own size and a competitive rate instead, and prints the
+> signed hex for direct submission, since no ordinary node will relay it.
 
 ## Tests
 
@@ -203,6 +220,7 @@ counters/
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
     issue.py        lock-supply / lock-description / issue (owner-sourced)
     send.py         transfer a counter (Counterparty send)
+    cancel.py       abandon an unconfirmed transaction by RBF replacement
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
 docs/
