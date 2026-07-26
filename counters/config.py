@@ -102,6 +102,12 @@ class Config:
     def blobs_dir(self) -> Path:
         return Path(self.data_dir) / "blobs"
 
+    @property
+    def social_dir(self) -> Path:
+        """Rendered `og:image` cache. Derived, not consensus data: safe to wipe,
+        and rebuilt on demand (keyed by content hash + renderer version)."""
+        return Path(self.data_dir) / "social"
+
     def ensure_dirs(self) -> None:
         Path(self.data_dir).mkdir(parents=True, exist_ok=True)
         self.blobs_dir.mkdir(parents=True, exist_ok=True)

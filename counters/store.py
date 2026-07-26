@@ -123,6 +123,16 @@ class Store:
         path = self._blob_path(digest)
         return path.read_bytes() if path.exists() else None
 
+    def read_blob_prefix(self, digest: str, limit: int) -> bytes | None:
+        """The first `limit` bytes of a blob — enough to sniff a file signature
+        without pulling a multi-megabyte inscription into memory."""
+        path = self._blob_path(digest)
+        try:
+            with path.open("rb") as fh:
+                return fh.read(limit)
+        except OSError:
+            return None
+
     # --- counters ----------------------------------------------------------
 
     def next_number(self) -> int:

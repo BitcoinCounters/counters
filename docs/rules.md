@@ -71,6 +71,17 @@ window). But `/preview/<n>` and `/stamp/<n>` are *functions of these rules* —
 they must be served with a short-lived cache (or a cache key that includes the
 build revision), **never `immutable`**, so a rules change takes effect at once.
 
+**8 — A shared link previews the counter, never a stand-in.** Link crawlers
+(Telegram, WhatsApp, Twitter, …) run no JavaScript and fetch exactly one image,
+so `/c/<n>` is served with that counter's own Open Graph tags. `og:image` is
+the counter's picture when it has one — the raw file if a crawler will fetch it
+at that size, box-downsampled if not — and otherwise a **rendered card**
+showing what the detail page shows. The card is drawn from on-chain bytes and
+index rows only: pointers appear as their text (rule 4 — still never fetched),
+HTML and SVG as their source, and formats with nothing to draw as their name.
+The site logo is no longer used as a fallback; a preview that shows the wrong
+counter is worse than one that shows less of the right one.
+
 ## What each counter renders (#0–#86)
 
 Renders-as — **image / audio / html / text / pointer**. Status — **OK**:
