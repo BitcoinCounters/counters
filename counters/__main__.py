@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .commands import bump, cancel, inscribe, issue, read, send, serve, wallet
+from .commands import bump, cancel, dispenser, inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -303,6 +303,26 @@ def main(argv: list[str] | None = None) -> int:
     p_issue.add_argument("--dry-run", action="store_true",
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_disp = wsub.add_parser(
+        "buy-from-dispenser", parents=[common, wname],
+        help="buy from a Counterparty dispenser (a plain BTC send does NOT work)",
+        usage="counters wallet [--name NAME] buy-from-dispenser <ADDRESS> <AMOUNT>",
+    )
+    p_disp.add_argument("address", metavar="address", help="the dispenser's address")
+    p_disp.add_argument("amount", help="how much of the ASSET to buy (e.g. 1); the "
+                                       "satoshi price comes from the dispenser")
+    p_disp.add_argument("--asset", help="which asset, when the address runs more than "
+                                        "one open dispenser")
+    p_disp.add_argument("--source", metavar="ADDRESS",
+                        help="wallet address to pay from; default: the richest that "
+                             "can cover it")
+    p_disp.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_disp.add_argument("--yes", action="store_true",
+                        help="skip the confirmation prompt")
+    p_disp.add_argument("--dry-run", action="store_true",
+                        help="compose + sign + validate but do not broadcast; print raw hex")
+
     p_bump = wsub.add_parser(
         "bump", parents=[common, wname],
         help="pay more to get an unconfirmed transaction mined (CPFP)",
@@ -419,6 +439,12 @@ def main(argv: list[str] | None = None) -> int:
                 return issue.cmd_issue(
                     config, args.name, args.asset, args.amount,
                     lock=args.lock, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "buy-from-dispenser":
+                return dispenser.cmd_buy_from_dispenser(
+                    config, args.name, args.address, args.amount,
+                    asset=args.asset, source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
                 )
             if args.wallet_command == "bump":
                 return bump.cmd_bump(

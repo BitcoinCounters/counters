@@ -158,6 +158,14 @@ counters wallet --name mywallet cancel --no-mempool-check --fee-rate 3
 counters wallet --name mywallet bump
 counters wallet --name mywallet bump --txid <txid> --fee-rate 5
 
+# buy from a dispenser. A plain BTC send to a dispenser address does NOTHING
+# (see disable_vanilla_btc_dispense below) — a purchase needs this message.
+# You say how much of the ASSET to buy; the price comes from the dispenser, and
+# the total cost in BTC is shown for a y/n confirmation before anything is sent.
+counters wallet --name mywallet buy-from-dispenser bc1q... 1          # buy 1 XCP
+counters wallet --name mywallet buy-from-dispenser bc1q... 3 --fee-rate 3
+counters wallet --name mywallet buy-from-dispenser bc1q... 1 --yes    # no prompt
+
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.
@@ -182,6 +190,15 @@ counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply
 > with a destination output (so no `transfer_destination` on an inscription
 > mint), and attaching new content to an existing asset requires its
 > description to be unlocked.
+
+> **Dispensers cannot be paid with a plain BTC send.** Since Counterparty's
+> `disable_vanilla_btc_dispense` (block 866,000) a payment carrying no
+> Counterparty data is discarded before the dispenser is consulted: the coins
+> reach the operator's address and nothing is dispensed, with no error and no
+> way back. `buy-from-dispenser` composes the `dispense` message the purchase
+> actually requires. (The "never pay a dispenser from taproot" advice you may
+> see elsewhere predates `taproot_support` at block 902,000; bc1p sources are
+> fine now.)
 
 > **Cancelling costs what relay policy demands, not what a miner needs.** A
 > replacement must out-pay every transaction it evicts (BIP125 rule 3) — so
@@ -235,6 +252,7 @@ counters/
     send.py         transfer a counter (Counterparty send)
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child
+    dispenser.py    buy from a dispenser (composes the `dispense` message)
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
 docs/
