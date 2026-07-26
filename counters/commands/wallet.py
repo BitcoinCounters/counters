@@ -21,7 +21,7 @@ from decimal import Decimal
 from mnemonic import Mnemonic
 
 from .. import bip32, counterwallet, electrum1, electrum2
-from ..bitcoind import BitcoindClient, BitcoindError
+from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..store import Store
@@ -587,27 +587,56 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
     mine = bal.get("mine", {})
     confirmed = mine.get("trusted", 0)
     pending = mine.get("untrusted_pending", 0) + mine.get("immature", 0)
-    print(f"BTC confirmed : {confirmed}")
+    print(f"BTC confirmed : {_fmt_btc(confirmed)}")
     if pending:
-        print(f"BTC pending   : {pending}")
-    return _report_cp_balances(cp, _wallet_addresses(btc, name))
+        print(f"BTC pending   : {_fmt_btc(pending)}")
+    # Union the on-chain view with descriptor-derived addresses: Bitcoin Core
+    # omits CHANGE addresses from listreceivedbyaddress, so an asset sitting on
+    # one whose coins are all spent would otherwise be invisible.
+    addrs = set(_wallet_addresses(btc, name))
+    try:
+        addrs.update(_derived_addresses(btc, name, addresses))
+    except BitcoindError:
+        pass                                   # on-chain view alone still works
+    return _report_cp_balances(cp, sorted(addrs))
+
+
+def _fmt_btc(value) -> str:
+    """BTC amount as a plain 8-decimal string. Bitcoin Core hands back floats,
+    and small ones render as `9.581e-05` if printed directly."""
+    dec = Decimal(str(value)).quantize(Decimal("0.00000001"))
+    return format(dec, "f")
+
+
+def _fmt_qty(raw: int, divisible: bool) -> str:
+    """Counterparty quantity for display: divisible assets are stored in
+    satoshis, so 1 XCP arrives as 100000000."""
+    if not divisible:
+        return str(raw)
+    return format((Decimal(raw) / COIN).quantize(Decimal("0.00000001")), "f")
 
 
 def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
     # Aggregate Counterparty balances across the given addresses.
     totals: dict[str, dict] = {}
     owned: dict[str, str] = {}   # asset -> display name (issuance rights held)
+    unreachable = 0
     for addr in addrs:
         try:
             rows = cp.get_address_balances(addr)
         except CounterpartyError:
+            unreachable += 1
             continue
         for r in rows:
             q = int(r.get("quantity") or 0)
             if q <= 0:
                 continue
             key = r["asset"]
-            agg = totals.setdefault(key, {"qty": 0, "name": r.get("asset_longname") or key})
+            agg = totals.setdefault(key, {
+                "qty": 0,
+                "name": r.get("asset_longname") or key,
+                "divisible": bool((r.get("asset_info") or {}).get("divisible")),
+            })
             agg["qty"] += q
         try:
             for a in cp.get_address_owned_assets(addr):
@@ -618,9 +647,18 @@ def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
     if totals:
         print("\nCounterparty assets:")
         for asset, agg in sorted(totals.items()):
-            print(f"  {agg['name']:<28} {agg['qty']}")
+            print(f"  {agg['name']:<28} {_fmt_qty(agg['qty'], agg['divisible'])}")
+    elif unreachable:
+        # Never let an unreachable oracle read as "you own nothing": while
+        # Counterparty catches up its API answers "Counterparty not ready".
+        print(f"\nCounterparty assets: UNKNOWN — {unreachable} address(es) could "
+              f"not be queried (is Counterparty synced? try `counters status`)")
+        return 1
     else:
         print("\nno Counterparty assets")
+    if unreachable:
+        print(f"  (warning: {unreachable} address(es) could not be queried, so this "
+              f"may be incomplete)")
     if owned:
         # "Ownership rights assets": the transferable control of an asset (its
         # `owner` field), independent of the token supply. The protocol has no
