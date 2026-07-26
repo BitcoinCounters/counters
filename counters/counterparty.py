@@ -254,6 +254,39 @@ class CounterpartyClient:
 
     # --- addresses ---------------------------------------------------------
 
+    def compose_dispense(
+        self, source: str, dispenser: str, quantity: int,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a *dispense*: the BTC payment to `dispenser` PLUS the
+        OP_RETURN message that makes Counterparty parse it as a purchase.
+
+        Since `disable_vanilla_btc_dispense` (block 866,000) a bare BTC payment
+        to a dispenser address does nothing at all — no data means Counterparty
+        discards the transaction before the dispenser is ever consulted. This
+        message is what a dispenser purchase now requires.
+
+        `quantity` is the BTC payment in satoshis; the dispenser gives out
+        floor(quantity / satoshirate) lots.
+        """
+        params: dict[str, Any] = {
+            "dispenser": dispenser,
+            "quantity": quantity,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/dispense", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose dispense failed: {data}")
+        return data["result"]
+
+    def get_address_dispensers(self, address: str) -> list[dict]:
+        """Dispensers operated BY `address` (what a buyer pays into)."""
+        return self._paginate(f"/v2/addresses/{address}/dispensers")
+
     def get_address_balances(self, address: str) -> list[dict]:
         """All Counterparty (XCP + asset) balances held by an address."""
         return self._paginate(f"/v2/addresses/{address}/balances")
