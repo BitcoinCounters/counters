@@ -236,6 +236,39 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > **issuance rights** — the power to reissue, lock, and reinscribe. Moving one
 > does not move the other, so handing a counter over in full means doing both.
 
+## Link previews
+
+Pasting a counter link — `https://www.bitcoincounters.com/c/95` — into Telegram,
+WhatsApp, Twitter, Discord, Slack or iMessage shows that counter, not the site
+logo. Crawlers run no JavaScript, so `/c/<id>` is served by the server with the
+counter's own Open Graph tags substituted into the SPA shell; the explorer
+itself is unchanged and still renders the page from the same URL.
+
+What `og:image` points at depends on the content:
+
+| counter | `og:image` |
+|---|---|
+| a raster image under 300 KB | `/content/<n>` — the file itself, untouched (animated GIFs keep animating) |
+| a raster image over 300 KB | `/social/<n>.png` — the same picture, box-downsampled until a crawler will fetch it |
+| a stamp (`STAMP:<base64>`) | `/stamp/<n>` — the decoded image |
+| anything else | `/social/<n>.png` — a rendered 1200x630 card |
+
+The card carries what the detail page shows: the content itself on the left
+(text, a pointer URI, HTML source, or the format name for audio and binary),
+and the number, asset, badges and facts on the right, in the explorer's own
+palette and odometer style.
+
+The 300 KB threshold is the practical ceiling for the strictest mainstream
+crawler, not a format limit. Oversized **JPEG** and **GIF** are the one gap:
+they are served at full size, because downscaling them would mean shipping a
+JPEG decoder, and Telegram, Twitter and Discord fetch them fine anyway.
+
+Card images are drawn with no imaging or font library — `png.py` is a small
+PNG codec over `zlib`, and `glyphs.py` embeds the public-domain X11
+`misc-fixed` 10x20 bitmap font (~1.9 KB). They are cached under
+`$COUNTER_DATA_DIR/social`, keyed by content hash and renderer version, so a
+redesign invalidates them and the directory is safe to delete at any time.
+
 ## Tests
 
 ```bash
@@ -268,12 +301,17 @@ counters/
     wallet.py       create / restore / receive / balance / inscriptions
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
     issue.py        lock-supply / lock-description / issue (owner-sourced)
-    send.py         transfer a counter (Counterparty send)
+    send.py         transfer a counter (Counterparty send) or plain BTC
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child
     dispenser.py    buy from a dispenser (composes the `dispense` message)
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
+    app.py          routes, JSON API, per-counter Open Graph tags
+    preview.py      ord-style sandboxed preview wrappers per media type
+    card.py         the 1200x630 og:image drawn for non-image counters
+    png.py          minimal PNG encoder/decoder/downscaler (stdlib only)
+    glyphs.py       embedded public-domain bitmap font (generated)
 docs/
   build-reference-v3.md   the authoritative protocol spec (v3)
   build-reference-v2.md   superseded COUNT-envelope spec (historical)
