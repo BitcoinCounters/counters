@@ -30,16 +30,19 @@ import mimetypes
 import os
 import random
 import sys
+from decimal import Decimal
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
-from .wallet import _wallet_addresses
+from .send import _change_type, _fmt_btc
+from .wallet import _derived_addresses, _wallet_addresses
 
 NUMERIC_MIN = 26 ** 12 + 1     # Counterparty numeric-asset range
 NUMERIC_MAX = 2 ** 64 - 1
 NAMED_ISSUANCE_FEE_XCP = 50_000_000   # 0.5 XCP burned to register a named asset
+DUST_SAT = 330                        # below this an output is unspendable dust
 
 
 def guess_content_type(path: str) -> str:
@@ -70,22 +73,78 @@ def _is_segwit_address(addr: str) -> bool:
 
 
 def _xcp_holders(cp: CounterpartyClient, addresses: list[str],
-                 min_xcp: int = NAMED_ISSUANCE_FEE_XCP) -> list[str]:
+                 min_xcp: int = NAMED_ISSUANCE_FEE_XCP) -> tuple[list[str], int]:
     """Addresses holding >= min_xcp XCP, in the order given (Counterparty
-    balances are per-address)."""
+    balances are per-address), plus a count of addresses we could NOT ask.
+
+    That count matters: while Counterparty is catching up its API answers
+    "Counterparty not ready", and treating that as a zero balance would report
+    "no XCP anywhere" about a wallet that is holding plenty."""
     holders: list[str] = []
+    unreachable = 0
     for addr in addresses:
         try:
             if cp.get_xcp_balance(addr) >= min_xcp:
                 holders.append(addr)
         except CounterpartyError:
-            continue
-    return holders
+            unreachable += 1
+    return holders, unreachable
+
+
+def _estimate_source_need(content_len: int, fee_rate: float) -> int:
+    """Roughly what the source address must hold to fund an inscription.
+
+    The commit pays the reveal's fee forward as an output, so the source funds
+    both. A reveal is content/4 vB (the witness discount) plus envelope
+    overhead; the commit is a 1-in-2-out taproot spend. Deliberately generous —
+    this only decides how much to move, and change comes back to the wallet."""
+    reveal_vb = content_len / 4 + 210
+    commit_vb = 200
+    return int((reveal_vb + commit_vb) * fee_rate * 1.15) + DUST_SAT
+
+
+def _fund_source(btc: BitcoindClient, wallet: str, source: str, amount: int,
+                 from_address: str | None, fee_rate: float | None) -> str | None:
+    """Move `amount` sats to the source address, so it can fund the commit.
+
+    Counterparty derives an issuance's source from the FIRST input and burns the
+    named-asset XCP there (`composer.py`: "source address does not match the
+    first input address"), and it orders inputs by value — so an XCP-holding
+    address cannot simply be topped up by pinning someone else's bigger coin.
+    Consolidating first sidesteps the ordering entirely: afterwards the source
+    owns coins outright. Compose allows unconfirmed inputs, so the new coin is
+    usable straight away. Returns the funding txid, or None on failure."""
+    options: dict = {}
+    if from_address is not None:
+        utxos = [u for u in btc.wallet_call(wallet, "listunspent", [0, 9999999])
+                 if u.get("address") == from_address and u.get("spendable", True)]
+        if not utxos:
+            print(f"--fund-from {from_address} has no spendable coins in wallet "
+                  f"{wallet!r}", file=sys.stderr)
+            return None
+        options["inputs"] = [{"txid": u["txid"], "vout": u["vout"]} for u in utxos]
+        options["add_inputs"] = False
+    change_type = _change_type(btc, wallet)
+    if change_type:
+        options["change_type"] = change_type
+
+    params = [{source: _fmt_btc(Decimal(amount) / COIN)}, None, "unset", fee_rate, options]
+    try:
+        result = btc.wallet_call(wallet, "send", params)
+    except BitcoindError as e:
+        print(f"funding the source failed: {e}", file=sys.stderr)
+        return None
+    txid = result.get("txid")
+    if not txid:
+        print(f"funding transaction was not broadcast: {result}", file=sys.stderr)
+        return None
+    return txid
 
 
 def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
                  spendable: dict[str, int], *, named: bool,
-                 inputs_set: str | None) -> tuple[str | None, str | None]:
+                 inputs_set: str | None,
+                 funding: bool = False) -> tuple[str | None, str | None]:
     """Auto-select a Counterparty source that can actually fund a TAPROOT
     inscription. The commit is funded from the source's OWN coins, so a working
     source needs spendable SEGWIT BTC — a legacy 1... address can't fund taproot
@@ -102,7 +161,13 @@ def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
     pinned = inputs_set is not None
 
     if named:
-        holders = _xcp_holders(cp, addrs)
+        holders, unreachable = _xcp_holders(cp, addrs)
+        if not holders and unreachable:
+            return None, (
+                f"could not ask Counterparty about {unreachable} address(es) — it "
+                f"is probably still catching up (check `counters status`). Refusing "
+                f"rather than reporting an XCP balance we could not read."
+            )
         if not holders:
             return None, (
                 f"no wallet address holds the {NAMED_ISSUANCE_FEE_XCP / COIN:.1f} "
@@ -110,7 +175,9 @@ def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
                 f"with XCP first, then retry (or omit --asset for a free numeric "
                 f"asset)."
             )
-        if pinned:
+        if pinned or funding:
+            # --inputs-set vouches for the coins; --fund-from will move coins to
+            # the XCP holder before composing. Either way it need not be funded yet.
             return holders[0], None
         holder_set = set(holders)
         for a in funded:  # richest segwit address that also holds the XCP
@@ -179,6 +246,7 @@ def cmd_inscribe(
     inputs_set: str | None = None,
     dry_run: bool = False,
     no_mempool_check: bool = False,
+    fund_from: str | None = None,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -206,7 +274,14 @@ def cmd_inscribe(
               file=sys.stderr)
         return 1
 
+    # Union the on-chain view with descriptor-derived addresses: Core omits
+    # CHANGE addresses from listreceivedbyaddress, and XCP parked on one whose
+    # coins are spent would otherwise look like "no XCP anywhere".
     wallet_addrs = set(_wallet_addresses(btc, wallet))
+    try:
+        wallet_addrs.update(_derived_addresses(btc, wallet, 20))
+    except BitcoindError:
+        pass
     try:
         spendable = _spendable_addresses(btc, wallet)
     except BitcoindError as e:
@@ -257,7 +332,8 @@ def cmd_inscribe(
     # commit — notably legacy 1... addresses holding only XCP.
     if source is None:
         source, err = _pick_source(
-            cp, wallet_addrs, spendable, named=named, inputs_set=inputs_set
+            cp, wallet_addrs, spendable, named=named, inputs_set=inputs_set,
+            funding=fund_from is not None,
         )
         if source is None:
             print(err, file=sys.stderr)
@@ -271,9 +347,36 @@ def cmd_inscribe(
             print(f"note: --source {source} is a legacy address; taproot encoding "
                   f"can't fund a commit from 1... coins, so compose will likely "
                   f"fail. Use a bc1q/bc1p source (or --inputs-set).", file=sys.stderr)
+    # The source may hold the XCP but no BTC (a common split: XCP parked on one
+    # address, coins on another). Counterparty cannot take the fee from a second
+    # address — the first input IS the issuer — so top the source up first.
+    have = spendable.get(source, 0)
+    if fund_from is not None and inputs_set is None:
+        need = _estimate_source_need(len(body), fee_rate or 1.0)
+        short = need - have
+        if short <= 0:
+            print(f"source {source} already holds {have} sat (~{need} needed); "
+                  f"no funding transfer required")
+        elif dry_run:
+            print(f"[dry-run] would first move {short} sat to {source} "
+                  f"({'wallet-wide' if fund_from == 'auto' else f'from {fund_from}'}), "
+                  f"then inscribe. Re-run without --dry-run to do it.")
+            return 0
+        else:
+            print(f"funding {source} with {short} sat "
+                  f"({'wallet-wide' if fund_from == 'auto' else f'from {fund_from}'}) "
+                  f"so it can pay for the commit and reveal...")
+            txid = _fund_source(btc, wallet, source, short,
+                                None if fund_from == "auto" else fund_from, fee_rate)
+            if txid is None:
+                return 1
+            print(f"  funding txid : {txid}")
+            spendable = _spendable_addresses(btc, wallet)
+
     if not spendable.get(source) and inputs_set is None:
         print(f"note: source {source} has no spendable BTC on record; compose may "
-              f"fail — fund it or pass --inputs-set TXID:VOUT", file=sys.stderr)
+              f"fail — fund it, pass --fund-from ADDRESS, or --inputs-set TXID:VOUT",
+              file=sys.stderr)
 
     # Compose the commit/reveal pair via Counterparty Core.
     try:

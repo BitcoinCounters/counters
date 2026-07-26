@@ -252,6 +252,13 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--inputs-set", metavar="TXID:VOUT[,...]",
                         help="pin the exact UTXO(s) that fund the commit (Counterparty "
                              "inputs_set format)")
+    p_insc.add_argument("--fund-from", metavar="ADDRESS",
+                        help="if the source (the XCP-holding address) lacks BTC, move "
+                             "what it needs there FIRST, from this address — or 'auto' "
+                             "for wallet-wide coin selection. Counterparty takes the "
+                             "issuance fee from the first input's address, so the source "
+                             "must own its own coins; this consolidates rather than "
+                             "trying to fund across addresses")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="compose + sign but do not broadcast; print raw hex")
     p_insc.add_argument("--no-mempool-check", action="store_true",
@@ -433,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
                     source=args.source, inputs_set=args.inputs_set,
                     dry_run=args.dry_run, no_mempool_check=args.no_mempool_check,
+                    fund_from=args.fund_from,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
