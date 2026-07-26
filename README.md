@@ -179,6 +179,7 @@ counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
 counters wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
 counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply (no new counter — no new content)
+counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand over the issuance rights (ASSET ADDRESS)
 ```
 
 > The 12-word seed is the only backup and is shown once at create time. The
@@ -188,8 +189,8 @@ counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
 > with a destination output (so no `transfer_destination` on an inscription
-> mint), and attaching new content to an existing asset requires its
-> description to be unlocked.
+> mint — an ownership transfer is always its own transaction), and attaching
+> new content to an existing asset requires its description to be unlocked.
 
 > **Dispensers cannot be paid with a plain BTC send.** Since Counterparty's
 > `disable_vanilla_btc_dispense` (block 866,000) a payment carrying no
@@ -216,6 +217,11 @@ counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply
 > sibling, not its ancestor, and does not lift it; replacing the commit changes
 > its txid and merely invalidates the reveal. A reveal broadcast too cheaply can
 > only be waited out, or abandoned with `cancel` on the commit and re-minted.
+
+> Counterparty splits what English calls "owning" a counter in two. `send`
+> moves the **tokens** (the asset balance); `transfer-ownership` moves the
+> **issuance rights** — the power to reissue, lock, and reinscribe. Moving one
+> does not move the other, so handing a counter over in full means doing both.
 
 ## Tests
 
