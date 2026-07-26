@@ -13,6 +13,13 @@ fee.
   lock-description  ASSET  -> freeze the description (the image/metadata ref)
   issue ASSET QUANTITY     -> mint additional supply of an existing asset
                              (--lock to lock the supply in the same transaction)
+  transfer-ownership ASSET ADDRESS
+                           -> hand the issuance rights to another address
+
+Counterparty splits what English calls "owning" a counter in two. The TOKENS
+(the asset balance) travel by `send`; the ISSUANCE RIGHTS — the power to
+reissue, lock, and reinscribe — travel by `transfer-ownership`. Moving one
+does not move the other.
 
 Counterparty has two independent locks. A SUPPLY lock (issuance `lock=true`)
 stops further minting; it does NOT freeze the description. A DESCRIPTION lock is
@@ -29,8 +36,10 @@ import sys
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
 from ..counterparty import CounterpartyClient, CounterpartyError
-from .send import _fmt_raw, _sign_and_broadcast, _to_raw_quantity
+from .send import _fmt_raw, _is_valid_address, _sign_and_broadcast, _to_raw_quantity
 from .wallet import _wallet_addresses
+
+_ORDER_HINT = "note: the argument order is  transfer-ownership <ASSET> <ADDRESS>"
 
 
 def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
@@ -59,13 +68,14 @@ def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
 
 
 def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
-             lock: bool, description) -> str | None:
+             lock: bool, description, transfer_destination: str | None = None) -> str | None:
     """Compose the issuance from the owner address; return its unsigned raw tx,
     or None after printing the failure (with a funding hint when relevant)."""
     try:
         composed = cp.compose_issuance(
             source=owner, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock,
+            transfer_destination=transfer_destination,
         )
     except CounterpartyError as e:
         msg = str(e)
@@ -134,6 +144,56 @@ def cmd_lock_description(config: Config, wallet: str, asset: str, dry_run: bool 
     print(f"lock-description {asset}")
     print(f"  owner     : {owner}")
     print(f"  freezing  : {info.get('description') or '(empty description)'}")
+    return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
+
+
+def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination: str,
+                           dry_run: bool = False) -> int:
+    """Hand an asset's issuance rights to another address.
+
+    A zero-quantity issuance carrying `transfer_destination`: the recipient
+    becomes the asset's `owner` and inherits the power to reissue, lock, and
+    reinscribe. TOKEN BALANCES DO NOT MOVE — those travel by `send`, and a
+    counter transferred without this command leaves the sender still able to
+    reinscribe over it.
+
+    Counterparty forbids `transfer_destination` under taproot encoding, so this
+    is always its own opreturn transaction, never bundled with an inscription.
+    """
+    btc = BitcoindClient(config)
+    cp = CounterpartyClient(config)
+
+    # Validate the destination first, so a swapped argument fails here with the
+    # order hint instead of downstream as a confusing "unknown asset".
+    if not _is_valid_address(btc, destination):
+        print(f"destination {destination!r} is not a valid Bitcoin address", file=sys.stderr)
+        print(_ORDER_HINT, file=sys.stderr)
+        return 1
+
+    resolved = _resolve_owned_asset(btc, cp, wallet, asset)
+    if resolved is None:
+        if _is_valid_address(btc, asset):
+            print(_ORDER_HINT, file=sys.stderr)
+        return 1
+    asset, info, owner = resolved
+
+    if destination == owner:
+        print(f"{owner} already holds the issuance rights of {asset}", file=sys.stderr)
+        return 1
+
+    # description omitted (None): preserve the asset's content — see lock-supply.
+    # lock=False leaves the supply lock as it is; locks are one-way, so this
+    # can never unlock an already-locked asset.
+    rawtx = _compose(cp, owner, asset, quantity=0, divisible=bool(info.get("divisible")),
+                     lock=False, description=None, transfer_destination=destination)
+    if rawtx is None:
+        return 1
+
+    print(f"transfer-ownership {asset}")
+    print(f"  from      : {owner}")
+    print(f"  to        : {destination}")
+    print(f"  moves     : issuance rights — reissue, lock, reinscribe")
+    print(f"  stays     : token balances (move those with `send`)")
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 

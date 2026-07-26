@@ -303,6 +303,18 @@ def main(argv: list[str] | None = None) -> int:
     p_issue.add_argument("--dry-run", action="store_true",
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_xfer = wsub.add_parser(
+        "transfer-ownership", parents=[common, wname],
+        help="hand an asset's issuance rights (reissue/lock/reinscribe) to an address",
+        usage="counters wallet [--name NAME] transfer-ownership <ASSET> <ADDRESS>",
+    )
+    p_xfer.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    p_xfer.add_argument("destination", metavar="address",
+                        help="address to receive the issuance rights; token balances "
+                             "are NOT moved (use `send` for those)")
+    p_xfer.add_argument("--dry-run", action="store_true",
+                        help="compose + sign + validate but do not broadcast; print raw hex")
+
     p_disp = wsub.add_parser(
         "buy-from-dispenser", parents=[common, wname],
         help="buy from a Counterparty dispenser (a plain BTC send does NOT work)",
@@ -456,6 +468,11 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.name, txid=args.txid, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
                     no_mempool_check=args.no_mempool_check,
+                )
+            if args.wallet_command == "transfer-ownership":
+                return issue.cmd_transfer_ownership(
+                    config, args.name, args.asset, args.destination,
+                    dry_run=args.dry_run,
                 )
             if args.wallet_command == "restore":
                 return wallet.cmd_wallet_restore(

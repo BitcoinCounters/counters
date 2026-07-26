@@ -28,6 +28,8 @@ class FakeBtc:
         return {"complete": True, "hex": "signed00"}
 
     def _call(self, method, params=None):
+        if method == "validateaddress":
+            return {"isvalid": params[0].startswith("bc1")}
         if method == "testmempoolaccept":
             return [{"allowed": True, "txid": "tt"}]
         if method == "sendrawtransaction":
@@ -227,6 +229,75 @@ def test_issue_on_locked_asset_is_rejected():
         _restore(orig)
 
 
+# --- transfer-ownership -----------------------------------------------------
+
+NEW_OWNER = "bc1pNewOwnerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+def test_transfer_ownership_composes_zero_quantity_with_destination():
+    fake_btc, fake_cp, orig = _patch(_asset(divisible=True, description="keep me"), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER, dry_run=True)
+        assert rc == 0
+        k = fake_cp.compose_kwargs
+        assert k["source"] == OWNER and k["asset"] == "MYASSET"
+        assert k["transfer_destination"] == NEW_OWNER
+        assert k["quantity"] == 0                # rights move, supply does not
+        assert k["lock"] is False                # never locks as a side effect
+        assert k["description"] is None          # omitted -> content preserved
+        assert k["divisible"] is True            # mirrors the existing asset
+        assert fake_btc.sent is None             # dry-run: nothing broadcast
+    finally:
+        _restore(orig)
+
+
+def test_transfer_ownership_broadcasts_when_not_dry_run():
+    fake_btc, _cp, orig = _patch(_asset(), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER)
+        assert rc == 0 and fake_btc.sent == "signed00"
+    finally:
+        _restore(orig)
+
+
+def test_transfer_ownership_requires_ownership():
+    fake_btc, fake_cp, orig = _patch(_asset(owner="bc1pSomeoneElse"), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER)
+        assert rc == 1 and fake_cp.compose_kwargs is None and fake_btc.sent is None
+    finally:
+        _restore(orig)
+
+
+def test_transfer_ownership_to_the_current_owner_is_rejected():
+    fake_btc, fake_cp, orig = _patch(_asset(), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", OWNER)
+        assert rc == 1 and fake_cp.compose_kwargs is None
+    finally:
+        _restore(orig)
+
+
+def test_transfer_ownership_rejects_a_bad_destination():
+    # An asset name in the ADDRESS slot -> fails before any Counterparty call.
+    fake_btc, fake_cp, orig = _patch(_asset(), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", "OTHERASSET")
+        assert rc == 1 and fake_cp.compose_kwargs is None and fake_btc.sent is None
+    finally:
+        _restore(orig)
+
+
+def test_transfer_ownership_on_a_locked_asset_still_works():
+    # A supply lock freezes minting, not the ownership record.
+    fake_btc, fake_cp, orig = _patch(_asset(locked=True), [OWNER])
+    try:
+        rc = I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER, dry_run=True)
+        assert rc == 0 and fake_cp.compose_kwargs["transfer_destination"] == NEW_OWNER
+    finally:
+        _restore(orig)
+
+
 # --- compose_issuance param handling ----------------------------------------
 
 class _CapCp(CounterpartyClient):
@@ -257,6 +328,16 @@ def test_compose_issuance_includes_them_when_given():
     assert params["inputs_set"] == "txid:0:1:aa"
     assert params["description"] == "set this"
     assert params["divisible"] == "true" and params["lock"] == "false"
+    assert "transfer_destination" not in params    # only sent when transferring
+
+
+def test_compose_issuance_passes_transfer_destination():
+    cp = _CapCp()
+    cp.compose_issuance(source="addr", asset="FOO", quantity=0, divisible=False,
+                        transfer_destination="bc1pNew")
+    _path, params = cp.captured
+    assert params["transfer_destination"] == "bc1pNew"
+    assert params["quantity"] == 0 and params["encoding"] == "opreturn"
 
 
 if __name__ == "__main__":
