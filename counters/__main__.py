@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .commands import cancel, inscribe, issue, read, send, serve, wallet
+from .commands import bump, cancel, inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -303,6 +303,19 @@ def main(argv: list[str] | None = None) -> int:
     p_issue.add_argument("--dry-run", action="store_true",
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_bump = wsub.add_parser(
+        "bump", parents=[common, wname],
+        help="pay more to get an unconfirmed transaction mined (CPFP)",
+        usage="counters wallet [--name NAME] bump [--txid TXID] [--fee-rate SAT_VB]",
+    )
+    p_bump.add_argument("--txid", help="bump this transaction instead of choosing "
+                                       "from the pending list")
+    p_bump.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="rate the whole package should reach (asked for if omitted)")
+    p_bump.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_bump.add_argument("--dry-run", action="store_true",
+                        help="build + sign + validate but do not broadcast; print raw hex")
+
     p_cancel = wsub.add_parser(
         "cancel", parents=[common, wname],
         help="replace an unconfirmed transaction to abandon it (RBF)",
@@ -406,6 +419,11 @@ def main(argv: list[str] | None = None) -> int:
                 return issue.cmd_issue(
                     config, args.name, args.asset, args.amount,
                     lock=args.lock, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "bump":
+                return bump.cmd_bump(
+                    config, args.name, txid=args.txid, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
                 )
             if args.wallet_command == "cancel":
                 return cancel.cmd_cancel(
