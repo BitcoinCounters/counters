@@ -405,7 +405,8 @@ const API = location.protocol.startsWith('http') ? location.origin : null;
 /* ---- live adapters (used when API is set) ---------------- */
 // Pages are aligned to the gap-free number space: page k = counters
 // [k*PAGE, k*PAGE+PAGE). Every page URL is permanent — #/p/0 is always
-// genesis — and #/ shows the newest (possibly partial) page.
+// genesis — while #/ is a sliding window over the latest PAGE counters,
+// so the front page is always full.
 const PAGE = 100;
 async function fetchPage(page, count){
   const start = page * PAGE;
@@ -413,6 +414,10 @@ async function fetchPage(page, count){
   if(n <= 0) return [];
   const r = await fetch(`${API}/counters?before=${start + PAGE}&limit=${n}`);
   return (await r.json()).counters;                // newest-first within the page
+}
+async function fetchLatest(){
+  const r = await fetch(`${API}/counters?limit=${PAGE}`);
+  return (await r.json()).counters;                // newest-first
 }
 async function fetchCounter(id){
   const r = await fetch(`${API}/counter/${id}`);
@@ -513,16 +518,22 @@ async function renderExplore(page){
       +`<span class="tick">${st.count} counter${st.count===1?'':'s'} detected</span>`
     : '';
   const pages=Math.max(1, Math.ceil((st.count||1)/PAGE));
-  const cur=(page==null) ? pages-1 : Math.min(Math.max(0, page), pages-1);
-  const list=API ? await fetchPage(cur, st.count) : await listCounters();
+  const latest=(page==null);
+  const cur=latest ? pages-1 : Math.min(Math.max(0, page), pages-1);
+  const list=API ? (latest ? await fetchLatest() : await fetchPage(cur, st.count)) : await listCounters();
   el('grid').innerHTML=list.map(card).join('');
+  const oldest=list.length ? list[list.length-1].number : 0;
   el('latest-meta').textContent=list.length
-    ? `#${list[list.length-1].number}\u2013#${list[0].number} \u00b7 page ${cur+1} of ${pages}` : '';
+    ? `#${oldest}\u2013#${list[0].number} \u00b7 ${latest ? `latest ${list.length}` : `page ${cur+1} of ${pages}`}` : '';
   el('emptystate').innerHTML=(list.length<=1 && cur===0)
     ? `<div class="empty"><b>The sequence has just begun</b>Counter #0 is the genesis. New counters appear here as they're minted.</div>` : '';
+  // From the sliding latest view, "older" resumes the permanent aligned pages
+  // at the page just below the window's oldest card (they may overlap).
+  const older=latest ? (oldest>0 ? `#/p/${Math.floor((oldest-1)/PAGE)}` : null)
+                     : (cur>0 ? `#/p/${cur-1}` : null);
   el('pager').innerHTML = pages>1 ? `
-    <a class="${cur===0?'off':''}" onclick="go('#/p/${cur-1}')">\u2190 older</a>
-    <span class="pinfo">page ${cur+1} / ${pages}</span>
+    <a class="${older?'':'off'}" onclick="go('${older||'#/'}')">\u2190 older</a>
+    <span class="pinfo">${latest ? 'latest' : `page ${cur+1} / ${pages}`}</span>
     <a class="${cur>=pages-1?'off':''}" onclick="go('${cur+1===pages-1?'#/':'#/p/'+(cur+1)}')">newer \u2192</a>` : '';
 }
 
