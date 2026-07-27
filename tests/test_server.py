@@ -138,9 +138,11 @@ def test_api_and_static():
         st = json.loads(body)
         assert st["count"] == 3 and st["indexed"] == 902006
         # Release identity the footer renders: our version (which mirrors the
-        # Counterparty Core series we target) and the build's commit.
+        # Counterparty Core series we target), the build's commit, and when the
+        # deployed code last changed (null when no git dir / CI stamp exists).
         assert st["version"] == __version__
         assert st["commit"]
+        assert "updated" in st
 
         # --- /block/<height>: counters minted in a block ---
         status, _, body = _get(base, "/block/902005")

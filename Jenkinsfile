@@ -50,11 +50,13 @@ pipeline {
 
     stage('Build image') {
       steps {
-        // Stamp the image with the deployed short commit (compose passes this
-        // through to the Dockerfile GIT_COMMIT arg -> /status -> footer).
+        // Stamp the image with the deployed short commit and its commit date
+        // (compose passes these through to the Dockerfile args -> /status ->
+        // footer's "build <sha> · updated <date>").
         sh '''
           export GIT_COMMIT="$(git rev-parse --short HEAD)"
-          echo "Building commit $GIT_COMMIT"
+          export GIT_COMMIT_DATE="$(git show -s --format=%cI HEAD)"
+          echo "Building commit $GIT_COMMIT ($GIT_COMMIT_DATE)"
           docker compose build
         '''
       }

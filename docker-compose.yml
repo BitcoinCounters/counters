@@ -3,8 +3,10 @@ services:
     build:
       context: .
       args:
-        # Stamped by CI (Jenkinsfile) with the deployed short commit hash.
+        # Stamped by CI (Jenkinsfile) with the deployed short commit hash and
+        # its commit date (ISO 8601).
         GIT_COMMIT: ${GIT_COMMIT:-dev}
+        GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
     # Serve only: the dedicated `indexer` service below is the sole writer, and
     # `docker compose up -d counters` should still run the explorer with no
     # backends. (`counters server` indexes by default when run on its own.)

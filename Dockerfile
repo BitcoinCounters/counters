@@ -14,9 +14,12 @@ ENV COUNTER_DATA_DIR=/data
 ENV PYTHONUNBUFFERED=1
 
 # Deployed revision, surfaced by the server on /status (and the explorer
-# footer). The CI pipeline passes the short git hash; defaults to "dev".
+# footer). The CI pipeline passes the short git hash and its commit date;
+# commit defaults to "dev", the date to unknown.
 ARG GIT_COMMIT=dev
+ARG GIT_COMMIT_DATE=""
 ENV COUNTER_GIT_COMMIT=$GIT_COMMIT
+ENV COUNTER_GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 
 EXPOSE 8081
 
