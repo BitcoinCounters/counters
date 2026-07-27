@@ -717,14 +717,21 @@ function doSearch(e){
 function copy(t){navigator.clipboard?.writeText(t).then(()=>toast('Copied'));}
 let tT;function toast(m){const e=el('toast');e.textContent=m;e.classList.add('show');clearTimeout(tT);tT=setTimeout(()=>e.classList.remove('show'),1400);}
 
-/* show the deployed build revision (from /status) in the footer */
+/* show the release (from /status) in the footer: the version names the
+   Counterparty Core series this build targets, the commit names the exact
+   build. Each links to its own page on GitHub — tag and commit. */
 async function showBuild(){
   const e=el('build'); if(!e) return;
-  let commit='dev';
-  try{ const st=await getStatus(); if(st&&st.commit) commit=st.commit; }catch(_){}
-  e.innerHTML = (commit && commit!=='dev')
-    ? `build <a href="https://github.com/BitcoinCounters/counters/commit/${encodeURIComponent(commit)}" target="_blank" rel="noopener"><code>${esc(commit)}</code></a>`
-    : `build <code>${esc(commit)}</code>`;
+  let commit='dev', version='';
+  try{ const st=await getStatus(); if(st){ if(st.commit) commit=st.commit; if(st.version) version=st.version; } }catch(_){}
+  const REPO='https://github.com/BitcoinCounters/counters';
+  const parts=[];
+  if(version) parts.push(
+    `<a href="${REPO}/releases/tag/v${encodeURIComponent(version)}" target="_blank" rel="noopener">v<code>${esc(version)}</code></a>`);
+  parts.push((commit && commit!=='dev')
+    ? `build <a href="${REPO}/commit/${encodeURIComponent(commit)}" target="_blank" rel="noopener"><code>${esc(commit)}</code></a>`
+    : `build <code>${esc(commit)}</code>`);
+  e.innerHTML = parts.join(' · ');
 }
 
 /* ---- boot ---- */
