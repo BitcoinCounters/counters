@@ -5,7 +5,8 @@ Serves two things from one origin:
   1. The bundled single-page explorer (the static/ directory: index.html + logos).
   2. A small JSON API backed by the index Store:
 
-       GET /status                      -> {"indexed": H, "count": N, "genesis": 0}
+       GET /status                      -> {"indexed": H, "count": N, "genesis": 0,
+                                            "version": V, "commit": SHA}
        GET /counters?before=N&limit=K   -> {"counters": [record, ...]}  newest-first
        GET /counter/<number|asset>      -> a single record (404 if unknown)
        GET /block/<height>              -> {"block": H, "count": K, "counters": [...]}
@@ -37,6 +38,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import card, png, preview
+from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..content import classify_mime_type, sniff_media, stamp_image
@@ -423,6 +425,10 @@ class Handler(BaseHTTPRequestHandler):
                 "indexed": store.get_last_height(0),
                 "count": store.count(),
                 "genesis": 0,
+                # Release identity, in two parts: the version names the
+                # Counterparty Core series this build targets, the commit names
+                # the exact build. Both are shown in the explorer footer.
+                "version": __version__,
                 "commit": GIT_COMMIT,
             }
         finally:

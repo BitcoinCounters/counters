@@ -59,6 +59,29 @@ advances past Counterparty's parsed height.
 pip install -e .          # installs deps + the `counters` console command
 ```
 
+## Versioning — we mirror Counterparty Core
+
+Counterparty Core is the oracle this project reads, so the version says which
+Counterparty it speaks:
+
+> **MAJOR.MINOR** name the Counterparty Core release a build targets — `11.2.x`
+> targets Counterparty Core **v11.2.x**. **PATCH** is ours: it counts counters
+> releases against that same upstream minor, and resets to `0` when we move up
+> to a new one.
+
+There is no separate "counters version" to reconcile against a compatibility
+table — the number *is* the table. `counters/__init__.py` holds the single
+source of truth; `pyproject.toml` reads it, and it surfaces in three places:
+
+```bash
+counters --version                # counters 11.2.0 (targets Counterparty Core v11.2)
+curl -s localhost:8081/status     # {"version": "11.2.0", "commit": "88bb304", ...}
+```
+
+…and in the explorer footer, as `v11.2.0 · build 88bb304` — the version links
+to its release tag, the commit to the exact build. Releases are tagged
+`v<version>`.
+
 ## Run with Docker
 
 The repo ships a `Dockerfile` and a `docker-compose.yml` with two services:

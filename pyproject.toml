@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "counters"
-version = "0.1.0"
+# Mirrors Counterparty Core — see counters/__init__.py, the single source.
+dynamic = ["version"]
 description = "Bitcoin Counters v3 — Counterparty taproot-envelope file-event indexer, CLI, and wallet"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,6 +16,9 @@ dependencies = [
 
 [project.scripts]
 counters = "counters.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "counters.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["counters*"]

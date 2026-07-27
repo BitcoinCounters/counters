@@ -20,6 +20,7 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from counters import __version__  # noqa: E402
 from counters.config import Config  # noqa: E402
 from counters.server import app as appmod  # noqa: E402
 from counters.store import CounterRecord, Store  # noqa: E402
@@ -136,6 +137,10 @@ def test_api_and_static():
         assert status == 200 and "application/json" in ctype
         st = json.loads(body)
         assert st["count"] == 3 and st["indexed"] == 902006
+        # Release identity the footer renders: our version (which mirrors the
+        # Counterparty Core series we target) and the build's commit.
+        assert st["version"] == __version__
+        assert st["commit"]
 
         # --- /block/<height>: counters minted in a block ---
         status, _, body = _get(base, "/block/902005")

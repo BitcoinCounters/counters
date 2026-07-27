@@ -12,6 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import CP_SERIES, __version__
 from .commands import bump, cancel, dispenser, inscribe, issue, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
@@ -103,6 +104,14 @@ def main(argv: list[str] | None = None) -> int:
         usage="counters [OPTIONS] <COMMAND>",
     )
     parser.set_defaults(verbose=False)
+    # No short flag: -v is taken by --verbose. The version names the
+    # Counterparty Core release this build targets (see counters/__init__.py).
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"counters {__version__} (targets Counterparty Core v{CP_SERIES})",
+        help="print the version and exit",
+    )
     parser._optionals.title = "Options"
     sub = parser.add_subparsers(
         dest="command", required=False, title="Commands", metavar="<command>"
