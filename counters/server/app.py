@@ -6,7 +6,7 @@ Serves two things from one origin:
   2. A small JSON API backed by the index Store:
 
        GET /status                      -> {"indexed": H, "count": N, "genesis": 0,
-                                            "version": V, "commit": SHA}
+                                            "version": V, "commit": SHA, "updated": ISO}
        GET /counters?before=N&limit=K   -> {"counters": [record, ...]}  newest-first
        GET /counter/<number|asset>      -> a single record (404 if unknown)
        GET /block/<height>              -> {"block": H, "count": K, "counters": [...]}
@@ -33,6 +33,8 @@ import re
 import sqlite3
 import sys
 import threading
+import zlib
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -48,30 +50,61 @@ from ..store import Store
 
 log = logging.getLogger("counters")
 
-def _read_git_commit(git_dir: str = "/app/.git") -> str | None:
-    """Resolve the short HEAD commit by reading a git dir directly (no git
-    binary). Used when the repo's .git is bind-mounted into the container, so a
-    plain `docker compose up -d` shows the real revision without a build arg."""
+GIT_DIR = "/app/.git"
+
+
+def _read_git_head(git_dir: str = GIT_DIR) -> tuple[str, Path] | None:
+    """Resolve HEAD by reading a git dir directly (no git binary), returning
+    (full sha, the file that named it). Used when the repo's .git is
+    bind-mounted into the container, so a plain `docker compose up -d` shows
+    the real revision without a build arg. The source file matters for
+    `_resolve_updated`: its mtime is when the deploy last moved the ref."""
     head_path = Path(git_dir, "HEAD")
     try:
         head = head_path.read_text().strip()
     except OSError:
         return None
     if not head.startswith("ref:"):
-        return head[:7] or None  # detached HEAD holds the sha directly
+        return (head, head_path) if head else None  # detached HEAD holds the sha
     ref = head[4:].strip()  # e.g. "refs/heads/main"
+    ref_path = Path(git_dir, ref)
     try:  # loose ref
-        return (Path(git_dir, ref).read_text().strip()[:7]) or None
+        sha = ref_path.read_text().strip()
+        if sha:
+            return sha, ref_path
     except OSError:
         pass
+    packed = Path(git_dir, "packed-refs")
     try:  # packed-refs fallback
-        for line in Path(git_dir, "packed-refs").read_text().splitlines():
+        for line in packed.read_text().splitlines():
             if line and not line.startswith(("#", "^")):
                 sha, _, name = line.partition(" ")
                 if name.strip() == ref:
-                    return sha.strip()[:7]
+                    return sha.strip(), packed
     except OSError:
         pass
+    return None
+
+
+def _commit_time(sha: str, git_dir: str = GIT_DIR) -> int | None:
+    """Committer timestamp (epoch) of a loose commit object, or None. Objects
+    that arrived by fetch live in packfiles, which we don't parse — only
+    locally-created commits are reliably loose."""
+    try:
+        raw = zlib.decompress(Path(git_dir, "objects", sha[:2], sha[2:]).read_bytes())
+    except (OSError, zlib.error):
+        return None
+    header, _, body = raw.partition(b"\0")
+    if not header.startswith(b"commit "):
+        return None
+    for line in body.split(b"\n"):
+        if not line:  # end of headers; committer line not found
+            return None
+        if line.startswith(b"committer "):
+            try:  # b"committer Name <email> 1753594828 +0000" — epoch is UTC
+                return int(line.rsplit(b">", 1)[1].split()[0])
+            except (IndexError, ValueError):
+                return None
     return None
 
 
@@ -81,11 +114,37 @@ def _resolve_commit() -> str:
     env = os.environ.get("COUNTER_GIT_COMMIT")
     if env and env != "dev":
         return env
-    return _read_git_commit() or env or "dev"
+    head = _read_git_head()
+    return (head[0][:7] if head else None) or env or "dev"
 
 
-# Deployed build revision, surfaced on /status and in the explorer footer.
+def _resolve_updated() -> str | None:
+    """When the deployed code last changed, ISO 8601 UTC, or None if unknown.
+
+    Best source first: a CI build stamp; then the HEAD commit's own committer
+    time (loose object); then the mtime of the file that named HEAD — pulled
+    objects arrive packed, but the `git pull` that moved the ref rewrote that
+    file, so its mtime is the moment this deployment picked the commit up."""
+    env = os.environ.get("COUNTER_GIT_COMMIT_DATE")
+    if env:
+        return env
+    head = _read_git_head()
+    if not head:
+        return None
+    sha, source = head
+    ts = _commit_time(sha)
+    if ts is None:
+        try:
+            ts = int(source.stat().st_mtime)
+        except OSError:
+            return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Deployed build revision + when it last changed, surfaced on /status and in
+# the explorer footer.
 GIT_COMMIT = _resolve_commit()
+GIT_UPDATED = _resolve_updated()
 
 # Headers for untrusted inscription bytes (/content and iframe-media previews),
 # mirroring ord's `content_response`. Two CSP headers are sent; the browser
@@ -425,11 +484,13 @@ class Handler(BaseHTTPRequestHandler):
                 "indexed": store.get_last_height(0),
                 "count": store.count(),
                 "genesis": 0,
-                # Release identity, in two parts: the version names the
-                # Counterparty Core series this build targets, the commit names
-                # the exact build. Both are shown in the explorer footer.
+                # Release identity: the version names the Counterparty Core
+                # series this build targets, the commit names the exact build,
+                # and updated (ISO 8601 UTC, null if unknown) is when the
+                # deployed code last changed. All shown in the explorer footer.
                 "version": __version__,
                 "commit": GIT_COMMIT,
+                "updated": GIT_UPDATED,
             }
         finally:
             store.close()

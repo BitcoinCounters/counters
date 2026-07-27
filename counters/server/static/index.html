@@ -719,11 +719,13 @@ let tT;function toast(m){const e=el('toast');e.textContent=m;e.classList.add('sh
 
 /* show the release (from /status) in the footer: the version names the
    Counterparty Core series this build targets, the commit names the exact
-   build. Each links to its own page on GitHub — tag and commit. */
+   build (each links to its own page on GitHub — tag and commit), and
+   `updated` is when the deployed code last changed. Absent fields simply
+   drop out of the line. */
 async function showBuild(){
   const e=el('build'); if(!e) return;
-  let commit='dev', version='';
-  try{ const st=await getStatus(); if(st){ if(st.commit) commit=st.commit; if(st.version) version=st.version; } }catch(_){}
+  let commit='dev', version='', updated='';
+  try{ const st=await getStatus(); if(st){ if(st.commit) commit=st.commit; if(st.version) version=st.version; if(st.updated) updated=st.updated; } }catch(_){}
   const REPO='https://github.com/BitcoinCounters/counters';
   const parts=[];
   if(version) parts.push(
@@ -731,6 +733,7 @@ async function showBuild(){
   parts.push((commit && commit!=='dev')
     ? `build <a href="${REPO}/commit/${encodeURIComponent(commit)}" target="_blank" rel="noopener"><code>${esc(commit)}</code></a>`
     : `build <code>${esc(commit)}</code>`);
+  if(updated) parts.push(`updated <code>${esc(updated.slice(0,10))}</code>`);
   e.innerHTML = parts.join(' · ');
 }
 

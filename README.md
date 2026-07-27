@@ -75,11 +75,13 @@ source of truth; `pyproject.toml` reads it, and it surfaces in three places:
 
 ```bash
 counters --version                # counters 11.2.0 (targets Counterparty Core v11.2)
-curl -s localhost:8081/status     # {"version": "11.2.0", "commit": "88bb304", ...}
+curl -s localhost:8081/status     # {"version": "11.2.0", "commit": "88bb304",
+                                  #  "updated": "2026-07-27T05:40:28Z", ...}
 ```
 
-…and in the explorer footer, as `v11.2.0 · build 88bb304` — the version links
-to its release tag, the commit to the exact build. Releases are tagged
+…and in the explorer footer, as `v11.2.0 · build 88bb304 · updated 2026-07-27`
+— the version links to its release tag, the commit to the exact build, and
+`updated` is when the deployed code last changed. Releases are tagged
 `v<version>`.
 
 ## Run with Docker
