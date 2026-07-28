@@ -179,6 +179,7 @@ BODY_MAX_BYTES = 256 * 1024
 # immutable content, so they must never be cached `immutable` (rule 7): a rules
 # change has to take effect promptly. /content stays immutable (content-addressed).
 DERIVED_MAX_AGE = 300
+STATIC_MAX_AGE = 3600      # logos, css: temporary — they change only on deploy
 INLINE_TYPES = ("text/", "application/json", "image/svg+xml")
 
 # Link crawlers fetch og:image on a short budget and several (WhatsApp being
@@ -811,7 +812,11 @@ class Handler(BaseHTTPRequestHandler):
             or target.suffix not in STATIC_TYPES
         ):
             return self._send(404, "text/plain; charset=utf-8", b"not found")
-        self._send(200, STATIC_TYPES[target.suffix], target.read_bytes())
+        # Assets get a temporary browser cache; the app shell (index.html)
+        # stays uncached so a deploy shows up on the next refresh.
+        max_age = None if target.suffix == ".html" else STATIC_MAX_AGE
+        self._send(200, STATIC_TYPES[target.suffix], target.read_bytes(),
+                   max_age=max_age)
 
     # --- response helpers --------------------------------------------------
 
