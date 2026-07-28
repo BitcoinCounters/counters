@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -162,7 +163,15 @@ def test_api_and_static():
         assert c0["supply"] == 1 and c0["divisible"] is False
         assert c0["locked"] is None   # live lookup stubbed offline
         assert c0["burned"] == 100    # total destroyed, shown next to supply
-        assert rec["burned"] is None  # lists never look it up (live-only field)
+        assert rec["burned"] is None  # list read BEFORE any view: no snapshot yet
+        # The view persisted the asset snapshot (for the crawler-facing
+        # preview, which never queries the backends). Supply stays 1: the
+        # live lookup is stubbed offline, and None never wipes a value.
+        srow = Store(httpd.config).get_counter(0)
+        assert srow["burned"] == 100 and srow["supply"] == 1
+        # ... so lists now report the stored value, still without lookups.
+        relisted = json.loads(_get(base, "/counters?limit=5")[2])["counters"]
+        assert {r["number"]: r["burned"] for r in relisted}[0] == 100
         # the single-counter endpoint lists every counter on the asset
         assert [(a["number"], a["kind"]) for a in c0["asset_counters"]] == \
             [(0, "issuance"), (1, "issuance")]
@@ -203,6 +212,28 @@ def test_api_and_static():
         httpd.server_close()
 
 
+def test_store_migrates_pre_burned_db():
+    # A DB created before the `burned` column existed gets it added on open
+    # (SCHEMA is IF NOT EXISTS, so it alone never upgrades an old file).
+    cfg = _seed_store(tempfile.mkdtemp())
+    db = sqlite3.connect(str(cfg.db_path))
+    db.execute("ALTER TABLE counters DROP COLUMN burned")
+    db.commit()
+    db.close()
+    store = Store(cfg)
+    try:
+        assert store.get_counter(0)["burned"] is None
+        # the snapshot updates every counter on the asset, keeps supply (None)
+        store.set_asset_snapshot("TESTASSET", None, 7)
+        assert store.get_counter(0)["burned"] == 7
+        assert store.get_counter(1)["burned"] == 7      # sibling, same asset
+        assert store.get_counter(2)["burned"] is None   # other asset untouched
+        assert store.get_counter(0)["supply"] == 1      # None never wipes
+    finally:
+        store.close()
+
+
 if __name__ == "__main__":
     test_api_and_static()
+    test_store_migrates_pre_burned_db()
     print("ok")

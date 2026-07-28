@@ -239,6 +239,24 @@ def _og(base: str, number: int) -> dict[str, str]:
     return tags
 
 
+def test_og_description_carries_supply_and_burned():
+    httpd, cfg, base = _run_server()
+    try:
+        # An asset with a recorded snapshot previews "supply · burned 🔥" —
+        # read from the store alone (the server here has no backends at all).
+        store = Store(cfg)
+        store.set_asset_snapshot("TEXTONLY", 2000, 100)
+        store.close()
+        d = _og(base, 0)["og:description"]
+        assert "2,000 · 100 🔥" in d
+        # No recorded burn: supply alone, no flame.
+        d = _og(base, 1)["og:description"]
+        assert "🔥" not in d and "SMALLGIF — 1 — a file inscribed" in d
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_og_image_points_at_the_counters_own_picture():
     httpd, cfg, base = _run_server()
     try:

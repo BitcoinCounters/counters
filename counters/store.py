@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS counters (
     fee              INTEGER,
     tx_size          INTEGER,
     xcp_burned       INTEGER,
+    burned           INTEGER,                      -- asset total destroyed
     rolling_hash     TEXT    NOT NULL,
     created_at       TEXT    DEFAULT (datetime('now')),
     UNIQUE (mint_txid, msg_index)
@@ -85,6 +86,7 @@ class CounterRecord:
     fee: int | None = None
     tx_size: int | None = None
     xcp_burned: int | None = None
+    burned: int | None = None      # asset total destroyed (see set_asset_snapshot)
 
 
 class Store:
@@ -99,7 +101,16 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self) -> None:
+        """Bring a pre-existing DB up to the current schema. SCHEMA is all
+        IF NOT EXISTS, so columns added after a release never reach an old
+        file — add them here instead of forcing a --restart rebuild."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(counters)")}
+        if "burned" not in cols:
+            self.db.execute("ALTER TABLE counters ADD COLUMN burned INTEGER")
 
     def close(self) -> None:
         self.db.close()
@@ -195,8 +206,8 @@ class Store:
                 content_type_raw, content_sha256, content_length,
                 is_pointer_like, mint_txid, msg_index, block_index,
                 cp_tx_index, source, divisible, supply, fee, tx_size,
-                xcp_burned, rolling_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                xcp_burned, burned, rolling_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 number,
@@ -219,6 +230,7 @@ class Store:
                 rec.fee,
                 rec.tx_size,
                 rec.xcp_burned,
+                rec.burned,
                 rolling,
             ),
         )
@@ -230,6 +242,19 @@ class Store:
         self.db.execute(
             "UPDATE counters SET divisible = ?, supply = ? WHERE number = ?",
             (None if divisible is None else int(divisible), supply, number),
+        )
+        self.db.commit()
+
+    def set_asset_snapshot(self, asset: str, supply: int | None,
+                           burned: int | None) -> None:
+        """Persist the asset-level live numbers (supply, total destroyed) for
+        every counter on `asset` — they are asset facts, so siblings share
+        them. COALESCE keeps the stored value when a lookup failed (None), so
+        an unreachable Core never wipes a previously-good snapshot."""
+        self.db.execute(
+            "UPDATE counters SET supply = COALESCE(?, supply), "
+            "burned = COALESCE(?, burned) WHERE asset = ?",
+            (supply, burned, asset),
         )
         self.db.commit()
 
