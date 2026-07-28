@@ -157,6 +157,38 @@ def test_buy_from_dispenser_keeps_its_selector_asset_flag():
         restore()
 
 
+def test_every_tx_creating_command_accepts_fee_rate():
+    # Anything that ends in a signed Bitcoin transaction must take --fee-rate
+    # and hand it to its cmd_* as fee_rate.
+    cases = [
+        (M.inscribe, "cmd_inscribe", ["inscribe", "--file", "x.png"]),
+        (M.send, "cmd_send", ["send", DEST, "BONPARTY", "1"]),
+        (M.issue, "cmd_lock_supply", ["lock-supply", "BONPARTY"]),
+        (M.issue, "cmd_lock_description", ["lock-description", "BONPARTY"]),
+        (M.issue, "cmd_issue", ["issue", "BONPARTY", "10"]),
+        (M.issue, "cmd_transfer_ownership", ["transfer-ownership", "BONPARTY", DEST]),
+        (M.dispenser, "cmd_buy_from_dispenser", ["buy-from-dispenser", DEST, "1"]),
+        (M.dispenser, "cmd_open_dispenser",
+         ["open-dispenser", "PEPECASH", "100", "--price", "5000"]),
+        (M.dispenser, "cmd_refill_dispenser", ["refill-dispenser", "PEPECASH", "100"]),
+        (M.dispenser, "cmd_close_dispenser", ["close-dispenser", "PEPECASH"]),
+        (M.order, "cmd_open_order", ["open-order", "XCP", "10", "BTC", "0.001"]),
+        (M.order, "cmd_cancel_order", ["cancel-order", HASH0]),
+        (M.order, "cmd_pay_order", ["pay-order"]),
+        (M.bump, "cmd_bump", ["bump"]),
+        (M.cancel, "cmd_cancel", ["cancel"]),
+    ]
+    for module, fn_name, argv in cases:
+        calls, restore = _stub(module, fn_name)
+        try:
+            rc = M.main(["wallet"] + argv + ["--fee-rate", "0.5"])
+            assert rc == 0, f"{argv[0]}: exit {rc}"
+            assert calls and calls[0][1].get("fee_rate") == 0.5, \
+                f"{argv[0]}: fee_rate not passed through ({calls})"
+        finally:
+            restore()
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

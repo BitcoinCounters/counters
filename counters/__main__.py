@@ -329,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_dual(p_lock_supply, "asset", "asset",
               help="asset name or longname whose issuance rights you hold")
+    p_lock_supply.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                               help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_lock_supply.add_argument("--dry-run", action="store_true",
                                help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -338,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_dual(p_lock_desc, "asset", "asset",
               help="asset name or longname whose issuance rights you hold")
+    p_lock_desc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                             help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_lock_desc.add_argument("--dry-run", action="store_true",
                              help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -351,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
               help="additional quantity to issue (e.g. 100, or 0.5 if divisible)")
     p_issue.add_argument("--lock", action="store_true",
                          help="also lock the supply in the same transaction")
+    p_issue.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_issue.add_argument("--dry-run", action="store_true",
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -364,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
     _add_dual(p_xfer, "destination", "address",
               help="address to receive the issuance rights; token balances "
                    "are NOT moved (use `send` for those)")
+    p_xfer.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_xfer.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -615,19 +623,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.wallet_command in ("lock-supply", "lock"):
                 return issue.cmd_lock_supply(
                     config, args.name, _dual_value(p_lock_supply, args, "asset"),
-                    dry_run=args.dry_run,
+                    fee_rate=args.fee_rate, dry_run=args.dry_run,
                 )
             if args.wallet_command == "lock-description":
                 return issue.cmd_lock_description(
                     config, args.name, _dual_value(p_lock_desc, args, "asset"),
-                    dry_run=args.dry_run,
+                    fee_rate=args.fee_rate, dry_run=args.dry_run,
                 )
             if args.wallet_command == "issue":
                 return issue.cmd_issue(
                     config, args.name,
                     _dual_value(p_issue, args, "asset"),
                     _dual_value(p_issue, args, "amount"),
-                    lock=args.lock, dry_run=args.dry_run,
+                    lock=args.lock, fee_rate=args.fee_rate, dry_run=args.dry_run,
                 )
             if args.wallet_command == "buy-from-dispenser":
                 return dispenser.cmd_buy_from_dispenser(
@@ -705,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.name,
                     _dual_value(p_xfer, args, "asset"),
                     _dual_value(p_xfer, args, "destination"),
-                    dry_run=args.dry_run,
+                    fee_rate=args.fee_rate, dry_run=args.dry_run,
                 )
             if args.wallet_command == "restore":
                 return wallet.cmd_wallet_restore(
