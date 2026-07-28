@@ -167,6 +167,7 @@ def test_every_tx_creating_command_accepts_fee_rate():
         (M.issue, "cmd_lock_description", ["lock-description", "BONPARTY"]),
         (M.issue, "cmd_issue", ["issue", "BONPARTY", "10"]),
         (M.issue, "cmd_transfer_ownership", ["transfer-ownership", "BONPARTY", DEST]),
+        (M.burn, "cmd_burn", ["burn", "BONPARTY", "10"]),
         (M.dispenser, "cmd_buy_from_dispenser", ["buy-from-dispenser", DEST, "1"]),
         (M.dispenser, "cmd_open_dispenser",
          ["open-dispenser", "PEPECASH", "100", "--price", "5000"]),

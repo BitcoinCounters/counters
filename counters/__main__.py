@@ -13,7 +13,9 @@ import sys
 from pathlib import Path
 
 from . import CP_SERIES, __version__
-from .commands import bump, cancel, dispenser, inscribe, issue, order, read, send, serve, wallet
+from .commands import (
+    bump, burn, cancel, dispenser, inscribe, issue, order, read, send, serve, wallet,
+)
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -375,6 +377,29 @@ def main(argv: list[str] | None = None) -> int:
     p_xfer.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_burn = wsub.add_parser(
+        "burn", parents=[common, wname],
+        help="permanently destroy a quantity of an asset (Counterparty destroy)",
+        usage="counters wallet [--name NAME] burn <ASSET> <AMOUNT>",
+    )
+    _add_dual(p_burn, "asset", "asset",
+              help="asset name or longname to destroy (XCP allowed; BTC is not "
+                   "a Counterparty asset)")
+    _add_dual(p_burn, "amount", "amount",
+              help="quantity to destroy forever (e.g. 1, or 0.5 if divisible)")
+    p_burn.add_argument("--tag", default="",
+                        help="short note recorded in the destroy message "
+                             "(e.g. the reason)")
+    p_burn.add_argument("--source", metavar="ADDRESS",
+                        help="wallet address to burn from; default: one that "
+                             "holds enough of the asset")
+    p_burn.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_burn.add_argument("--yes", action="store_true",
+                        help="skip the confirmation prompt")
+    p_burn.add_argument("--dry-run", action="store_true",
+                        help="compose + sign + validate but do not broadcast; print raw hex")
+
     p_disp = wsub.add_parser(
         "buy-from-dispenser", parents=[common, wname],
         help="buy from a Counterparty dispenser (a plain BTC send does NOT work)",
@@ -636,6 +661,14 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_issue, args, "asset"),
                     _dual_value(p_issue, args, "amount"),
                     lock=args.lock, fee_rate=args.fee_rate, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "burn":
+                return burn.cmd_burn(
+                    config, args.name,
+                    _dual_value(p_burn, args, "asset"),
+                    _dual_value(p_burn, args, "amount"),
+                    tag=args.tag, source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
                 )
             if args.wallet_command == "buy-from-dispenser":
                 return dispenser.cmd_buy_from_dispenser(
