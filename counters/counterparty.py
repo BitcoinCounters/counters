@@ -176,6 +176,14 @@ class CounterpartyClient:
             self._asset_cache[asset] = data.get("result") if data else None
         return self._asset_cache[asset]
 
+    def get_asset_destroyed(self, asset: str) -> int:
+        """Total raw units of `asset` permanently destroyed (valid `destroy`
+        messages, summed over the asset's destructions). The asset's live
+        `supply` already excludes these — this is the historical total."""
+        rows = self._paginate(f"/v2/assets/{asset}/destructions")
+        return sum(int(r.get("quantity") or 0) for r in rows
+                   if r.get("status") == "valid")
+
     # --- compose -----------------------------------------------------------
 
     def compose_issuance(

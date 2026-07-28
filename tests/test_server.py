@@ -96,6 +96,7 @@ def _run_server():
     cfg = _seed_store(tmp)
     # Keep the test offline: never call Counterparty for live asset info.
     appmod._live_asset = lambda config, asset: {}
+    appmod._asset_burned = lambda config, asset: 100 if asset == "TESTASSET" else None
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), appmod.Handler)
     httpd.config = cfg
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -160,6 +161,8 @@ def test_api_and_static():
         assert c0["xcp_burned"] == 50000000
         assert c0["supply"] == 1 and c0["divisible"] is False
         assert c0["locked"] is None   # live lookup stubbed offline
+        assert c0["burned"] == 100    # total destroyed, shown next to supply
+        assert rec["burned"] is None  # lists never look it up (live-only field)
         # the single-counter endpoint lists every counter on the asset
         assert [(a["number"], a["kind"]) for a in c0["asset_counters"]] == \
             [(0, "issuance"), (1, "issuance")]

@@ -273,6 +273,16 @@ def _live_asset(config: Config, asset: str) -> dict:
         return {}
 
 
+def _asset_burned(config: Config, asset: str) -> int | None:
+    """Total raw units of `asset` destroyed, per Counterparty (best-effort,
+    like _live_asset; None when Core is unreachable, so the UI can tell
+    "couldn't check" from a true zero)."""
+    try:
+        return CounterpartyClient(config).get_asset_destroyed(asset)
+    except CounterpartyError:
+        return None
+
+
 def _block_time(config: Config, height: int) -> int | None:
     """The counter's creation time = its block's timestamp, per Counterparty
     (best-effort, like _live_asset; None if Core is unreachable)."""
@@ -416,6 +426,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
         "locked": None,  # mutable; filled live on the single-counter endpoint
+        "burned": None,  # total destroyed; live-only, like locked
         "fee": row["fee"],
         "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
@@ -546,6 +557,7 @@ class Handler(BaseHTTPRequestHandler):
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
+            rec["burned"] = _asset_burned(self.config, row["asset"])
             rec["block_time"] = _block_time(self.config, row["block_index"])
             # Envelope style (ord/generic) from the reveal tx — server-side,
             # serve-time; never indexed; never affects validity or numbering.
