@@ -163,10 +163,10 @@
   .backlink:hover{color:var(--copper)}
   .dwrap{display:block}
   .dwrap>.empty{max-width:var(--wrap);margin:40px auto 0;padding:0 22px}
-  .stage .frame{height:calc(100dvh - var(--head));background:var(--bg2);border-bottom:1px solid var(--line);overflow:hidden;position:relative}
+  /* Leave ~150px of the viewport for the title row and the top of the facts
+     to peek above the fold — the visible hint that the page scrolls. */
+  .stage .frame{height:calc(100dvh - var(--head) - 150px);min-height:340px;background:var(--bg2);border-bottom:1px solid var(--line);overflow:hidden;position:relative}
   .stage .cap{position:absolute;bottom:14px;right:14px;z-index:5;display:flex;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--dim);background:#0009;border:1px solid var(--line);border-radius:7px;padding:4px 10px;pointer-events:none}
-  .stage .cue{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:5;color:var(--faint);font-family:var(--mono);font-size:14px;opacity:.55;pointer-events:none;animation:cue 2.2s ease-in-out infinite}
-  @keyframes cue{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
   .dbody{max-width:var(--wrap);margin:30px auto 0;padding:0 22px}
   .dhead{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
   .dhead .meter .d{font-size:26px;width:.82em;height:1.34em;color:var(--ink)}
@@ -553,7 +553,6 @@ async function renderDetail(id){
       <div class="frame">
         ${renderContent(c)}
         <div class="cap"><span>${c.content_type}</span><span>·</span><span>${fmtSize(c.size)}</span></div>
-        <div class="cue">↓</div>
       </div>
     </div>
     <div class="dbody">
