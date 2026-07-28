@@ -83,7 +83,9 @@ class CounterpartyClient:
             )
         return resp.json()
 
-    def _paginate(self, path: str, missing_ok: bool = True) -> list[dict]:
+    def _paginate(
+        self, path: str, missing_ok: bool = True, extra_params: dict | None = None
+    ) -> list[dict]:
         """Exhaust a cursor-paginated endpoint (verbose=true) into one list.
 
         missing_ok=False turns a 404 into an error instead of an empty list:
@@ -91,11 +93,14 @@ class CounterpartyClient:
         has not parsed (restart, rollback) aborts the sync pass for a retry —
         silently treating it as "no events" would advance the cursor past
         real events and fork the numbering.
+
+        extra_params adds query filters (e.g. status=open) alongside the
+        pagination ones.
         """
         out: list[dict] = []
         cursor: Any = None
         while True:
-            params: dict[str, Any] = {"limit": 1000, "verbose": "true"}
+            params: dict[str, Any] = {"limit": 1000, "verbose": "true", **(extra_params or {})}
             if cursor is not None:
                 params["cursor"] = cursor
             data = self._get(path, params=params)
@@ -242,6 +247,7 @@ class CounterpartyClient:
             "quantity": quantity,
             "destination": destination,
             "encoding": "opreturn",
+            "disable_utxo_locks": "true",
             "allow_unconfirmed_inputs": "true",
             "verbose": "true",
         }
@@ -283,9 +289,174 @@ class CounterpartyClient:
             raise CounterpartyError(f"compose dispense failed: {data}")
         return data["result"]
 
+    def compose_dispenser(
+        self,
+        source: str,
+        asset: str,
+        give_quantity: int,
+        escrow_quantity: int,
+        mainchainrate: int,
+        status: int = 0,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a *dispenser* message: open (status=0) or close (status=10)
+        the vending machine at `source` for `asset`.
+
+        All quantities are RAW units (sats for a divisible asset):
+        `give_quantity` per lot, `escrow_quantity` locked in total, and
+        `mainchainrate` is the price per lot in BTC satoshis. A close still
+        requires all three — pass (0, 0, 0, status=10). A second open with
+        the SAME give_quantity and mainchainrate is a refill (Core rejects
+        differing terms); there is no way to change the price of a live
+        dispenser.
+
+        Deliberately no `open_address`/`oracle_address`: opening on another
+        address composes fine but has been on-chain invalid since block
+        866,000 (dispenser_must_be_created_by_source), and oracle-priced
+        dispensers are out of scope.
+        """
+        params: dict[str, Any] = {
+            "asset": asset,
+            "give_quantity": give_quantity,
+            "escrow_quantity": escrow_quantity,
+            "mainchainrate": mainchainrate,
+            "status": status,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/dispenser", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose dispenser failed: {data}")
+        return data["result"]
+
+    def compose_order(
+        self,
+        source: str,
+        give_asset: str,
+        give_quantity: int,
+        get_asset: str,
+        get_quantity: int,
+        expiration: int,
+        fee_required: int = 0,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a DEX *order*: offer `give_quantity` of `give_asset` for
+        `get_quantity` of `get_asset`. Quantities are raw units; BTC is
+        satoshis. `expiration` is in blocks (0 = never expires, max 65535).
+
+        A non-BTC give_asset is escrowed when the order confirms and returns
+        on cancel/expiry. BTC is never escrowed: each match goes "pending"
+        and the BTC must be paid with a separate btcpay within ~20 blocks.
+        For a BTC-give order this transaction's own miner fee doubles as its
+        `fee_provided` matching budget against counterparties' `fee_required`
+        — a low-fee order can be permanently unmatchable, so `sat_per_vbyte`
+        matters beyond confirmation speed.
+        """
+        params: dict[str, Any] = {
+            "give_asset": give_asset,
+            "give_quantity": give_quantity,
+            "get_asset": get_asset,
+            "get_quantity": get_quantity,
+            "expiration": expiration,
+            "fee_required": fee_required,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/order", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose order failed: {data}")
+        return data["result"]
+
+    def compose_cancel_order(
+        self, source: str, offer_hash: str,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a Counterparty *cancel* of an open DEX order (or bet).
+        `offer_hash` is the order's tx hash; `source` must be its maker.
+        Escrowed give-asset returns when the cancel confirms. (Distinct from
+        the wallet's RBF `cancel`, which abandons an unconfirmed Bitcoin tx.)
+        """
+        params: dict[str, Any] = {
+            "offer_hash": offer_hash,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/cancel", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose cancel failed: {data}")
+        return data["result"]
+
+    def compose_btcpay(
+        self, source: str, order_match_id: str,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a *btcpay* settling the BTC side of a pending order match.
+        `order_match_id` is "<tx0_hash>_<tx1_hash>". The composed transaction
+        CONTAINS the BTC payment to the counterparty — there is no partial
+        payment, and it must confirm before the match expires (~20 blocks
+        after matching).
+        """
+        params: dict[str, Any] = {
+            "order_match_id": order_match_id,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/btcpay", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose btcpay failed: {data}")
+        return data["result"]
+
     def get_address_dispensers(self, address: str) -> list[dict]:
         """Dispensers operated BY `address` (what a buyer pays into)."""
         return self._paginate(f"/v2/addresses/{address}/dispensers")
+
+    def get_dispenser(self, address: str, asset: str) -> dict | None:
+        """The latest dispenser row for (address, asset) — any status — or None.
+        Refill and close read this to copy the live terms and check status."""
+        data = self._get(
+            f"/v2/addresses/{address}/dispensers/{asset}", params={"verbose": "true"}
+        )
+        return data.get("result") if data else None
+
+    # --- DEX orders --------------------------------------------------------
+
+    def get_order(self, order_hash: str) -> dict | None:
+        """One order by tx hash (verbose: asset infos + normalized amounts)."""
+        data = self._get(f"/v2/orders/{order_hash}", params={"verbose": "true"})
+        return data.get("result") if data else None
+
+    def get_address_orders(self, address: str, status: str | None = None) -> list[dict]:
+        """Orders made by an address, optionally filtered by status
+        (open/expired/filled/cancelled, comma-separable)."""
+        extra = {"status": status} if status else None
+        return self._paginate(f"/v2/addresses/{address}/orders", extra_params=extra)
+
+    def get_order_matches(self, status: str = "pending") -> list[dict]:
+        """Order matches by status. There is no per-address endpoint, so
+        callers filter rows by tx0_address/tx1_address; "pending" means a
+        BTC payment is still owed."""
+        return self._paginate("/v2/order_matches", extra_params={"status": status})
+
+    def get_pool_quote(self, asset1: str, asset2: str, quantity: int) -> dict | None:
+        """AMM+book combined output estimate for selling `quantity` (raw units
+        of asset1) into the asset1/asset2 market; None if no pool exists."""
+        data = self._get(
+            f"/v2/pools/{asset1}/{asset2}/quote",
+            params={"quantity": quantity, "verbose": "true"},
+        )
+        return data.get("result") if data else None
 
     def get_address_balances(self, address: str) -> list[dict]:
         """All Counterparty (XCP + asset) balances held by an address."""

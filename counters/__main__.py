@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import CP_SERIES, __version__
-from .commands import bump, cancel, dispenser, inscribe, issue, read, send, serve, wallet
+from .commands import bump, cancel, dispenser, inscribe, issue, order, read, send, serve, wallet
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
 from .counterparty import CounterpartyError
@@ -84,6 +84,34 @@ def _wipe_index(config: Config) -> None:
         print(f"--restart: wiped {', '.join(removed)} from {where}", file=sys.stderr)
     else:
         print(f"--restart: nothing to wipe in {where}", file=sys.stderr)
+
+
+def _add_dual(parser, name: str, metavar: str, help: str, flag: str | None = None):
+    """Register a value that may be given positionally OR as a flag (so both
+    `send ADDR ASSET AMT` and `send --destination ADDR --asset ASSET
+    --amount AMT` work). The flag lands in `<name>_flag` so an absent one
+    never shadows the positional; `_dual_value` reconciles the two at
+    dispatch."""
+    parser.add_argument(name, nargs="?", default=None, metavar=metavar, help=help)
+    parser.add_argument(flag or "--" + name.replace("_", "-"),
+                        dest=f"{name}_flag", metavar=metavar.upper(),
+                        help=f"flag form of <{metavar}>")
+
+
+def _dual_value(parser, args, name: str, required: bool = True):
+    """The value of a dual positional/flag argument, erroring (usage + exit 2,
+    argparse-style) when it is given twice or, if required, not at all."""
+    pos = getattr(args, name)
+    flag = getattr(args, f"{name}_flag")
+    opt = "--" + name.replace("_", "-")
+    if pos is not None and flag is not None:
+        parser.error(f"{name.replace('_', '-')} given twice: positionally "
+                     f"({pos!r}) and via a flag ({flag!r})")
+    value = pos if pos is not None else flag
+    if required and value is None:
+        parser.error(f"missing {name.replace('_', '-')}: give it positionally "
+                     f"or via {opt}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -279,14 +307,17 @@ def main(argv: list[str] | None = None) -> int:
     p_send = wsub.add_parser(
         "send", parents=[common, wname],
         help="transfer a counter (asset), or plain BTC, to an address",
-        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET|BTC> <AMOUNT>",
+        usage="counters wallet [--name NAME] send <ADDRESS> <ASSET|BTC> <AMOUNT>\n"
+              "       counters wallet [--name NAME] send --destination ADDRESS "
+              "--asset ASSET --amount AMOUNT",
     )
-    p_send.add_argument("destination", metavar="address", help="recipient Bitcoin address")
-    p_send.add_argument("asset", metavar="asset",
-                        help="asset name or longname of the counter, or BTC for a "
-                             "plain bitcoin payment")
-    p_send.add_argument("amount", help="quantity to send (e.g. 1, 0.5 for a divisible "
-                                       "asset, or an amount in BTC when asset is BTC)")
+    _add_dual(p_send, "destination", "address", help="recipient Bitcoin address")
+    _add_dual(p_send, "asset", "asset",
+              help="asset name or longname of the counter, or BTC for a "
+                   "plain bitcoin payment")
+    _add_dual(p_send, "amount", "amount",
+              help="quantity to send (e.g. 1, 0.5 for a divisible "
+                   "asset, or an amount in BTC when asset is BTC)")
     p_send.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_send.add_argument("--dry-run", action="store_true",
@@ -296,7 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         "lock-supply", parents=[common, wname], aliases=["lock"],
         help="freeze an asset's supply (no future issuance can change it)",
     )
-    p_lock_supply.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    _add_dual(p_lock_supply, "asset", "asset",
+              help="asset name or longname whose issuance rights you hold")
     p_lock_supply.add_argument("--dry-run", action="store_true",
                                help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -304,7 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         "lock-description", parents=[common, wname],
         help="freeze an asset's description (the image/metadata reference)",
     )
-    p_lock_desc.add_argument("asset", help="asset name or longname whose issuance rights you hold")
+    _add_dual(p_lock_desc, "asset", "asset",
+              help="asset name or longname whose issuance rights you hold")
     p_lock_desc.add_argument("--dry-run", action="store_true",
                              help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -312,8 +345,10 @@ def main(argv: list[str] | None = None) -> int:
         "issue", parents=[common, wname],
         help="issue additional supply of an existing asset you own",
     )
-    p_issue.add_argument("asset", help="asset name or longname whose issuance rights you hold")
-    p_issue.add_argument("amount", help="additional quantity to issue (e.g. 100, or 0.5 if divisible)")
+    _add_dual(p_issue, "asset", "asset",
+              help="asset name or longname whose issuance rights you hold")
+    _add_dual(p_issue, "amount", "amount",
+              help="additional quantity to issue (e.g. 100, or 0.5 if divisible)")
     p_issue.add_argument("--lock", action="store_true",
                          help="also lock the supply in the same transaction")
     p_issue.add_argument("--dry-run", action="store_true",
@@ -324,10 +359,11 @@ def main(argv: list[str] | None = None) -> int:
         help="hand an asset's issuance rights (reissue/lock/reinscribe) to an address",
         usage="counters wallet [--name NAME] transfer-ownership <ASSET> <ADDRESS>",
     )
-    p_xfer.add_argument("asset", help="asset name or longname whose issuance rights you hold")
-    p_xfer.add_argument("destination", metavar="address",
-                        help="address to receive the issuance rights; token balances "
-                             "are NOT moved (use `send` for those)")
+    _add_dual(p_xfer, "asset", "asset",
+              help="asset name or longname whose issuance rights you hold")
+    _add_dual(p_xfer, "destination", "address",
+              help="address to receive the issuance rights; token balances "
+                   "are NOT moved (use `send` for those)")
     p_xfer.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
@@ -336,9 +372,10 @@ def main(argv: list[str] | None = None) -> int:
         help="buy from a Counterparty dispenser (a plain BTC send does NOT work)",
         usage="counters wallet [--name NAME] buy-from-dispenser <ADDRESS> <AMOUNT>",
     )
-    p_disp.add_argument("address", metavar="address", help="the dispenser's address")
-    p_disp.add_argument("amount", help="how much of the ASSET to buy (e.g. 1); the "
-                                       "satoshi price comes from the dispenser")
+    _add_dual(p_disp, "address", "address", help="the dispenser's address")
+    _add_dual(p_disp, "amount", "amount",
+              help="how much of the ASSET to buy (e.g. 1); the "
+                   "satoshi price comes from the dispenser")
     p_disp.add_argument("--asset", help="which asset, when the address runs more than "
                                         "one open dispenser")
     p_disp.add_argument("--source", metavar="ADDRESS",
@@ -350,6 +387,122 @@ def main(argv: list[str] | None = None) -> int:
                         help="skip the confirmation prompt")
     p_disp.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_dopen = wsub.add_parser(
+        "open-dispenser", parents=[common, wname],
+        help="open a dispenser: escrow an asset and vend it for BTC",
+        usage="counters wallet [--name NAME] open-dispenser <ASSET> <AMOUNT> --price SATS [--lot AMOUNT]",
+    )
+    _add_dual(p_dopen, "asset", "asset", help="asset name or longname to vend")
+    _add_dual(p_dopen, "amount", "amount",
+              help="TOTAL quantity to escrow (e.g. 100, or 0.5 if divisible)")
+    p_dopen.add_argument("--price", required=True, type=int, metavar="SATS",
+                         help="price per lot, in satoshis — it can never be changed "
+                              "while the dispenser is open")
+    p_dopen.add_argument("--lot", metavar="AMOUNT",
+                         help="quantity vended per purchase (default: the whole "
+                              "escrow as one lot)")
+    p_dopen.add_argument("--source", metavar="ADDRESS",
+                         help="wallet address to open at (it holds the escrow); "
+                              "default: one that holds enough of the asset")
+    p_dopen.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                         help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_dopen.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_dopen.add_argument("--dry-run", action="store_true",
+                         help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_drefill = wsub.add_parser(
+        "refill-dispenser", parents=[common, wname],
+        help="add stock to an open dispenser (same terms; max 5 refills)",
+        usage="counters wallet [--name NAME] refill-dispenser <ASSET> <AMOUNT>",
+    )
+    _add_dual(p_drefill, "asset", "asset", help="asset of the dispenser to refill")
+    _add_dual(p_drefill, "amount", "amount", help="quantity to add to the escrow")
+    p_drefill.add_argument("--source", metavar="ADDRESS",
+                           help="the dispenser's address, when several wallet "
+                                "addresses run one for this asset")
+    p_drefill.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                           help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_drefill.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_drefill.add_argument("--dry-run", action="store_true",
+                           help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_dclose = wsub.add_parser(
+        "close-dispenser", parents=[common, wname],
+        help="close a dispenser (vends ~5 more blocks, then returns unsold stock)",
+        usage="counters wallet [--name NAME] close-dispenser <ASSET>",
+    )
+    _add_dual(p_dclose, "asset", "asset", help="asset of the dispenser to close")
+    p_dclose.add_argument("--source", metavar="ADDRESS",
+                          help="the dispenser's address, when several wallet "
+                               "addresses run one for this asset")
+    p_dclose.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                          help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_dclose.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_dclose.add_argument("--dry-run", action="store_true",
+                          help="compose + sign + validate but do not broadcast; print raw hex")
+
+    wsub.add_parser("dispensers", parents=[common, wname],
+                    help="list the dispensers this wallet runs")
+
+    p_oopen = wsub.add_parser(
+        "open-order", parents=[common, wname],
+        help="place a DEX order (BTC allowed on either side)",
+        usage="counters wallet [--name NAME] open-order <GIVE_ASSET> <GIVE_AMOUNT> "
+              "<GET_ASSET> <GET_AMOUNT>",
+    )
+    _add_dual(p_oopen, "give_asset", "give-asset",
+              help="asset offered (BTC for a buy order)")
+    _add_dual(p_oopen, "give_amount", "give-amount",
+              help="quantity offered (in BTC when the asset is BTC)")
+    _add_dual(p_oopen, "get_asset", "get-asset", help="asset wanted")
+    _add_dual(p_oopen, "get_amount", "get-amount", help="quantity wanted")
+    p_oopen.add_argument("--expiration", type=int, default=0, metavar="BLOCKS",
+                         help="blocks until the order expires, 0-65535; 0 = never — "
+                              "it rests until filled or cancel-order (default 0)")
+    p_oopen.add_argument("--fee-required", type=int, default=0, metavar="SATS",
+                         help="miner fee a matching BTC payer must have provided "
+                              "(only for orders that receive BTC)")
+    p_oopen.add_argument("--source", metavar="ADDRESS",
+                         help="wallet address the order is made from; default: one "
+                              "that can cover the give side")
+    p_oopen.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                         help="fee rate in sat/vB (default: Counterparty estimates "
+                              "one). For a BTC-give order this fee is also the "
+                              "order's fee_provided matching budget")
+    p_oopen.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_oopen.add_argument("--dry-run", action="store_true",
+                         help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_ocancel = wsub.add_parser(
+        "cancel-order", parents=[common, wname],
+        help="withdraw an open DEX order (returns its escrow); not the RBF `cancel`",
+        usage="counters wallet [--name NAME] cancel-order <TXHASH>",
+    )
+    _add_dual(p_ocancel, "order_hash", "txhash", flag="--txhash",
+              help="the order's transaction hash (see `orders`)")
+    p_ocancel.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                           help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_ocancel.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_ocancel.add_argument("--dry-run", action="store_true",
+                           help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_opay = wsub.add_parser(
+        "pay-order", parents=[common, wname],
+        help="pay the BTC owed on a matched order (must confirm within ~20 blocks)",
+        usage="counters wallet [--name NAME] pay-order [MATCH_ID]",
+    )
+    _add_dual(p_opay, "match_id", "match-id",
+              help="the order match to settle (<tx0_hash>_<tx1_hash>); "
+                   "omit to auto-pick when only one is pending")
+    p_opay.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_opay.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_opay.add_argument("--dry-run", action="store_true",
+                        help="compose + sign + validate but do not broadcast; print raw hex")
+
+    wsub.add_parser("orders", parents=[common, wname],
+                    help="list this wallet's open orders and pending BTC settlements")
 
     p_bump = wsub.add_parser(
         "bump", parents=[common, wname],
@@ -453,28 +606,89 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
-                    config, args.name, args.destination, args.asset, args.amount,
+                    config, args.name,
+                    _dual_value(p_send, args, "destination"),
+                    _dual_value(p_send, args, "asset"),
+                    _dual_value(p_send, args, "amount"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
                 )
             if args.wallet_command in ("lock-supply", "lock"):
                 return issue.cmd_lock_supply(
-                    config, args.name, args.asset, dry_run=args.dry_run,
+                    config, args.name, _dual_value(p_lock_supply, args, "asset"),
+                    dry_run=args.dry_run,
                 )
             if args.wallet_command == "lock-description":
                 return issue.cmd_lock_description(
-                    config, args.name, args.asset, dry_run=args.dry_run,
+                    config, args.name, _dual_value(p_lock_desc, args, "asset"),
+                    dry_run=args.dry_run,
                 )
             if args.wallet_command == "issue":
                 return issue.cmd_issue(
-                    config, args.name, args.asset, args.amount,
+                    config, args.name,
+                    _dual_value(p_issue, args, "asset"),
+                    _dual_value(p_issue, args, "amount"),
                     lock=args.lock, dry_run=args.dry_run,
                 )
             if args.wallet_command == "buy-from-dispenser":
                 return dispenser.cmd_buy_from_dispenser(
-                    config, args.name, args.address, args.amount,
+                    config, args.name,
+                    _dual_value(p_disp, args, "address"),
+                    _dual_value(p_disp, args, "amount"),
                     asset=args.asset, source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
                 )
+            if args.wallet_command == "open-dispenser":
+                return dispenser.cmd_open_dispenser(
+                    config, args.name,
+                    _dual_value(p_dopen, args, "asset"),
+                    _dual_value(p_dopen, args, "amount"),
+                    args.price,
+                    lot=args.lot, source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "refill-dispenser":
+                return dispenser.cmd_refill_dispenser(
+                    config, args.name,
+                    _dual_value(p_drefill, args, "asset"),
+                    _dual_value(p_drefill, args, "amount"),
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "close-dispenser":
+                return dispenser.cmd_close_dispenser(
+                    config, args.name, _dual_value(p_dclose, args, "asset"),
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "dispensers":
+                return dispenser.cmd_list_dispensers(config, args.name)
+            if args.wallet_command == "open-order":
+                return order.cmd_open_order(
+                    config, args.name,
+                    _dual_value(p_oopen, args, "give_asset"),
+                    _dual_value(p_oopen, args, "give_amount"),
+                    _dual_value(p_oopen, args, "get_asset"),
+                    _dual_value(p_oopen, args, "get_amount"),
+                    expiration=args.expiration, fee_required=args.fee_required,
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "cancel-order":
+                return order.cmd_cancel_order(
+                    config, args.name,
+                    _dual_value(p_ocancel, args, "order_hash"),
+                    fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "pay-order":
+                return order.cmd_pay_order(
+                    config, args.name,
+                    match_id=_dual_value(p_opay, args, "match_id", required=False),
+                    fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                )
+            if args.wallet_command == "orders":
+                return order.cmd_list_orders(config, args.name)
             if args.wallet_command == "bump":
                 return bump.cmd_bump(
                     config, args.name, txid=args.txid, fee_rate=args.fee_rate,
@@ -488,7 +702,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.wallet_command == "transfer-ownership":
                 return issue.cmd_transfer_ownership(
-                    config, args.name, args.asset, args.destination,
+                    config, args.name,
+                    _dual_value(p_xfer, args, "asset"),
+                    _dual_value(p_xfer, args, "destination"),
                     dry_run=args.dry_run,
                 )
             if args.wallet_command == "restore":
