@@ -142,7 +142,11 @@ def wrapper(kind: str, number: int, content_type: str, extra: str | None,
             "</body>"
         )
     elif kind in ("text", "code", "markdown"):
-        body = f"<body class='preview text'><pre>{html.escape(text or '')}</pre></body>"
+        # A short body (a name, a URL, a JSON pointer) centers at display size;
+        # anything longer keeps the top-left scrolling document layout. The
+        # threshold is bytes of decoded text, roughly "fits without scrolling".
+        short = " short" if len(text or "") <= 400 else ""
+        body = f"<body class='preview text{short}'><pre>{html.escape(text or '')}</pre></body>"
     elif kind == "model":
         body = (
             "<body class='preview model'>"

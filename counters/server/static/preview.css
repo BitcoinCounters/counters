@@ -24,7 +24,7 @@ body.preview {
 .preview.image.pixelated img { image-rendering: pixelated; }
 
 /* audio / video / pdf */
-.preview.audio audio { width: 90%; }
+.preview.audio audio { width: min(90%, 480px); }
 .preview.video video { width: 100%; height: 100%; object-fit: contain; }
 .preview.pdf { align-items: stretch; justify-content: stretch; }
 .preview.pdf iframe { width: 100%; height: 100%; border: 0; }
@@ -41,6 +41,17 @@ body.preview {
   font-size: 13px;
   line-height: 1.5;
   color: #ece3d4;
+}
+
+/* a short body (<= 400 bytes) centers at display size instead of sitting
+   13px in the top-left of what may be a viewport-sized frame */
+.preview.text.short { align-items: center; justify-content: center; }
+.preview.text.short pre {
+  width: auto;
+  max-width: 90%;
+  overflow: visible;
+  text-align: center;
+  font-size: clamp(14px, 3vmin, 28px);
 }
 
 /* font */

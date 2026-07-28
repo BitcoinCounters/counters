@@ -42,9 +42,11 @@
     --ink:#ece3d4; --dim:#a4957f; --faint:#6e6253;
     --copper:#e0682f; --copper2:#f3905a; --copper-ghost:#e0682f22;
     --patina:#5bb394; --patina-dim:#3f7d68;
+    --gold:#d9a441;
     --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
     --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     --wrap:1120px;
+    --head:62px;
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
@@ -128,20 +130,6 @@
   .synced .tick{font-family:var(--mono);font-size:12px;color:var(--patina)}
   .blocklink{cursor:pointer}
 
-  /* ---------- featured genesis ---------- */
-  .featured{
-    display:grid;grid-template-columns:200px 1fr;gap:26px;align-items:center;
-    background:linear-gradient(180deg,var(--card),#1a1610);
-    border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:6px;cursor:pointer;
-    transition:.18s;
-  }
-  .featured:hover{border-color:var(--copper);transform:translateY(-2px)}
-  .featured .thumb{aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid var(--line2);background:var(--bg2);position:relative}
-  .featured .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--patina);border:1px solid var(--patina-dim);border-radius:99px;padding:3px 10px;margin-bottom:12px}
-  .featured h3{font-family:var(--mono);font-weight:600;font-size:22px;margin:0 0 4px;color:var(--copper2)}
-  .featured .fmeta{color:var(--dim);font-size:14px;margin:0 0 14px}
-  .featured .ftext{font-family:var(--mono);color:var(--dim);font-size:13px}
-
   /* ---------- grid ---------- */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:16px}
   .card{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden;cursor:pointer;transition:.16s;display:flex;flex-direction:column}
@@ -166,14 +154,20 @@
   .render .txt{font-family:var(--mono);color:var(--ink);padding:16px;text-align:center;line-height:1.35;max-width:100%;max-height:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical}
   .render .blob{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--faint);font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
 
-  /* ---------- detail ---------- */
-  .detail{padding:30px 0 70px}
-  .backlink{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:24px;cursor:pointer}
+  /* ---------- detail ----------
+     The artwork owns the first screen: a full-bleed frame sized to the
+     viewport minus the header, with the back link, caption, and scroll cue
+     overlaid as chips. Identity and facts follow in normal wrap flow. */
+  .wrap.detail{max-width:none;padding:0 0 70px;position:relative}
+  .backlink{position:absolute;top:14px;left:14px;z-index:5;display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);background:#0009;border:1px solid var(--line);border-radius:7px;padding:5px 11px;cursor:pointer}
   .backlink:hover{color:var(--copper)}
-  .dwrap{display:grid;grid-template-columns:minmax(0,440px) 1fr;gap:40px;align-items:start}
-  .stage{position:sticky;top:84px}
-  .stage .frame{aspect-ratio:1;background:var(--bg2);border:1px solid var(--line);border-radius:16px;overflow:hidden;position:relative}
-  .stage .cap{display:flex;justify-content:space-between;margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .dwrap{display:block}
+  .dwrap>.empty{max-width:var(--wrap);margin:40px auto 0;padding:0 22px}
+  .stage .frame{height:calc(100dvh - var(--head));background:var(--bg2);border-bottom:1px solid var(--line);overflow:hidden;position:relative}
+  .stage .cap{position:absolute;bottom:14px;right:14px;z-index:5;display:flex;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--dim);background:#0009;border:1px solid var(--line);border-radius:7px;padding:4px 10px;pointer-events:none}
+  .stage .cue{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:5;color:var(--faint);font-family:var(--mono);font-size:14px;opacity:.55;pointer-events:none;animation:cue 2.2s ease-in-out infinite}
+  @keyframes cue{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(5px)}}
+  .dbody{max-width:var(--wrap);margin:30px auto 0;padding:0 22px}
   .dhead{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
   .dhead .meter .d{font-size:26px;width:.82em;height:1.34em;color:var(--ink)}
   .dhead h1{font-family:var(--mono);font-weight:600;font-size:30px;margin:0;color:var(--copper2);word-break:break-all;line-height:1.1}
@@ -181,9 +175,12 @@
   .vbadge .dot{width:6px;height:6px;border-radius:99px;background:var(--patina);box-shadow:0 0 8px var(--patina)}
   .vbadge.re{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
   .vbadge.re .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
-  .vbadge.lg{color:var(--gold,#d9a441);border-color:var(--gold,#d9a441);margin-left:8px}
-  .vbadge.lg .dot{background:var(--gold,#d9a441);box-shadow:0 0 8px var(--gold,#d9a441)}
-  .card .thumb .ext.large{right:auto;left:8px;color:var(--gold,#d9a441);border-color:var(--gold,#d9a441)}
+  .vbadge.lg{color:var(--gold);border-color:var(--gold);margin-left:8px}
+  .vbadge.lg .dot{background:var(--gold);box-shadow:0 0 8px var(--gold)}
+  .vbadge.fb{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
+  .vbadge.fb .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
+  .card .thumb .ext.large{right:auto;left:8px;color:var(--gold);border-color:var(--gold)}
+  .card .thumb .ext.large.fb{color:var(--copper2);border-color:var(--copper2)}
   .acs{margin-top:26px}
   .acs .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
   .acs .list{display:flex;flex-wrap:wrap;gap:8px}
@@ -280,9 +277,6 @@
   :focus-visible{outline:2px solid var(--copper);outline-offset:2px;border-radius:4px}
 
   @media(max-width:860px){
-    .featured{grid-template-columns:1fr}
-    .dwrap{grid-template-columns:1fr;gap:26px}
-    .stage{position:static}
     /* pack footer columns left instead of spreading them to the edges */
     .frow{justify-content:flex-start;gap:28px 52px}
   }
@@ -295,6 +289,9 @@
     nav{order:2;width:100%;margin-left:0;gap:6px;flex-wrap:wrap}
     nav a{padding:8px 12px;font-size:13px}
     .search{order:3;flex-basis:100%;margin-left:0}
+    /* the header is static and taller here, so the frame calc against
+       --head would overshoot — size the hero to the viewport directly */
+    .stage .frame{height:72dvh}
     /* one column per row so nothing gets shoved off to the side */
     .frow{gap:30px}
     footer .lk,footer .colophon{flex-basis:100%;max-width:none}
@@ -488,13 +485,15 @@ function sampleRender(c){
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
 const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
-const LARGE_BYTES=400000;   // over 400 KB: too big for standard relay, mined direct
+const LARGE_BYTES=400000;      // over 400 KB: too big for standard relay, mined direct
+const FULL_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
+const sizeTag=c=> c.size>FULL_BLOCK_BYTES?'full block': c.size>LARGE_BYTES?'large': null;
 const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
 const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
 
 function card(c){
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${c.size>LARGE_BYTES?`<span class="ext large">large</span>`:''}${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>FULL_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
       <span class="asset">${esc(c.asset)}</span>
@@ -545,25 +544,28 @@ async function renderDetail(id){
   const c=await getCounter(id);
   showView('detail');
   document.title = c ? `Counter #${c.number} · ${c.asset} — Bitcoin Counters` : 'Bitcoin Counters — Explorer';
-  if(!c){el('detail').innerHTML=`<div class="empty" style="grid-column:1/-1"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
+  if(!c){el('detail').innerHTML=`<div class="empty"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
   const mp=`https://mempool.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
   const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
   el('detail').innerHTML=`
     <div class="stage">
-      <div class="frame">${renderContent(c)}</div>
-      <div class="cap"><span>${c.content_type}</span><span>${fmtSize(c.size)}</span></div>
+      <div class="frame">
+        ${renderContent(c)}
+        <div class="cap"><span>${c.content_type}</span><span>·</span><span>${fmtSize(c.size)}</span></div>
+        <div class="cue">↓</div>
+      </div>
     </div>
-    <div>
-      <div class="dhead">${meterDigits(c.number)}</div>
-      <h1>${esc(c.asset)}</h1>
+    <div class="dbody">
+      <div class="dhead">${meterDigits(c.number)}<h1>${esc(c.asset)}</h1></div>
       <span class="vbadge"><span class="dot"></span>valid counter</span>
       ${c.kind==='fairminter' ? `<span class="vbadge re"><span class="dot"></span>fairminter</span>` : ''}
       ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reinscribe</span>` : ''}
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
-      ${c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
+      ${c.size>FULL_BLOCK_BYTES ? `<span class="vbadge fb" title="over 3.5 MB — the inscription fills an entire Bitcoin block"><span class="dot"></span>full block</span>`
+        : c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
