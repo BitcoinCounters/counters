@@ -321,6 +321,20 @@ def _check_mempool(btc, tx_hex: str) -> tuple[bool, dict]:
     return bool(ok), (checks[0] if checks else {})
 
 
+def _confirm_prompt(prompt: str) -> bool:
+    """Interactive y/N gate for commands that commit funds. Refuses (rather
+    than hangs) when stdin is not a terminal, pointing at --yes."""
+    if not sys.stdin.isatty():
+        print("stdin is not a terminal; pass --yes to confirm non-interactively",
+              file=sys.stderr)
+        return False
+    try:
+        answer = input(f"{prompt} [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 def _sign_and_broadcast(btc, wallet: str, source: str, rawtx: str, dry_run: bool) -> int:
     """Sign (Core), validate against the mempool, and broadcast — the shared
     submit path for send, lock-supply, lock-description, and issue."""

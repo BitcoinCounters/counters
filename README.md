@@ -165,6 +165,8 @@ counters wallet --name mywallet balance           # BTC + aggregated Counterpart
 counters wallet --name mywallet inscriptions      # counters held by the wallet
 counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
 counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign, no broadcast
+# every positional also has a flag form (here and on the other wallet commands):
+counters wallet --name mywallet send --destination bc1p... --asset XDUALS --amount 1
 
 # plain BTC: put BTC in the ASSET slot (amount in BTC; Bitcoin Core picks the inputs)
 counters wallet --name mywallet send bc1p... BTC 0.001
@@ -190,6 +192,34 @@ counters wallet --name mywallet bump --txid <txid> --fee-rate 5
 counters wallet --name mywallet buy-from-dispenser bc1q... 1          # buy 1 XCP
 counters wallet --name mywallet buy-from-dispenser bc1q... 3 --fee-rate 3
 counters wallet --name mywallet buy-from-dispenser bc1q... 1 --yes    # no prompt
+
+# --- run a dispenser (the operator side) ---
+# open: escrow an asset and vend it for BTC. The escrow leaves the address
+# immediately; the price (satoshis per lot) can NEVER be changed while open —
+# to reprice, close, wait ~5 blocks, and reopen.
+counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 5000 --lot 1
+counters wallet --name mywallet open-dispenser MYCOUNTER 1 --price 250000  # one lot: all-or-nothing
+counters wallet --name mywallet dispensers                    # list yours, with status
+# refill: adds stock on the SAME terms (Counterparty rejects any change, so the
+# live terms are read from the chain — you only name the amount). Max 5 refills.
+counters wallet --name mywallet refill-dispenser MYCOUNTER 50
+# close: the dispenser keeps vending for ~5 blocks (status CLOSING), then the
+# unsold stock returns to the closer.
+counters wallet --name mywallet close-dispenser MYCOUNTER
+
+# --- the DEX (Counterparty's on-chain order book + AMM) ---
+# place an order: give one asset, get another; BTC is allowed on either side.
+# A non-BTC give is escrowed until the order fills, expires, or is cancelled.
+# Default --expiration 0 = the order NEVER expires (rests until cancel-order).
+counters wallet --name mywallet open-order XCP 10 BTC 0.001              # sell XCP for BTC
+counters wallet --name mywallet open-order BTC 0.001 XCP 10              # buy XCP with BTC
+counters wallet --name mywallet open-order MYCOUNTER 1 XCP 5 --expiration 8064
+counters wallet --name mywallet orders          # open orders + pending BTC settlements
+counters wallet --name mywallet cancel-order <txhash>   # withdraw; escrow returns
+# BTC is never escrowed: when a BTC-give order matches, the match is "pending"
+# and the BTC must be paid within ~20 blocks — or the match expires and ALL your
+# open BTC-give orders expire with it (the deadbeat penalty).
+counters wallet --name mywallet pay-order               # settle it (auto-picks if one)
 
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
@@ -238,6 +268,16 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > actually requires. (The "never pay a dispenser from taproot" advice you may
 > see elsewhere predates `taproot_support` at block 902,000; bc1p sources are
 > fine now.)
+
+> **DEX escrow is asymmetric.** An order's non-BTC give side is locked the
+> moment the order confirms and only returns on cancel or expiry — with the
+> default indefinite expiration that means until an explicit `cancel-order`.
+> BTC is never locked: each match against a BTC-give order must be settled with
+> `pay-order` within ~20 blocks, and a missed deadline expires the match *and
+> every other open BTC-give order from that address*. A BTC-give order's own
+> miner fee is also its `fee_provided` matching budget — counterparties whose
+> `fee_required` exceeds it will never match, so a dust-fee buy order can rest
+> forever untouched.
 
 > **Cancelling costs what relay policy demands, not what a miner needs.** A
 > replacement must out-pay every transaction it evicts (BIP125 rule 3) — so
@@ -329,7 +369,8 @@ counters/
     send.py         transfer a counter (Counterparty send) or plain BTC
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child
-    dispenser.py    buy from a dispenser (composes the `dispense` message)
+    dispenser.py    buy from a dispenser, and run one: open / refill / close / list
+    order.py        DEX: open-order / cancel-order / pay-order / orders
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
     app.py          routes, JSON API, per-counter Open Graph tags
