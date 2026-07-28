@@ -264,7 +264,7 @@ def _supply_segment(row: sqlite3.Row) -> str:
         return ""
     seg = f" — {_fmt_qty(row['supply'], row['divisible'])}"
     if row["burned"]:
-        seg += f" · {_fmt_qty(row['burned'], row['divisible'])} 🔥"
+        seg += f" · 🔥 {_fmt_qty(row['burned'], row['divisible'])}"
     return seg
 
 
