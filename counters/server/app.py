@@ -249,6 +249,25 @@ def _display_name(row: sqlite3.Row) -> str:
     return row["asset_longname"] or row["asset"]
 
 
+def _fmt_qty(raw: int, divisible) -> str:
+    """Raw asset units -> human string (mirrors the card's SUPPLY format)."""
+    if divisible:
+        return f"{raw / 1e8:,.8f}".rstrip("0").rstrip(".")
+    return f"{raw:,}"
+
+
+def _supply_segment(row: sqlite3.Row) -> str:
+    """' — <supply>[ · <burned> 🔥]' for the preview text, from the stored
+    snapshot only (crawler paths never query the backends); empty when the
+    supply has never been recorded."""
+    if row["supply"] is None:
+        return ""
+    seg = f" — {_fmt_qty(row['supply'], row['divisible'])}"
+    if row["burned"]:
+        seg += f" · {_fmt_qty(row['burned'], row['divisible'])} 🔥"
+    return seg
+
+
 def _inline_body(store: Store, row: sqlite3.Row) -> str | None:
     ct = row["content_type"] or ""
     if not any(ct == t or ct.startswith(t) for t in INLINE_TYPES):
@@ -426,7 +445,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
         "locked": None,  # mutable; filled live on the single-counter endpoint
-        "burned": None,  # total destroyed; live-only, like locked
+        # Total destroyed: the stored snapshot (refreshed by detail views);
+        # the single-counter endpoint overlays the live number.
+        "burned": row["burned"],
         "fee": row["fee"],
         "tx_size": row["tx_size"],
         "xcp_burned": row["xcp_burned"],
@@ -557,7 +578,13 @@ class Handler(BaseHTTPRequestHandler):
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
-            rec["burned"] = _asset_burned(self.config, row["asset"])
+            live_burned = _asset_burned(self.config, row["asset"])
+            if live_burned is not None:
+                rec["burned"] = live_burned
+            # Persist the asset-level numbers so the crawler-facing preview
+            # (/c/<n>, which never queries the backends) shows what the last
+            # human viewer saw. COALESCE semantics: None never wipes a value.
+            store.set_asset_snapshot(row["asset"], info.get("supply"), live_burned)
             rec["block_time"] = _block_time(self.config, row["block_index"])
             # Envelope style (ord/generic) from the reveal tx — server-side,
             # serve-time; never indexed; never affects validity or numbering.
@@ -804,8 +831,9 @@ class Handler(BaseHTTPRequestHandler):
                     alt = f"Counter #{n} — {name} ({ct})"
                 block = _social_meta(
                     title=f"Counter #{n} · {name} — Bitcoin Counters",
-                    description=f"Counter #{n}: {name} — a file inscribed on "
-                                f"Bitcoin, owned through Counterparty, numbered from zero.",
+                    description=f"Counter #{n}: {name}{_supply_segment(row)} — "
+                                f"a file inscribed on Bitcoin, owned through "
+                                f"Counterparty, numbered from zero.",
                     url=f"{base}/c/{n}", image=image, big_image=True,
                     alt=alt, dims=dims, image_type=itype,
                 )
