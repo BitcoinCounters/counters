@@ -298,6 +298,34 @@ def test_transfer_ownership_on_a_locked_asset_still_works():
         _restore(orig)
 
 
+# --- fee rate ----------------------------------------------------------------
+
+def test_fee_rate_reaches_compose_on_every_issuance_command():
+    for run in (
+        lambda: I.cmd_lock_supply(Config(), "me", "MYASSET", fee_rate=0.5, dry_run=True),
+        lambda: I.cmd_lock_description(Config(), "me", "MYASSET", fee_rate=0.5, dry_run=True),
+        lambda: I.cmd_issue(Config(), "me", "MYASSET", "10", fee_rate=0.5, dry_run=True),
+        lambda: I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER,
+                                         fee_rate=0.5, dry_run=True),
+    ):
+        _btc, fake_cp, orig = _patch(_asset(), [OWNER])
+        try:
+            assert run() == 0
+            assert fake_cp.compose_kwargs["sat_per_vbyte"] == 0.5
+        finally:
+            _restore(orig)
+
+
+def test_fee_rate_defaults_to_none_so_counterparty_estimates():
+    _btc, fake_cp, orig = _patch(_asset(), [OWNER])
+    try:
+        assert I.cmd_transfer_ownership(Config(), "me", "MYASSET", NEW_OWNER,
+                                        dry_run=True) == 0
+        assert fake_cp.compose_kwargs["sat_per_vbyte"] is None
+    finally:
+        _restore(orig)
+
+
 # --- compose_issuance param handling ----------------------------------------
 
 class _CapCp(CounterpartyClient):

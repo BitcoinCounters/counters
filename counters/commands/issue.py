@@ -68,7 +68,8 @@ def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
 
 
 def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
-             lock: bool, description, transfer_destination: str | None = None) -> str | None:
+             lock: bool, description, transfer_destination: str | None = None,
+             fee_rate: float | None = None) -> str | None:
     """Compose the issuance from the owner address; return its unsigned raw tx,
     or None after printing the failure (with a funding hint when relevant)."""
     try:
@@ -76,6 +77,7 @@ def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
             source=owner, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock,
             transfer_destination=transfer_destination,
+            sat_per_vbyte=fee_rate,
         )
     except CounterpartyError as e:
         msg = str(e)
@@ -92,7 +94,8 @@ def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
     return rawtx
 
 
-def cmd_lock_supply(config: Config, wallet: str, asset: str, dry_run: bool = False) -> int:
+def cmd_lock_supply(config: Config, wallet: str, asset: str,
+                    fee_rate: float | None = None, dry_run: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -112,16 +115,19 @@ def cmd_lock_supply(config: Config, wallet: str, asset: str, dry_run: bool = Fal
     # rewrite the stored content's MIME classification. Omitted, Counterparty
     # preserves it.
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=divisible,
-                     lock=True, description=None)
+                     lock=True, description=None, fee_rate=fee_rate)
     if rawtx is None:
         return 1
 
     print(f"lock-supply {asset}")
     print(f"  owner     : {owner}")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 
-def cmd_lock_description(config: Config, wallet: str, asset: str, dry_run: bool = False) -> int:
+def cmd_lock_description(config: Config, wallet: str, asset: str,
+                         fee_rate: float | None = None, dry_run: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -137,18 +143,20 @@ def cmd_lock_description(config: Config, wallet: str, asset: str, dry_run: bool 
     # for Counterparty to reject — "Cannot update a locked description".)
     divisible = bool(info.get("divisible"))
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=divisible,
-                     lock=False, description="LOCK_DESCRIPTION")
+                     lock=False, description="LOCK_DESCRIPTION", fee_rate=fee_rate)
     if rawtx is None:
         return 1
 
     print(f"lock-description {asset}")
     print(f"  owner     : {owner}")
     print(f"  freezing  : {info.get('description') or '(empty description)'}")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 
 def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination: str,
-                           dry_run: bool = False) -> int:
+                           fee_rate: float | None = None, dry_run: bool = False) -> int:
     """Hand an asset's issuance rights to another address.
 
     A zero-quantity issuance carrying `transfer_destination`: the recipient
@@ -185,7 +193,8 @@ def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination:
     # lock=False leaves the supply lock as it is; locks are one-way, so this
     # can never unlock an already-locked asset.
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=bool(info.get("divisible")),
-                     lock=False, description=None, transfer_destination=destination)
+                     lock=False, description=None, transfer_destination=destination,
+                     fee_rate=fee_rate)
     if rawtx is None:
         return 1
 
@@ -194,11 +203,14 @@ def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination:
     print(f"  to        : {destination}")
     print(f"  moves     : issuance rights — reissue, lock, reinscribe")
     print(f"  stays     : token balances (move those with `send`)")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 
 def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
-              lock: bool = False, dry_run: bool = False) -> int:
+              lock: bool = False, fee_rate: float | None = None,
+              dry_run: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -222,10 +234,12 @@ def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
 
     # description omitted (None): preserve the asset's content — see lock-supply.
     rawtx = _compose(cp, owner, asset, quantity=raw, divisible=divisible,
-                     lock=lock, description=None)
+                     lock=lock, description=None, fee_rate=fee_rate)
     if rawtx is None:
         return 1
 
     print(f"issue +{_fmt_raw(raw, divisible)} {asset}{' (and LOCK)' if lock else ''}")
     print(f"  owner     : {owner}")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
