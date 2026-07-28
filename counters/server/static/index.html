@@ -181,6 +181,9 @@
   .vbadge .dot{width:6px;height:6px;border-radius:99px;background:var(--patina);box-shadow:0 0 8px var(--patina)}
   .vbadge.re{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
   .vbadge.re .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
+  .vbadge.lg{color:var(--gold,#d9a441);border-color:var(--gold,#d9a441);margin-left:8px}
+  .vbadge.lg .dot{background:var(--gold,#d9a441);box-shadow:0 0 8px var(--gold,#d9a441)}
+  .card .thumb .ext.large{right:auto;left:8px;color:var(--gold,#d9a441);border-color:var(--gold,#d9a441)}
   .acs{margin-top:26px}
   .acs .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
   .acs .list{display:flex;flex-wrap:wrap;gap:8px}
@@ -485,12 +488,13 @@ function sampleRender(c){
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
 const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
+const LARGE_BYTES=400000;   // over 400 KB: too big for standard relay, mined direct
 const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
 const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
 
 function card(c){
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${c.size>LARGE_BYTES?`<span class="ext large">large</span>`:''}${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
       <span class="asset">${esc(c.asset)}</span>
@@ -559,6 +563,7 @@ async function renderDetail(id){
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
+      ${c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
