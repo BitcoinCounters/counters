@@ -246,6 +246,28 @@ def test_compose_destroy_passes_tag_and_whole_fee_rates_as_ints():
     assert params["sat_per_vbyte"] == 2 and isinstance(params["sat_per_vbyte"], int)
 
 
+class _DestructionsCp(CounterpartyClient):
+    def __init__(self, rows):
+        self.rows = rows
+
+    def _get(self, path, params=None):
+        assert path == "/v2/assets/FOO/destructions"
+        return {"result": self.rows, "next_cursor": None}
+
+
+def test_get_asset_destroyed_sums_only_valid_rows():
+    cp = _DestructionsCp([
+        {"quantity": 60, "status": "valid"},
+        {"quantity": 40, "status": "valid"},
+        {"quantity": 999, "status": "invalid: insufficient balance"},
+    ])
+    assert cp.get_asset_destroyed("FOO") == 100
+
+
+def test_get_asset_destroyed_zero_when_never_burned():
+    assert _DestructionsCp([]).get_asset_destroyed("FOO") == 0
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

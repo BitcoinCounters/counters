@@ -502,7 +502,8 @@ const LARGE_BYTES=400000;      // over 400 KB: too big for standard relay, mined
 const FULL_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
 const sizeTag=c=> c.size>FULL_BLOCK_BYTES?'full block': c.size>LARGE_BYTES?'large': null;
 const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
-const fmtSupply=c=> c.divisible ? (+(c.supply/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+c.supply).toLocaleString();
+const fmtQty=(q,c)=> c.divisible ? (+(q/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+q).toLocaleString();
+const fmtSupply=c=>fmtQty(c.supply,c);
 
 function card(c){
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
@@ -581,7 +582,7 @@ async function renderDetail(id){
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fact('asset_id', c.asset_id, true)}
-        ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.divisible?' · divisible':''}`) : ''}
+        ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">${fmtQty(c.burned,c)} 🔥</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
         ${c.envelope ? fact('envelope', c.envelope==='ord' ? 'ord/xcp — also an ordinals inscription' : 'generic taproot') : ''}
