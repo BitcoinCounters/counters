@@ -248,7 +248,7 @@ def test_og_description_carries_supply_and_burned():
         store.set_asset_snapshot("TEXTONLY", 2000, 100)
         store.close()
         d = _og(base, 0)["og:description"]
-        assert "2,000 · 100 🔥" in d
+        assert "2,000 · 🔥 100" in d
         # No recorded burn: supply alone, no flame.
         d = _og(base, 1)["og:description"]
         assert "🔥" not in d and "SMALLGIF — 1 — a file inscribed" in d
