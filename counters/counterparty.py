@@ -258,6 +258,36 @@ class CounterpartyClient:
             raise CounterpartyError(f"compose send failed: {data}")
         return data["result"]
 
+    def compose_destroy(
+        self, source: str, asset: str, quantity: int, tag: str = "",
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose a Counterparty *destroy*: `quantity` raw units of `asset`
+        are permanently removed from `source`'s balance (recorded in the
+        destructions table). `tag` is a short free-text note carried in the
+        message; the API requires the field, so it is always sent (default
+        empty). Returns Core's result dict including `rawtransaction`
+        (unsigned).
+
+        Not to be confused with `compose/burn`, the 2014 BTC-for-XCP
+        proof-of-burn, which has been closed on mainnet since block 283,810.
+        """
+        params: dict[str, Any] = {
+            "asset": asset,
+            "quantity": quantity,
+            "tag": tag,
+            "encoding": "opreturn",
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._get(f"/v2/addresses/{source}/compose/destroy", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose destroy failed: {data}")
+        return data["result"]
+
     # --- addresses ---------------------------------------------------------
 
     def compose_dispense(
