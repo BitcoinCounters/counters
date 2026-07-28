@@ -751,7 +751,7 @@ async function showBuild(){
   parts.push((commit && commit!=='dev')
     ? `build <a href="${REPO}/commit/${encodeURIComponent(commit)}" target="_blank" rel="noopener"><code>${esc(commit)}</code></a>`
     : `build <code>${esc(commit)}</code>`);
-  if(updated) parts.push(`updated <code>${esc(updated.slice(0,10))}</code>`);
+  if(updated) parts.push(`updated <code>${esc(updated.slice(0,16).replace('T',' '))} UTC</code>`);
   e.innerHTML = parts.join(' · ');
 }
 
