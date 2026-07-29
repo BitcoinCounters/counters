@@ -255,7 +255,11 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
     print(f"asset        : {_display_name(last)}")
     if last["asset_longname"]:
         print(f"asset_name   : {last['asset']}")
-    print(f"asset_id     : {last['asset_id']}")
+    shown = ", ".join(f"#{n}" for n in numbers[:12])
+    more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
+    original = " (original)" if len(numbers) > 1 else ""
+    print(f"counters     : {len(numbers)} — {shown}{more}".replace(
+        f"#{numbers[0]}", f"#{numbers[0]}{original}", 1))
     if supply is not None:
         print(f"supply       : {_fmt_qty(supply, divisible)}")
     if burned:
@@ -266,15 +270,11 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
         print(f"locked       : {'yes' if locked else 'no'}")
     if holders is not None:
         print(f"holders      : {holders}")
-    shown = ", ".join(f"#{n}" for n in numbers[:12])
-    more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
-    original = " (original)" if len(numbers) > 1 else ""
-    print(f"counters     : {len(numbers)} — {shown}{more}".replace(
-        f"#{numbers[0]}", f"#{numbers[0]}{original}", 1))
     print(f"total size   : {total_size:,} bytes")
     xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
     unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
     print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
+    print(f"asset_id     : {last['asset_id']}")
     print(f"owner        : {owner}")
     return 0
 
