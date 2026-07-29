@@ -190,6 +190,28 @@ class CounterpartyClient:
         data = self._get(f"/v2/assets/{asset}/balances", params={"limit": 1})
         return data.get("result_count") if data else None
 
+    def _page(self, path: str, params: dict) -> tuple[list[dict], int]:
+        """One bounded page plus the endpoint's total row count — for market
+        views that show 'the first N of M' without walking the full history."""
+        data = self._get(path, params={"verbose": "true", **params})
+        if not data:
+            return [], 0
+        return data.get("result", []), data.get("result_count", 0)
+
+    def get_asset_dispensers(self, asset: str, limit: int = 10) -> tuple[list[dict], int]:
+        return self._page(f"/v2/assets/{asset}/dispensers",
+                          {"status": "open", "limit": limit})
+
+    def get_asset_orders(self, asset: str, limit: int = 50) -> tuple[list[dict], int]:
+        return self._page(f"/v2/assets/{asset}/orders",
+                          {"status": "open", "limit": limit})
+
+    def get_asset_matches(self, asset: str, limit: int = 5) -> tuple[list[dict], int]:
+        return self._page(f"/v2/assets/{asset}/matches", {"limit": limit})
+
+    def get_asset_dispenses(self, asset: str, limit: int = 5) -> tuple[list[dict], int]:
+        return self._page(f"/v2/assets/{asset}/dispenses", {"limit": limit})
+
     # --- compose -----------------------------------------------------------
 
     def compose_issuance(
