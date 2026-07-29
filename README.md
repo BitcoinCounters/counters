@@ -143,6 +143,7 @@ counters list --block 902000-902100               # by block range
 counters info 0                                   # one counter: the inscription event
 counters info 0 --full                            # every event field (block, txids, hashes, ...)
 counters info XDUALS                              # the ASSET: supply, holders, its counters, totals
+counters info XDUALS --trading                    # market state: DEX orders & matches, dispensers & dispenses
 counters info 0 --json                            # metadata as JSON (asset name gives asset JSON)
 counters info 0 --raw > file.txt                  # stream the file bytes
 counters info 0 --save file.gif                   # write the file to disk (asset name: the original's)

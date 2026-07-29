@@ -343,6 +343,107 @@ def _asset_info(config: Config, store: Store, name: str,
     return 0
 
 
+
+
+def _fmt_dec(x: float) -> str:
+    s = f"{x:,.8f}".rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def _per_unit(asset_qty: float, other: str, other_qty: int,
+              divisible: bool, other_divisible: bool | None) -> str:
+    """Price per unit of the asset, in the other side's idiom: BTC in sats,
+    XCP and divisible assets in coins, the rest in raw units."""
+    units = asset_qty / 1e8 if divisible else asset_qty
+    if not units:
+        return "?"
+    if other == "BTC":
+        return f"{_fmt_dec(other_qty / units)} sats"
+    if other == "XCP" or other_divisible:
+        return f"{_fmt_dec(other_qty / 1e8 / units)} {other}"
+    return f"{_fmt_dec(other_qty / units)} {other}"
+
+
+def _trading_info(config: Config, name: str) -> int:
+    """The asset's market state: open orders and matches on the DEX, open
+    dispensers and their dispenses. Live from Counterparty, never indexed."""
+    cp = CounterpartyClient(config)
+    try:
+        info = cp.get_asset(name) or {}
+    except CounterpartyError as e:
+        print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+        return 1
+    if not info:
+        print(f"no Counterparty asset {name!r}", file=sys.stderr)
+        return 1
+    asset = info["asset"]
+    divisible = bool(info.get("divisible"))
+    unit = lambda q: _fmt_qty(q, divisible)
+    pad = " " * 15
+
+    print(f"asset        : {info.get('asset_longname') or asset}")
+
+    orders, n_orders = cp.get_asset_orders(asset)
+    sells, buys = [], []
+    for o in orders:
+        try:
+            if o["give_asset"] == asset and o["give_remaining"] > 0:
+                qty, other, oqty = o["give_remaining"], o["get_asset"], o["get_remaining"]
+                odiv = o.get("get_asset_divisible")
+                sells.append((oqty / qty, qty, other, oqty, odiv, o))
+            elif o["get_asset"] == asset and o["get_remaining"] > 0:
+                qty, other, oqty = o["get_remaining"], o["give_asset"], o["give_remaining"]
+                odiv = o.get("give_asset_divisible")
+                buys.append((oqty / qty, qty, other, oqty, odiv, o))
+        except (KeyError, TypeError, ZeroDivisionError):
+            continue
+    sells.sort(key=lambda t: t[0])          # best ask first
+    buys.sort(key=lambda t: -t[0])          # best bid first
+    print(f"orders       : {n_orders} open")
+    for side, entries in (("sell", sells), ("buy", buys)):
+        for _, qty, other, oqty, odiv, o in entries[:10]:
+            exp = (f"expires block {o['expire_index']:,}" if o.get("expiration")
+                   else "never expires")
+            print(f"{pad}{side} {unit(qty)} @ "
+                  f"{_per_unit(qty, other, oqty, divisible, odiv)} each — {exp}")
+
+    matches, n_matches = cp.get_asset_matches(asset)
+    shown = f" — last {len(matches)}" if n_matches > len(matches) else ""
+    print(f"matches      : {n_matches}{shown}")
+    for m in matches:
+        try:
+            if m["forward_asset"] == asset:
+                qty, other, oqty = m["forward_quantity"], m["backward_asset"], m["backward_quantity"]
+                odiv = (m.get("backward_asset_info") or {}).get("divisible")
+            else:
+                qty, other, oqty = m["backward_quantity"], m["forward_asset"], m["forward_quantity"]
+                odiv = (m.get("forward_asset_info") or {}).get("divisible")
+            price = _per_unit(qty, other, oqty, divisible, odiv)
+        except (KeyError, TypeError, ZeroDivisionError):
+            continue
+        status = "" if m.get("status") == "completed" else f" [{m.get('status')}]"
+        print(f"{pad}{unit(qty)} @ {price} each — block {m['block_index']:,}{status}")
+
+    dispensers, n_disp = cp.get_asset_dispensers(asset)
+    print(f"dispensers   : {n_disp} open")
+    for d in dispensers[:10]:
+        try:
+            print(f"{pad}{unit(d['give_quantity'])} for {d['satoshirate']:,} sats "
+                  f"— {unit(d['give_remaining'])} left @ {d['source']}")
+        except (KeyError, TypeError):
+            continue
+
+    dispenses, n_dispenses = cp.get_asset_dispenses(asset)
+    shown = f" — last {len(dispenses)}" if n_dispenses > len(dispenses) else ""
+    print(f"dispenses    : {n_dispenses}{shown}")
+    for d in dispenses:
+        try:
+            print(f"{pad}{unit(d['dispense_quantity'])} for {d['btc_amount']:,} sats "
+                  f"— block {d['block_index']:,}")
+        except (KeyError, TypeError):
+            continue
+    return 0
+
 def cmd_info(
     config: Config,
     identifier: str,
@@ -350,6 +451,7 @@ def cmd_info(
     raw: bool = False,
     save: str | None = None,
     full: bool = False,
+    trading: bool = False,
 ) -> int:
     store = Store(config)
     try:
@@ -363,6 +465,9 @@ def cmd_info(
                 return 1
             if raw or save:
                 return _emit_content(store, row, save)
+            if trading:
+                print(f"number       : {row['number']}")
+                return _trading_info(config, row["asset"])
             return _counter_info(config, store, row, as_json, full)
 
         rows = store.get_counters_by_asset(identifier)
@@ -371,6 +476,8 @@ def cmd_info(
                 print(f"no counter content for {identifier!r}", file=sys.stderr)
                 return 1
             return _emit_content(store, rows[0], save)
+        if trading:
+            return _trading_info(config, rows[-1]["asset"] if rows else identifier)
         return _asset_info(config, store, identifier, rows, as_json, full)
     finally:
         store.close()

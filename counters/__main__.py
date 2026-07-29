@@ -191,6 +191,9 @@ def main(argv: list[str] | None = None) -> int:
     g_info = p_info.add_mutually_exclusive_group()
     g_info.add_argument("--full", action="store_true",
                         help="every field (owner, source, hashes, mint tx, block, ...)")
+    g_info.add_argument("--trading", action="store_true",
+                        help="market state: open orders & matches (DEX), "
+                             "open dispensers & dispenses")
     g_info.add_argument("--json", action="store_true", help="metadata as JSON")
     g_info.add_argument("--raw", action="store_true", help="stream raw file bytes to stdout")
     g_info.add_argument("--save", metavar="PATH", help="write the counter's file to disk")
@@ -614,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "info":
         return read.cmd_info(
             config, args.identifier, as_json=args.json, raw=args.raw,
-            save=args.save, full=args.full,
+            save=args.save, full=args.full, trading=args.trading,
         )
 
     if args.command == "list":
