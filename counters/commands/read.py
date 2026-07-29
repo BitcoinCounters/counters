@@ -197,13 +197,15 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         print(f"xcp_burned   : {row['xcp_burned'] / 1e8:g} XCP")
     if full and asset_numbers:
         others = [n for n in asset_numbers if n != row["number"]]
+        original = min(asset_numbers)
         if not others:
             print("reinscribed  : no")
+        elif row["number"] == original:
+            shown = ", ".join(f"#{n}" for n in others[:12])
+            more = f", ... (+{len(others) - 12} more)" if len(others) > 12 else ""
+            print(f"reinscribed  : yes — {shown}{more}")
         else:
-            original = min(asset_numbers)
-            tag = (" (this is the original)" if row["number"] == original
-                   else f" (original #{original})")
-            print(f"reinscribed  : {', '.join(f'#{n}' for n in others)}{tag}")
+            print(f"reinscribed  : yes — original #{original}")
     if full:
         # Addresses, txids, and hashes last — long opaque strings that bury
         # the readable facts when interleaved above.
