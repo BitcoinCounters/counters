@@ -189,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     p_info = sub.add_parser("info", parents=[common], help="show a counter by number or asset")
     p_info.add_argument("identifier", help="counter number, asset name, or longname")
     g_info = p_info.add_mutually_exclusive_group()
+    g_info.add_argument("--full", action="store_true",
+                        help="every field (owner, source, hashes, mint tx, block, ...)")
     g_info.add_argument("--json", action="store_true", help="metadata as JSON")
     g_info.add_argument("--raw", action="store_true", help="stream raw file bytes to stdout")
     g_info.add_argument("--save", metavar="PATH", help="write the counter's file to disk")
@@ -611,7 +613,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "info":
         return read.cmd_info(
-            config, args.identifier, as_json=args.json, raw=args.raw, save=args.save
+            config, args.identifier, as_json=args.json, raw=args.raw,
+            save=args.save, full=args.full,
         )
 
     if args.command == "list":
