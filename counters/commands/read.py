@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
+from ..content import classify_mime_type, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..reveal import commit_txid, envelope_style
 from ..store import Store
 
 
@@ -152,19 +155,35 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     divisible = info["divisible"] if info.get("divisible") is not None else row["divisible"]
     supply = info["supply"] if info.get("supply") is not None else row["supply"]
 
-    commit_txid = None
+    commit = envelope = block_time = stamp_mime = None
     burned = row["burned"]
     asset_numbers: list[int] = []
     if full:
+        cp = CounterpartyClient(config)
         try:
-            burned = CounterpartyClient(config).get_asset_destroyed(row["asset"])
+            burned = cp.get_asset_destroyed(row["asset"])
         except CounterpartyError:
             pass
         try:
-            commit_txid = BitcoindClient(config).get_raw_transaction(
-                row["mint_txid"], verbose=True)["vin"][0]["txid"]
-        except (BitcoindError, KeyError, IndexError, TypeError):
+            blk = cp.get_block(row["block_index"])
+            block_time = blk.get("block_time") if blk else None
+        except CounterpartyError:
             pass
+        try:
+            tx = BitcoindClient(config).get_raw_transaction(row["mint_txid"], verbose=True)
+        except BitcoindError:
+            tx = None
+        if tx is not None:
+            commit = commit_txid(tx)
+            envelope = envelope_style(tx)  # 'ord' | 'generic'
+        # Stamp tag mirrors the explorer: a textual counter whose payload
+        # decodes as a STAMP: image (display metadata only, §5.4).
+        ct_class = classify_mime_type(row["content_type"] or "text/plain",
+                                      row["block_index"])
+        if ct_class == "text" and row["content_length"] <= 256 * 1024:
+            blob = store.read_blob(row["content_sha256"])
+            decoded = stamp_image(blob, textual=True) if blob else None
+            stamp_mime = decoded[1] if decoded else None
         asset_numbers = [r["number"] for r in store.get_counters_by_asset(row["asset"])]
 
     print(f"number       : {row['number']}")
@@ -179,11 +198,18 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     ct = row["content_type"] or "(none)"
     raw_ct = row["content_type_raw"]
     print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
+    if full and envelope:
+        print(f"envelope     : {'ord/xcp — also an ordinals inscription' if envelope == 'ord' else 'generic taproot'}")
+    if full and stamp_mime:
+        print(f"stamp        : {stamp_mime} (decodes as a stamp image)")
     print(f"size         : {row['content_length']} bytes")
     if full:
         if row["is_pointer_like"]:
             print("pointer-like : yes (content is a URI; metadata only)")
         print(f"block        : {row['block_index']} (cp tx_index {row['cp_tx_index']})")
+        if block_time:
+            created = datetime.fromtimestamp(block_time, tz=timezone.utc)
+            print(f"created      : {created:%Y-%m-%d %H:%M} UTC")
     if fee is not None:
         if full:
             # Mirrors the explorer card: "fee paid" and "fee/B" as separate facts.
@@ -210,8 +236,8 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         # Addresses, txids, and hashes last — long opaque strings that bury
         # the readable facts when interleaved above.
         print(f"source       : {row['source']}")
-        if commit_txid:
-            print(f"commit_txid  : {commit_txid}")
+        if commit:
+            print(f"commit_txid  : {commit}")
         print(f"reveal_txid  : {row['mint_txid']}"
               + (f" (msg {row['msg_index']})" if row["msg_index"] else ""))
         print(f"sha256       : {row['content_sha256']}")
