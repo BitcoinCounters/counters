@@ -257,9 +257,7 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
         print(f"asset_name   : {last['asset']}")
     shown = ", ".join(f"#{n}" for n in numbers[:12])
     more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
-    original = " (original)" if len(numbers) > 1 else ""
-    print(f"counters     : {len(numbers)} — {shown}{more}".replace(
-        f"#{numbers[0]}", f"#{numbers[0]}{original}", 1))
+    print(f"counters     : {len(numbers)} — {shown}{more}")
     if supply is not None:
         print(f"supply       : {_fmt_qty(supply, divisible)}")
     if burned:
