@@ -581,23 +581,21 @@ async function renderDetail(id){
         : c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
-        ${fact('asset_id', c.asset_id, true)}
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
         ${c.envelope ? fact('envelope', c.envelope==='ord' ? 'ord/xcp — also an ordinals inscription' : 'generic taproot') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
-        ${fact('owner', short(c.owner), true, c.owner)}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
         ${c.block_time ? fact('created', fmtDate(c.block_time)) : ''}
-        ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
-        ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats`) : ''}
+        ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats/B`) : ''}
         ${c.xcp_burned!=null ? fact('xcp burned', tsTx ? `<a href="${tsTx}" target="_blank" rel="noopener" class="out">${+(c.xcp_burned/1e8).toFixed(8)} XCP ↗</a>` : `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
+        ${fact('asset_id', c.asset_id, true)}
+        ${fact('owner', short(c.owner), true, c.owner)}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}
-        ${fact('sha-256', short(c.sha256), true, c.sha256)}
-        ${c.rolling_hash ? fact('rolling hash', short(c.rolling_hash), true, c.rolling_hash) : ''}
+        ${fact('mint tx', `<a href="${mp}" target="_blank" rel="noopener" class="out">${short(c.txid)} ↗</a>`, true, c.txid)}
       </div>
       ${(c.asset_counters && c.asset_counters.length>1) ? `
       <div class="acs">
