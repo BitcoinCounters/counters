@@ -228,9 +228,10 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
 
     numbers = [r["number"] for r in rows]
     total_size = sum(r["content_length"] for r in rows)
-    fees = [_ensure_fee(config, store, r)[0] for r in rows]
-    total_fee = sum(f for f in fees if f is not None)
-    unknown_fees = sum(1 for f in fees if f is None)
+    fees = [_ensure_fee(config, store, r) for r in rows]
+    total_fee = sum(f for f, _ in fees if f is not None)
+    total_tx_size = sum(s for _, s in fees if s is not None)
+    unknown_fees = sum(1 for f, _ in fees if f is None)
     total_xcp = sum(r["xcp_burned"] or 0 for r in rows)
 
     if as_json:
@@ -272,6 +273,8 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
     xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
     unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
     print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
+    if total_tx_size:
+        print(f"fee/B        : {total_fee / total_tx_size:.1f} sats")
     print(f"asset_id     : {last['asset_id']}")
     print(f"owner        : {owner}")
     return 0
