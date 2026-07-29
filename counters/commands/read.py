@@ -1,4 +1,4 @@
-"""Read-side `counters` commands: status, info, list, validate.
+"""Read-side `counters` commands: status, info, list.
 
 These are public and need only a synced index DB plus the two backends as
 oracles (bitcoind for the carrier check, Counterparty Core for message
@@ -13,10 +13,8 @@ import sqlite3
 import sys
 
 from ..bitcoind import BitcoindClient, BitcoindError
-from ..config import GENESIS_HEIGHT, Config
+from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
-from ..indexer.indexer import has_content, is_qualifying_issuance
-from ..reveal import is_taproot_reveal
 from ..store import Store
 
 
@@ -207,70 +205,3 @@ def cmd_list(
     finally:
         store.close()
     return 0
-
-
-# --- validate ---------------------------------------------------------------
-
-def cmd_validate(config: Config, txid: str) -> int:
-    """Report whether a transaction records a counter, and why or why not
-    (the build ref v3 §9 checklist)."""
-    btc = BitcoindClient(config)
-    cp = CounterpartyClient(config)
-
-    try:
-        tx = btc.get_raw_transaction(txid, verbose=True)
-    except BitcoindError as e:
-        print(f"cannot fetch tx {txid}: {e}", file=sys.stderr)
-        return 1
-
-    blockhash = tx.get("blockhash")
-    confirmed = bool(blockhash)
-    height: int | None = None
-    if confirmed:
-        try:
-            height = btc.get_block_header(blockhash).get("height")
-        except BitcoindError:
-            pass
-    post_genesis = height is not None and height >= GENESIS_HEIGHT
-
-    # R1/R2: a valid non-fairmint issuance, or a fairminter deploy — the SAME
-    # predicates the indexer applies (indexer.is_qualifying_issuance).
-    qualifying_rows: list[dict] = []
-    try:
-        for r in cp.get_issuances_by_tx(txid):
-            if is_qualifying_issuance(r):
-                qualifying_rows.append(r)
-    except CounterpartyError as e:
-        print(f"cannot read issuances from Counterparty Core: {e}", file=sys.stderr)
-    if height is not None and not qualifying_rows:
-        try:
-            for r in cp.get_block_fairminters(height):
-                if r.get("tx_hash") == txid:
-                    qualifying_rows.append(r)
-        except CounterpartyError:
-            pass
-    has_message = bool(qualifying_rows)
-
-    # R3: non-null, non-empty description (shared predicate).
-    has_description = any(has_content(r) for r in qualifying_rows)
-
-    # R4: the tx is a taproot reveal.
-    reveal = is_taproot_reveal(tx)
-
-    asset = qualifying_rows[0].get("asset") if qualifying_rows else None
-    checks = [
-        ("transaction confirmed", confirmed),
-        (f"block at/after genesis ({GENESIS_HEIGHT})", post_genesis),
-        ("valid issuance or fairminter deploy (fairmints excluded)", has_message),
-        ("non-empty description", has_description),
-        ("description carried in a taproot envelope (reveal tx)", reveal),
-    ]
-    is_counter = all(ok for _, ok in checks)
-
-    for label, ok in checks:
-        print(f"  [{'x' if ok else ' '}] {label}")
-    if is_counter:
-        print(f"\n{txid}\n  records a VALID counter (asset {asset}).")
-    else:
-        print(f"\n{txid}\n  does NOT record a counter.")
-    return 0 if is_counter else 1

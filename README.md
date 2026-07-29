@@ -145,7 +145,6 @@ counters info XDUALS                              # ...or by asset name / longna
 counters info 0 --json                            # metadata as JSON
 counters info 0 --raw > file.txt                  # stream the file bytes
 counters info 0 --save file.gif                   # write the file to disk
-counters validate <txid>                          # does this tx record a counter, and why / why not
 
 # --- web explorer + read-only JSON API ---
 counters server                                   # indexer + explorer on http://127.0.0.1:8081
@@ -362,7 +361,7 @@ counters/
   indexer/          the indexing engine
     indexer.py      oracle-first pipeline + reorg rollback + run loops
   commands/         CLI command handlers
-    read.py         status / info / list / validate
+    read.py         status / info / list
     wallet.py       create / restore / receive / balance / inscriptions
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
     issue.py        lock-supply / lock-description / issue (owner-sourced)

@@ -153,7 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     # A first-time scan always starts at the protocol genesis (block
     # 902000): rule N3 — nothing can qualify earlier. Stored sync progress
     # takes precedence on later runs; COUNTER_START_HEIGHT can raise the floor.
-    # `run` is a backward-compatible alias for `index`.
     # `--restart` wipes the local index (DB + content blobs) and rebuilds from
     # genesis — handy after a schema change or to re-derive from scratch.
     restart_help = "delete the local index (DB + blobs) and rebuild from genesis"
@@ -161,7 +160,6 @@ def main(argv: list[str] | None = None) -> int:
     p_index = sub.add_parser(
         "index",
         parents=[common],
-        aliases=["run"],
         help="continuously sync to tip and follow new blocks",
     )
     p_index.add_argument("--restart", action="store_true", help=restart_help)
@@ -200,9 +198,6 @@ def main(argv: list[str] | None = None) -> int:
     g_list.add_argument("--recent", type=int, metavar="N", help="N most recent (default 20)")
     g_list.add_argument("--source", metavar="ADDR", help="counters minted from ADDR")
     g_list.add_argument("--block", metavar="A-B", help="counters in a block range, e.g. 800000-800100")
-
-    p_val = sub.add_parser("validate", parents=[common], help="is <txid> a valid counter, and why")
-    p_val.add_argument("txid")
 
     # --- wallet (taproot BIP86; keys held by Bitcoin Core) ---
     # --name is a wallet-level option (counters wallet --name abc create); it is
@@ -585,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "restart", False):
         _wipe_index(config)
 
-    if args.command in ("index", "run"):
+    if args.command == "index":
         indexer = Indexer(config)
         try:
             indexer.run()
@@ -614,9 +609,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return read.cmd_list(config, recent=args.recent, source=args.source, block=args.block)
-
-    if args.command == "validate":
-        return read.cmd_validate(config, args.txid)
 
     if args.command == "server":
         return serve.cmd_server(
