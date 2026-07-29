@@ -264,12 +264,12 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
         print(f"supply       : {_fmt_qty(supply, divisible)}")
     if burned:
         print(f"burned       : {_fmt_qty(burned, divisible)}")
+    if holders is not None:
+        print(f"holders      : {holders}")
     if divisible is not None:
         print(f"divisible    : {'yes' if divisible else 'no'}")
     if locked is not None:
         print(f"locked       : {'yes' if locked else 'no'}")
-    if holders is not None:
-        print(f"holders      : {holders}")
     print(f"total size   : {total_size:,} bytes")
     xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
     unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
