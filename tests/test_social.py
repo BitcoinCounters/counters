@@ -110,6 +110,51 @@ def test_png_shrink_averages_blocks():
     assert png.factor_for(400, 400, 1200, 1200) == 1
 
 
+def test_png_upscale_is_shrink_inverse():
+    rnd = random.Random(3)
+    rgb = bytes(rnd.randrange(256) for _ in range(5 * 4 * 3))
+    for factor in (2, 3):
+        uw, uh, up = png.upscale(5, 4, rgb, factor)
+        assert (uw, uh) == (5 * factor, 4 * factor)
+        # Every pixel became a uniform factor² block, so box-averaging it
+        # back down is exact.
+        assert png.shrink(uw, uh, up, factor) == (5, 4, rgb)
+    assert png.upscale(5, 4, rgb, 1) == (5, 4, rgb)
+
+
+def test_png_encode_gradient_roundtrips():
+    # A horizontal ramp: Sub filters it to near-zero, Up does not — the
+    # adaptive choice must still decode to the exact pixels.
+    row = bytes(v for x in range(64) for v in (x * 4, x * 4, x * 4))
+    rgb = row * 40
+    assert png.decode(png.encode(64, 40, rgb)) == (64, 40, rgb)
+
+
+def test_enlarged_reaches_the_large_layout():
+    # Coarse vertical bands stay cheap at any scale, so the pixel-doubled
+    # copy fits the byte budget and crosses the large-layout threshold.
+    row = b"".join(([0, 200][x // 10 % 2].to_bytes(1, "big") * 3)
+                   for x in range(300))
+    big = appmod._enlarged(300, 300, row * 300)
+    assert big is not None and len(big) <= appmod.SOCIAL_MAX_BYTES
+    w, h, rgb = png.decode(big)
+    assert min(w, h) >= appmod.SOCIAL_LARGE_MIN
+    assert (w, h, rgb) == png.upscale(300, 300, row * 300, w // 300)
+
+
+def test_enlarged_declines_when_it_cannot_help():
+    rnd = random.Random(5)
+    # Already at the large layout: nothing to do.
+    flat = bytes(600 * 600 * 3)
+    assert appmod._enlarged(600, 600, flat) is None
+    # Noise doubles past the byte budget, so the small copy stands.
+    noise = bytes(rnd.randrange(256) for _ in range(500 * 500 * 3))
+    assert appmod._enlarged(500, 500, noise) is None
+    # Any multiple of the long side would blow SOCIAL_MAX_DIM.
+    tall = bytes(350 * 700 * 3)
+    assert appmod._enlarged(350, 700, tall) is None
+
+
 # --- font + card ----------------------------------------------------------
 
 def test_glyph_fold():

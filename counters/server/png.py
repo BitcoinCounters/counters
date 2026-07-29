@@ -32,22 +32,35 @@ def _chunk(tag: bytes, data: bytes) -> bytes:
             + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
 
 
+def _cost(filtered: bytes) -> int:
+    """The spec's minimum-sum-of-absolute-differences filter heuristic."""
+    return sum(x if x < 128 else 256 - x for x in filtered)
+
+
 def encode(width: int, height: int, rgb: bytes) -> bytes:
     """Serialize `width * height * 3` RGB bytes as an 8-bit truecolour PNG."""
     if len(rgb) != width * height * 3:
         raise ValueError(f"expected {width * height * 3} bytes, got {len(rgb)}")
     stride = width * 3
-    # Filter 2 ("Up") costs one pass and turns the flat fills and repeated rows
-    # a card is mostly made of into runs of zero bytes, which deflate to
-    # almost nothing. Row 0 has no predecessor, so it stays filter 0 ("None").
-    out = bytearray(b"\x00") + rgb[:stride]
-    prev = rgb[:stride]
-    for y in range(1, height):
+    # Each row takes filter 2 ("Up") or 1 ("Sub"), whichever scores better: Up
+    # turns the flat fills and repeated rows a card is mostly made of into runs
+    # of zero bytes, Sub does the same for the pixel-doubled columns of an
+    # upscaled photo. Row 0's predecessor is all zeros (per spec), so Up there
+    # degenerates to "None" and the choice stays honest.
+    out = bytearray()
+    prev = bytes(stride)
+    for y in range(height):
         row = rgb[y * stride:(y + 1) * stride]
         if row == prev:
             out += b"\x02" + bytes(stride)
         else:
-            out += b"\x02" + bytes((a - b) & 0xFF for a, b in zip(row, prev))
+            up = bytes((a - b) & 0xFF for a, b in zip(row, prev))
+            sub = bytes((row[i] - (row[i - 3] if i >= 3 else 0)) & 0xFF
+                        for i in range(stride))
+            if _cost(sub) < _cost(up):
+                out += b"\x01" + sub
+            else:
+                out += b"\x02" + up
         prev = row
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     return (SIG + _chunk(b"IHDR", ihdr)
@@ -199,6 +212,26 @@ def fit(width: int, height: int, rgb: bytes, max_w: int, max_h: int
         ) -> tuple[int, int, bytes]:
     """Box-downsample so the image fits `max_w` x `max_h`, preserving aspect."""
     return shrink(width, height, rgb, factor_for(width, height, max_w, max_h))
+
+
+def upscale(width: int, height: int, rgb: bytes, factor: int
+            ) -> tuple[int, int, bytes]:
+    """Nearest-neighbour enlargement: each pixel becomes a `factor`² block.
+
+    No pixel is invented — the picture is exactly what `shrink` produced, just
+    claimed at a size where chat apps use their full-width preview layout
+    instead of a thumbnail (they scale to fit either way)."""
+    if factor <= 1:
+        return width, height, rgb
+    stride = width * 3
+    out = bytearray()
+    for y in range(height):
+        row = rgb[y * stride:(y + 1) * stride]
+        wide = bytearray()
+        for x in range(width):
+            wide += row[x * 3:x * 3 + 3] * factor
+        out += wide * factor
+    return width * factor, height * factor, bytes(out)
 
 
 def shrink(width: int, height: int, rgb: bytes, factor: int
