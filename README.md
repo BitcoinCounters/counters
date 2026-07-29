@@ -314,7 +314,7 @@ What `og:image` points at depends on the content:
 | counter | `og:image` |
 |---|---|
 | a raster image under 300 KB | `/content/<n>` — the file itself, untouched (animated GIFs keep animating) |
-| a raster image over 300 KB | `/social/<n>.png` — the same picture, box-downsampled until a crawler will fetch it |
+| a raster image over 300 KB | `/social/<n>.png` — the same picture, box-downsampled until a crawler will fetch it, then pixel-doubled back over 600 px (when the bytes allow) so chat apps keep their full-width preview layout |
 | a stamp (`STAMP:<base64>`) | `/stamp/<n>` — the decoded image |
 | anything else | `/social/<n>.png` — a rendered 1200x630 card |
 

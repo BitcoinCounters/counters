@@ -192,6 +192,12 @@ SOCIAL_MAX_BYTES = 300 * 1024
 SOCIAL_MAX_DIM = 1200
 # Stop shrinking here even if still over budget, rather than serving a thumbnail.
 SOCIAL_MIN_DIM = 320
+# Chat apps pick the preview layout from the image's pixel size: below roughly
+# this, Telegram renders a small square thumb and Facebook a side icon; from
+# here up, the image gets the full-width layout. A result that fits the byte
+# budget but lands under this is pixel-doubled back over it (when the bytes
+# still fit) — same picture, bigger layout.
+SOCIAL_LARGE_MIN = 600
 # Decoding is per-byte Python (~1s per megapixel), so anything larger is left
 # alone rather than parked on a worker thread; #95, the biggest counter so far,
 # is 1.6 MP. Nothing is lost when this trips — /content still serves the file.
@@ -400,9 +406,30 @@ def _downscaled(blob: bytes) -> bytes | None:
     while True:
         ow, oh, small = png.shrink(width, height, rgb, factor)
         out = png.encode(ow, oh, small)
-        if len(out) <= SOCIAL_MAX_BYTES or min(ow, oh) <= SOCIAL_MIN_DIM:
+        if len(out) <= SOCIAL_MAX_BYTES:
+            return _enlarged(ow, oh, small) or out
+        if min(ow, oh) <= SOCIAL_MIN_DIM:
             return out
         factor += 1
+
+
+def _enlarged(ow: int, oh: int, rgb: bytes) -> bytes | None:
+    """A pixel-doubled PNG of a fitting-but-small image, sized so chat apps
+    use their full-width preview layout — or None when the small one is
+    already big enough, or nothing bigger fits the byte budget.
+
+    Larger multiples cost more bytes, so the first fit while counting down is
+    the biggest one available."""
+    if min(ow, oh) >= SOCIAL_LARGE_MIN:
+        return None
+    top = -(-SOCIAL_LARGE_MIN // min(ow, oh))
+    for factor in range(top, 1, -1):
+        if max(ow, oh) * factor > SOCIAL_MAX_DIM:
+            continue
+        big = png.encode(*png.upscale(ow, oh, rgb, factor))
+        if len(big) <= SOCIAL_MAX_BYTES:
+            return big
+    return None
 
 
 def render_social(store: Store, row: sqlite3.Row) -> bytes:

@@ -26,7 +26,7 @@ import math
 from . import glyphs, png
 
 # Bump on any change that alters rendered output, so cached cards are rebuilt.
-VERSION = 1
+VERSION = 2
 
 WIDTH, HEIGHT = 1200, 630
 
