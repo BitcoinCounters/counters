@@ -335,7 +335,7 @@ def _asset_info(config: Config, store: Store, name: str,
         xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
         unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
         print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
-        if total_tx_size:
+        if full and total_tx_size:
             print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
     if full:
         print(f"asset_id     : {asset_id}")
