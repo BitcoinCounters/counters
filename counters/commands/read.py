@@ -246,7 +246,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
 
 
 def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
-                as_json: bool) -> int:
+                as_json: bool, full: bool) -> int:
     """One asset: its counters and asset-level facts, with per-event detail
     left to the counter view. `rows` is every counter on the asset, oldest
     first — the original is rows[0]."""
@@ -293,7 +293,7 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
         print(f"burned       : {_fmt_qty(burned, divisible)}")
     if holders is not None:
         print(f"holders      : {holders}")
-    if divisible is not None:
+    if full and divisible is not None:
         print(f"divisible    : {'yes' if divisible else 'no'}")
     if locked is not None:
         print(f"locked       : {'yes' if locked else 'no'}")
@@ -303,8 +303,9 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
     print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
     if total_tx_size:
         print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
-    print(f"asset_id     : {last['asset_id']}")
-    print(f"owner        : {owner}")
+    if full:
+        print(f"asset_id     : {last['asset_id']}")
+        print(f"owner        : {owner}")
     return 0
 
 
@@ -336,7 +337,7 @@ def cmd_info(
             return 1
         if raw or save:
             return _emit_content(store, rows[0], save)
-        return _asset_info(config, store, rows, as_json)
+        return _asset_info(config, store, rows, as_json, full)
     finally:
         store.close()
 
