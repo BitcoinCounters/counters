@@ -111,7 +111,10 @@ def _ensure_fee(config: Config, store: Store, row: sqlite3.Row) -> tuple[int | N
 
 
 def _fmt_qty(qty: int, divisible: bool) -> str:
-    return f"{qty / 1e8:g}" if divisible else f"{int(qty):,}"
+    if not divisible:
+        return f"{int(qty):,}"
+    whole, frac = divmod(int(qty), 10**8)
+    return f"{whole:,}" + (f".{frac:08d}".rstrip("0") if frac else "")
 
 
 def _asset_live(config: Config, name: str, last: sqlite3.Row):
@@ -245,14 +248,41 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     return 0
 
 
-def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
-                as_json: bool, full: bool) -> int:
+def _asset_info(config: Config, store: Store, name: str,
+                rows: list[sqlite3.Row], as_json: bool, full: bool) -> int:
     """One asset: its counters and asset-level facts, with per-event detail
     left to the counter view. `rows` is every counter on the asset, oldest
-    first — the original is rows[0]."""
-    last = rows[-1]
-    supply, divisible, locked, burned, holders, owner = _asset_live(
-        config, last["asset"], last)
+    first (the original is rows[0]) — and may be empty: any Counterparty
+    asset answers here, counterless ones straight from the oracle."""
+    last = rows[-1] if rows else None
+    if last is not None:
+        asset, longname = last["asset"], last["asset_longname"]
+        asset_id = last["asset_id"]
+        supply, divisible, locked, burned, holders, owner = _asset_live(
+            config, asset, last)
+    else:
+        try:
+            info = CounterpartyClient(config).get_asset(name) or {}
+        except CounterpartyError as e:
+            print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+            return 1
+        if not info:
+            print(f"no counter or Counterparty asset for {name!r}", file=sys.stderr)
+            return 1
+        asset, longname = info["asset"], info.get("asset_longname")
+        asset_id = info.get("asset_id")
+        supply, divisible = info.get("supply"), info.get("divisible")
+        locked, owner = info.get("locked"), info.get("owner")
+        burned = holders = None
+        cp = CounterpartyClient(config)
+        try:
+            burned = cp.get_asset_destroyed(asset)
+        except CounterpartyError:
+            pass
+        try:
+            holders = cp.get_asset_holders_count(asset)
+        except CounterpartyError:
+            pass
 
     numbers = [r["number"] for r in rows]
     total_size = sum(r["content_length"] for r in rows)
@@ -264,9 +294,9 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
 
     if as_json:
         print(json.dumps({
-            "asset": last["asset"],
-            "asset_longname": last["asset_longname"],
-            "asset_id": last["asset_id"],
+            "asset": asset,
+            "asset_longname": longname,
+            "asset_id": asset_id,
             "supply": supply,
             "burned": burned,
             "divisible": divisible,
@@ -275,18 +305,21 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
             "owner": owner,
             "counters": numbers,
             "counter_count": len(numbers),
-            "total_size": total_size,
-            "total_fee": total_fee if not unknown_fees else None,
-            "total_xcp_burned": total_xcp,
+            "total_size": total_size if rows else None,
+            "total_fee": total_fee if rows and not unknown_fees else None,
+            "total_xcp_burned": total_xcp if rows else None,
         }, indent=2))
         return 0
 
-    print(f"asset        : {_display_name(last)}")
-    if last["asset_longname"]:
-        print(f"asset_name   : {last['asset']}")
-    shown = ", ".join(f"#{n}" for n in numbers[:12])
-    more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
-    print(f"counters     : {len(numbers)} — {shown}{more}")
+    print(f"asset        : {longname or asset}")
+    if longname:
+        print(f"asset_name   : {asset}")
+    if numbers:
+        shown = ", ".join(f"#{n}" for n in numbers[:12])
+        more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
+        print(f"counters     : {len(numbers)} — {shown}{more}")
+    else:
+        print("counters     : 0")
     if supply is not None:
         print(f"supply       : {_fmt_qty(supply, divisible)}")
     if burned:
@@ -297,14 +330,15 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
         print(f"divisible    : {'yes' if divisible else 'no'}")
     if locked is not None:
         print(f"locked       : {'yes' if locked else 'no'}")
-    print(f"total size   : {total_size:,} bytes")
-    xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
-    unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
-    print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
-    if total_tx_size:
-        print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
+    if rows:
+        print(f"total size   : {total_size:,} bytes")
+        xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
+        unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
+        print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
+        if total_tx_size:
+            print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
     if full:
-        print(f"asset_id     : {last['asset_id']}")
+        print(f"asset_id     : {asset_id}")
         print(f"owner        : {owner}")
     return 0
 
@@ -332,12 +366,12 @@ def cmd_info(
             return _counter_info(config, store, row, as_json, full)
 
         rows = store.get_counters_by_asset(identifier)
-        if not rows:
-            print(f"no counter for {identifier!r}", file=sys.stderr)
-            return 1
         if raw or save:
+            if not rows:
+                print(f"no counter content for {identifier!r}", file=sys.stderr)
+                return 1
             return _emit_content(store, rows[0], save)
-        return _asset_info(config, store, rows, as_json, full)
+        return _asset_info(config, store, identifier, rows, as_json, full)
     finally:
         store.close()
 
