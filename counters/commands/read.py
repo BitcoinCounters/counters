@@ -245,6 +245,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
               + (f" (msg {row['msg_index']})" if row["msg_index"] else ""))
         print(f"sha256       : {row['content_sha256']}")
         print(f"rolling hash : {row['rolling_hash']}")
+        _market_sections(config, row["asset"], bool(divisible))
     return 0
 
 
@@ -340,6 +341,7 @@ def _asset_info(config: Config, store: Store, name: str,
     if full:
         print(f"asset_id     : {asset_id}")
         print(f"owner        : {owner}")
+        _market_sections(config, asset, bool(divisible))
     return 0
 
 
@@ -367,21 +369,25 @@ def _per_unit(asset_qty: float, other: str, other_qty: int,
 def _trading_info(config: Config, name: str) -> int:
     """The asset's market state: open orders and matches on the DEX, open
     dispensers and their dispenses. Live from Counterparty, never indexed."""
-    cp = CounterpartyClient(config)
     try:
-        info = cp.get_asset(name) or {}
+        info = CounterpartyClient(config).get_asset(name) or {}
     except CounterpartyError as e:
         print(f"cannot reach Counterparty: {e}", file=sys.stderr)
         return 1
     if not info:
         print(f"no Counterparty asset {name!r}", file=sys.stderr)
         return 1
-    asset = info["asset"]
-    divisible = bool(info.get("divisible"))
+    print(f"asset        : {info.get('asset_longname') or info['asset']}")
+    _market_sections(config, info["asset"], bool(info.get("divisible")))
+    return 0
+
+
+def _market_sections(config: Config, asset: str, divisible: bool) -> None:
+    """The four market sections (orders, matches, dispensers, dispenses) —
+    shared by --trading and the tail of --full."""
+    cp = CounterpartyClient(config)
     unit = lambda q: _fmt_qty(q, divisible)
     pad = " " * 15
-
-    print(f"asset        : {info.get('asset_longname') or asset}")
 
     orders, n_orders = cp.get_asset_orders(asset)
     sells, buys = [], []
@@ -442,7 +448,6 @@ def _trading_info(config: Config, name: str) -> int:
                   f"— block {d['block_index']:,}")
         except (KeyError, TypeError):
             continue
-    return 0
 
 def cmd_info(
     config: Config,
