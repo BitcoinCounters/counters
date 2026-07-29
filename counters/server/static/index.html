@@ -499,15 +499,15 @@ function sampleRender(c){
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
 const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
 const LARGE_BYTES=400000;      // over 400 KB: too big for standard relay, mined direct
-const FULL_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
-const sizeTag=c=> c.size>FULL_BLOCK_BYTES?'full block': c.size>LARGE_BYTES?'large': null;
+const WHOLE_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
+const sizeTag=c=> c.size>WHOLE_BLOCK_BYTES?'whole block': c.size>LARGE_BYTES?'large': null;
 const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
 const fmtQty=(q,c)=> c.divisible ? (+(q/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+q).toLocaleString();
 const fmtSupply=c=>fmtQty(c.supply,c);
 
 function card(c){
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>FULL_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
       <span class="asset">${esc(c.asset)}</span>
@@ -577,7 +577,7 @@ async function renderDetail(id){
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
       ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
-      ${c.size>FULL_BLOCK_BYTES ? `<span class="vbadge fb" title="over 3.5 MB — the inscription fills an entire Bitcoin block"><span class="dot"></span>full block</span>`
+      ${c.size>WHOLE_BLOCK_BYTES ? `<span class="vbadge fb" title="over 3.5 MB — the inscription fills an entire Bitcoin block"><span class="dot"></span>whole block</span>`
         : c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
