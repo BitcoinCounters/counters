@@ -244,7 +244,14 @@ def main(argv: list[str] | None = None) -> int:
              "Counterparty balances are visible immediately via `balance "
              "--no-rescan`; run `wallet rescan` later for a BTC balance or to spend",
     )
-    wsub.add_parser("receive", parents=[common, wname], help="new taproot (bc1p) receive address")
+    p_receive = wsub.add_parser(
+        "receive", parents=[common, wname],
+        help="taproot (bc1p) receive address — the wallet's first by default",
+    )
+    p_receive.add_argument("--new", action="store_true",
+                           help="hand out a fresh unused address instead of the first")
+    p_receive.add_argument("--number", type=int, default=1, metavar="N",
+                           help="show the first N addresses (with --new: N fresh ones)")
     p_bal = wsub.add_parser("balance", parents=[common, wname],
                             help="BTC + Counterparty balances")
     p_bal.add_argument(
@@ -756,9 +763,12 @@ def main(argv: list[str] | None = None) -> int:
                     config, args.name,
                     start_height=args.start_height, stop_height=args.stop_height,
                 )
+            if args.wallet_command == "receive":
+                return wallet.cmd_wallet_receive(
+                    config, args.name, new=args.new, number=args.number
+                )
             dispatch = {
                 "create": wallet.cmd_wallet_create,
-                "receive": wallet.cmd_wallet_receive,
                 "inscriptions": wallet.cmd_wallet_inscriptions,
             }
             return dispatch[args.wallet_command](config, args.name)

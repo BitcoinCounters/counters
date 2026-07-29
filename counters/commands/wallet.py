@@ -483,22 +483,55 @@ def _restore_electrum2(config: Config, name: str, phrase: str, addresses: int,
     return 0
 
 
-def cmd_wallet_receive(config: Config, name: str) -> int:
-    # Two fresh addresses from the same wallet: the taproot bc1p (this tool's
-    # default), and a legacy 1... P2PKH from the wallet's legacy descriptor.
-    # The legacy one is for sending FROM Counterwallet-family wallets (Freewallet
-    # etc.), which are Electrum-v1 and only send to legacy 1... addresses.
-    # Both descriptors are imported active by _import_account, so Core can hand
-    # out either type.
+def _receive_chain(btc: BitcoindClient, name: str, prefix: str, count: int) -> list[str]:
+    """First `count` addresses of the wallet's external chain whose descriptor
+    starts with `prefix` — pure key math via `deriveaddresses`, no chain scan
+    and no keypool advance, so the result is stable across calls."""
+    for d in btc.wallet_call(name, "listdescriptors", []).get("descriptors", []):
+        desc = d["desc"]
+        if d.get("internal") or not desc.startswith(prefix) or "*" not in desc:
+            continue
+        return btc._call("deriveaddresses", [desc, [0, count - 1]])
+    raise BitcoindError(f"wallet {name!r} has no ranged {prefix}...) receive descriptor")
+
+
+def cmd_wallet_receive(config: Config, name: str, *, new: bool = False,
+                       number: int = 1) -> int:
+    # Addresses come in same-index pairs from the same wallet: the taproot bc1p
+    # (this tool's default), and a legacy 1... P2PKH from the wallet's legacy
+    # descriptor. The legacy one is for sending FROM Counterwallet-family
+    # wallets (Freewallet etc.), which are Electrum-v1 and only send to legacy
+    # 1... addresses. Both descriptors are imported active by _import_account.
+    #
+    # The default is the wallet's FIRST address, always — Counterparty balances
+    # are per-address, so steering every deposit to one address keeps BTC (for
+    # fees) and XCP/assets together instead of scattered. `--new` hands out
+    # fresh unused addresses for callers who want them.
+    if number < 1:
+        print("error: --number must be at least 1", file=sys.stderr)
+        return 1
     btc = BitcoindClient(config)
     try:
-        taproot = btc.wallet_call(name, "getnewaddress", ["", "bech32m"])
-        legacy = btc.wallet_call(name, "getnewaddress", ["", "legacy"])
+        if new:
+            pairs = [
+                (btc.wallet_call(name, "getnewaddress", ["", "bech32m"]),
+                 btc.wallet_call(name, "getnewaddress", ["", "legacy"]))
+                for _ in range(number)
+            ]
+        else:
+            pairs = list(zip(_receive_chain(btc, name, "tr(", number),
+                             _receive_chain(btc, name, "pkh(", number)))
     except BitcoindError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    print(f"taproot: {taproot}")
-    print(f"legacy:  {legacy}")
+    for i, (taproot, legacy) in enumerate(pairs):
+        if number > 1:
+            if i:
+                print()
+            if not new:
+                print(f"index {i}:")
+        print(f"taproot: {taproot}")
+        print(f"legacy:  {legacy}")
     return 0
 
 

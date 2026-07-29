@@ -159,7 +159,9 @@ counters wallet --name mywallet restore           # re-import from a BIP39 seed 
 # The seed type is auto-detected; --counterwallet only forces it for a phrase valid as BOTH schemes. See wallets.md.
 counters wallet --name old restore --dry-run                  # preview the derived 1... addresses; imports nothing
 counters wallet --name old restore                            # import the legacy keys into Core + rescan
-counters wallet --name mywallet receive           # next taproot (bc1p) address
+counters wallet --name mywallet receive           # the wallet's first taproot (bc1p) address
+counters wallet --name mywallet receive --new     # ...a fresh unused address instead
+counters wallet --name mywallet receive --number 5  # ...the first 5 addresses
 counters wallet --name mywallet balance           # BTC + aggregated Counterparty balances
 counters wallet --name mywallet inscriptions      # counters held by the wallet
 counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
