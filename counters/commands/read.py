@@ -194,10 +194,9 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     if full:
         print(f"kind         : {row['kind']}")
     if supply is not None:
-        print(f"supply       : {_fmt_qty(supply, divisible)}"
+        fire = f" · 🔥 {_fmt_qty(burned, divisible)}" if burned else ""
+        print(f"supply       : {_fmt_qty(supply, divisible)}{fire}"
               f"{' (divisible)' if divisible else ''}")
-    if full and burned:
-        print(f"burned       : {_fmt_qty(burned, divisible)}")
     ct = row["content_type"] or "(none)"
     raw_ct = row["content_type_raw"]
     print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
@@ -322,9 +321,8 @@ def _asset_info(config: Config, store: Store, name: str,
     else:
         print("counters     : 0")
     if supply is not None:
-        print(f"supply       : {_fmt_qty(supply, divisible)}")
-    if burned:
-        print(f"burned       : {_fmt_qty(burned, divisible)}")
+        fire = f" · 🔥 {_fmt_qty(burned, divisible)}" if burned else ""
+        print(f"supply       : {_fmt_qty(supply, divisible)}{fire}")
     if holders is not None:
         print(f"holders      : {holders}")
     if full and divisible is not None:
