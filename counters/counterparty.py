@@ -184,6 +184,12 @@ class CounterpartyClient:
         return sum(int(r.get("quantity") or 0) for r in rows
                    if r.get("status") == "valid")
 
+    def get_asset_holders_count(self, asset: str) -> int | None:
+        """Number of balance rows the asset has (addresses, plus any UTXOs or
+        escrows holding it) — the endpoint's result_count, no page walk."""
+        data = self._get(f"/v2/assets/{asset}/balances", params={"limit": 1})
+        return data.get("result_count") if data else None
+
     # --- compose -----------------------------------------------------------
 
     def compose_issuance(

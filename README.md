@@ -140,8 +140,9 @@ counters list                                     # 20 most recent
 counters list --recent 50
 counters list --source bc1q...                    # by mint-time source address
 counters list --block 902000-902100               # by block range
-counters info 0                                   # metadata by number
+counters info 0                                   # key facts by number
 counters info XDUALS                              # ...or by asset name / longname
+counters info 0 --full                            # every field (owner, hashes, mint tx, block, ...)
 counters info 0 --json                            # metadata as JSON
 counters info 0 --raw > file.txt                  # stream the file bytes
 counters info 0 --save file.gif                   # write the file to disk
