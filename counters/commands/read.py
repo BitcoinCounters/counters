@@ -80,6 +80,205 @@ def cmd_status(config: Config) -> int:
 
 # --- info -------------------------------------------------------------------
 
+def _emit_content(store: Store, row: sqlite3.Row, save: str | None) -> int:
+    """--raw / --save: the counter's file itself (for an asset, the original's)."""
+    blob = store.read_blob(row["content_sha256"])
+    if blob is None:
+        print(f"blob {row['content_sha256']} missing on disk", file=sys.stderr)
+        return 1
+    if save:
+        with open(save, "wb") as fh:
+            fh.write(blob)
+        print(f"wrote {len(blob)} bytes to {save}")
+    else:
+        sys.stdout.buffer.write(blob)
+    return 0
+
+
+def _ensure_fee(config: Config, store: Store, row: sqlite3.Row) -> tuple[int | None, int | None]:
+    """Inscription cost (commit + reveal), computed on demand and cached."""
+    fee, tx_size = row["fee"], row["tx_size"]
+    if fee is None:
+        try:
+            fee, tx_size = BitcoindClient(config).get_inscription_cost(row["mint_txid"])
+            store.set_fee(row["number"], fee, tx_size)
+        except (BitcoindError, KeyError, IndexError, TypeError):
+            pass
+    return fee, tx_size
+
+
+def _fmt_qty(qty: int, divisible: bool) -> str:
+    return f"{qty / 1e8:g}" if divisible else f"{int(qty):,}"
+
+
+def _asset_live(config: Config, name: str, last: sqlite3.Row):
+    """(supply, divisible, locked, burned, holders, owner) — live per
+    Counterparty, falling back to the stored snapshot where unreachable."""
+    info = _live_asset(config, name)
+    supply = info["supply"] if info.get("supply") is not None else last["supply"]
+    divisible = info["divisible"] if info.get("divisible") is not None else last["divisible"]
+    locked = info.get("locked")
+    owner = info.get("owner") or last["source"]
+    burned, holders = last["burned"], None
+    cp = CounterpartyClient(config)
+    try:
+        burned = cp.get_asset_destroyed(name)
+    except CounterpartyError:
+        pass
+    try:
+        holders = cp.get_asset_holders_count(name)
+    except CounterpartyError:
+        pass
+    return supply, divisible, locked, burned, holders, owner
+
+
+def _counter_info(config: Config, store: Store, row: sqlite3.Row,
+                  as_json: bool, full: bool) -> int:
+    """One counter: the inscription event. Asset-level facts stay in the asset
+    view — except supply and burned, useful enough to repeat here."""
+    fee, tx_size = _ensure_fee(config, store, row)
+
+    if as_json:
+        info = _live_asset(config, row["asset"])
+        record = {k: row[k] for k in row.keys()}
+        record["current_owner"] = info.get("owner") or row["source"]
+        record["fee"] = fee
+        record["tx_size"] = tx_size
+        record["locked"] = info.get("locked")
+        print(json.dumps(record, indent=2))
+        return 0
+
+    info = _live_asset(config, row["asset"])
+    divisible = info["divisible"] if info.get("divisible") is not None else row["divisible"]
+    supply = info["supply"] if info.get("supply") is not None else row["supply"]
+
+    commit_txid = None
+    burned = row["burned"]
+    asset_numbers: list[int] = []
+    if full:
+        try:
+            burned = CounterpartyClient(config).get_asset_destroyed(row["asset"])
+        except CounterpartyError:
+            pass
+        try:
+            commit_txid = BitcoindClient(config).get_raw_transaction(
+                row["mint_txid"], verbose=True)["vin"][0]["txid"]
+        except (BitcoindError, KeyError, IndexError, TypeError):
+            pass
+        asset_numbers = [r["number"] for r in store.get_counters_by_asset(row["asset"])]
+
+    print(f"number       : {row['number']}")
+    print(f"asset        : {_display_name(row)}")
+    if full:
+        print(f"kind         : {row['kind']}")
+    if supply is not None:
+        print(f"supply       : {_fmt_qty(supply, divisible)}"
+              f"{' (divisible)' if divisible else ''}")
+    if full and burned:
+        print(f"burned       : {_fmt_qty(burned, divisible)}")
+    ct = row["content_type"] or "(none)"
+    raw_ct = row["content_type_raw"]
+    print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
+    print(f"size         : {row['content_length']} bytes")
+    if full:
+        if row["is_pointer_like"]:
+            print("pointer-like : yes (content is a URI; metadata only)")
+        print(f"block        : {row['block_index']} (cp tx_index {row['cp_tx_index']})")
+    if fee is not None:
+        if full:
+            # Mirrors the explorer card: "fee paid" and "fee/B" as separate facts.
+            print(f"fee          : {fee:,} sats")
+            if tx_size:
+                print(f"fee/B        : {fee / tx_size:.1f} sats")
+        else:
+            rate = f" ({fee / tx_size:.1f} sat/B)" if tx_size else ""
+            print(f"fee          : {fee:,} sats{rate}")
+    if full and row["xcp_burned"] is not None:
+        print(f"xcp_burned   : {row['xcp_burned'] / 1e8:g} XCP")
+    if full and asset_numbers:
+        others = [n for n in asset_numbers if n != row["number"]]
+        if not others:
+            print("reinscribed  : no")
+        else:
+            original = min(asset_numbers)
+            tag = (" (this is the original)" if row["number"] == original
+                   else f" (original #{original})")
+            print(f"reinscribed  : {', '.join(f'#{n}' for n in others)}{tag}")
+    if full:
+        # Addresses, txids, and hashes last — long opaque strings that bury
+        # the readable facts when interleaved above.
+        print(f"source       : {row['source']}")
+        if commit_txid:
+            print(f"commit_txid  : {commit_txid}")
+        print(f"reveal_txid  : {row['mint_txid']}"
+              + (f" (msg {row['msg_index']})" if row["msg_index"] else ""))
+        print(f"sha256       : {row['content_sha256']}")
+        print(f"rolling hash : {row['rolling_hash']}")
+    return 0
+
+
+def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
+                as_json: bool) -> int:
+    """One asset: its counters and asset-level facts, with per-event detail
+    left to the counter view. `rows` is every counter on the asset, oldest
+    first — the original is rows[0]."""
+    last = rows[-1]
+    supply, divisible, locked, burned, holders, owner = _asset_live(
+        config, last["asset"], last)
+
+    numbers = [r["number"] for r in rows]
+    total_size = sum(r["content_length"] for r in rows)
+    fees = [_ensure_fee(config, store, r)[0] for r in rows]
+    total_fee = sum(f for f in fees if f is not None)
+    unknown_fees = sum(1 for f in fees if f is None)
+    total_xcp = sum(r["xcp_burned"] or 0 for r in rows)
+
+    if as_json:
+        print(json.dumps({
+            "asset": last["asset"],
+            "asset_longname": last["asset_longname"],
+            "asset_id": last["asset_id"],
+            "supply": supply,
+            "burned": burned,
+            "divisible": divisible,
+            "locked": locked,
+            "holders": holders,
+            "owner": owner,
+            "counters": numbers,
+            "counter_count": len(numbers),
+            "total_size": total_size,
+            "total_fee": total_fee if not unknown_fees else None,
+            "total_xcp_burned": total_xcp,
+        }, indent=2))
+        return 0
+
+    print(f"asset        : {_display_name(last)}")
+    if last["asset_longname"]:
+        print(f"asset_name   : {last['asset']}")
+    print(f"asset_id     : {last['asset_id']}")
+    if supply is not None:
+        print(f"supply       : {_fmt_qty(supply, divisible)}")
+    if burned:
+        print(f"burned       : {_fmt_qty(burned, divisible)}")
+    if divisible is not None:
+        print(f"divisible    : {'yes' if divisible else 'no'}")
+    if locked is not None:
+        print(f"locked       : {'yes' if locked else 'no'}")
+    if holders is not None:
+        print(f"holders      : {holders}")
+    shown = ", ".join(f"#{n}" for n in numbers[:12])
+    more = f", ... (+{len(numbers) - 12} more)" if len(numbers) > 12 else ""
+    original = " (original)" if len(numbers) > 1 else ""
+    print(f"counters     : {len(numbers)} — {shown}{more}".replace(
+        f"#{numbers[0]}", f"#{numbers[0]}{original}", 1))
+    print(f"total size   : {total_size:,} bytes")
+    xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
+    unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
+    print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
+    print(f"owner        : {owner}")
+    return 0
+
+
 def cmd_info(
     config: Config,
     identifier: str,
@@ -90,132 +289,27 @@ def cmd_info(
 ) -> int:
     store = Store(config)
     try:
-        row = store.find(identifier)
-        if row is None:
+        # A number names one counter (the event); an asset name gets the
+        # asset summary. Numeric Counterparty assets are A-prefixed, so a
+        # digit string is never ambiguous.
+        if identifier.isdigit():
+            row = store.get_counter(int(identifier))
+            if row is None:
+                print(f"no counter for {identifier!r}", file=sys.stderr)
+                return 1
+            if raw or save:
+                return _emit_content(store, row, save)
+            return _counter_info(config, store, row, as_json, full)
+
+        rows = store.get_counters_by_asset(identifier)
+        if not rows:
             print(f"no counter for {identifier!r}", file=sys.stderr)
             return 1
-
-        # Content output modes take precedence over metadata.
         if raw or save:
-            blob = store.read_blob(row["content_sha256"])
-            if blob is None:
-                print(f"blob {row['content_sha256']} missing on disk", file=sys.stderr)
-                return 1
-            if save:
-                with open(save, "wb") as fh:
-                    fh.write(blob)
-                print(f"wrote {len(blob)} bytes to {save}")
-            else:
-                sys.stdout.buffer.write(blob)
-            return 0
-
-        info = _live_asset(config, row["asset"])
-        owner = info.get("owner") or row["source"]
-        divisible = info["divisible"] if info.get("divisible") is not None else row["divisible"]
-        supply_raw = info["supply"] if info.get("supply") is not None else row["supply"]
-        locked = info.get("locked")
-
-        # Inscription cost (commit + reveal) computed on demand and cached.
-        fee, tx_size = row["fee"], row["tx_size"]
-        if fee is None:
-            try:
-                fee, tx_size = BitcoindClient(config).get_inscription_cost(row["mint_txid"])
-                store.set_fee(row["number"], fee, tx_size)
-            except (BitcoindError, KeyError, IndexError, TypeError):
-                pass
-
-        if as_json:
-            record = {k: row[k] for k in row.keys()}
-            record["current_owner"] = owner
-            record["fee"] = fee
-            record["tx_size"] = tx_size
-            record["locked"] = locked
-            print(json.dumps(record, indent=2))
-            return 0
-
-        # Extra facts for --full: live burned/holders from Counterparty, the
-        # commit txid from the reveal's first input, sibling counters from the
-        # store. Each degrades to its stored value (or is omitted) if a backend
-        # is unreachable.
-        burned, holders, commit_txid = row["burned"], None, None
-        asset_numbers: list[int] = []
-        if full:
-            cp = CounterpartyClient(config)
-            try:
-                burned = cp.get_asset_destroyed(row["asset"])
-            except CounterpartyError:
-                pass
-            try:
-                holders = cp.get_asset_holders_count(row["asset"])
-            except CounterpartyError:
-                pass
-            try:
-                commit_txid = BitcoindClient(config).get_raw_transaction(
-                    row["mint_txid"], verbose=True)["vin"][0]["txid"]
-            except (BitcoindError, KeyError, IndexError, TypeError):
-                pass
-            asset_numbers = [r["number"] for r in store.get_counters_by_asset(row["asset"])]
-
-        print(f"number       : {row['number']}")
-        print(f"asset        : {_display_name(row)}")
-        if full:
-            print(f"asset_id     : {row['asset_id']}")
-            print(f"kind         : {row['kind']}")
-        if supply_raw is not None:
-            s = f"{supply_raw / 1e8:g}" if divisible else f"{int(supply_raw):,}"
-            suffix = "" if full else (" (divisible)" if divisible else "")
-            print(f"supply       : {s}{suffix}")
-        if full and burned:
-            b = f"{burned / 1e8:g}" if divisible else f"{int(burned):,}"
-            print(f"burned       : {b}")
-        if full and divisible is not None:
-            print(f"divisible    : {'yes' if divisible else 'no'}")
-        if locked is not None:
-            print(f"locked       : {'yes' if locked else 'no'}")
-        if full and holders is not None:
-            print(f"holders      : {holders}")
-        ct = row["content_type"] or "(none)"
-        raw_ct = row["content_type_raw"]
-        print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
-        print(f"size         : {row['content_length']} bytes")
-        if full:
-            if row["is_pointer_like"]:
-                print("pointer-like : yes (content is a URI; metadata only)")
-            print(f"block        : {row['block_index']} (cp tx_index {row['cp_tx_index']})")
-        if fee is not None:
-            if full:
-                # Mirrors the explorer card: "fee paid" and "fee/B" as separate facts.
-                print(f"fee          : {fee:,} sats")
-                if tx_size:
-                    print(f"fee/B        : {fee / tx_size:.1f} sats")
-            else:
-                rate = f" ({fee / tx_size:.1f} sat/B)" if tx_size else ""
-                print(f"fee          : {fee:,} sats{rate}")
-        if full and row["xcp_burned"] is not None:
-            print(f"xcp_burned   : {row['xcp_burned'] / 1e8:g} XCP")
-        if full and asset_numbers:
-            others = [n for n in asset_numbers if n != row["number"]]
-            if not others:
-                print("reinscribed  : no")
-            else:
-                original = min(asset_numbers)
-                tag = (" (this is the original)" if row["number"] == original
-                       else f" (original #{original})")
-                print(f"reinscribed  : {', '.join(f'#{n}' for n in others)}{tag}")
-        if full:
-            # Addresses, hashes, and txids last — long opaque strings that
-            # bury the readable facts when interleaved above.
-            print(f"owner        : {owner}")
-            print(f"source       : {row['source']}")
-            if commit_txid:
-                print(f"commit_txid  : {commit_txid}")
-            print(f"reveal_txid  : {row['mint_txid']}"
-                  + (f" (msg {row['msg_index']})" if row["msg_index"] else ""))
-            print(f"sha256       : {row['content_sha256']}")
-            print(f"rolling hash : {row['rolling_hash']}")
+            return _emit_content(store, rows[0], save)
+        return _asset_info(config, store, rows, as_json)
     finally:
         store.close()
-    return 0
 
 
 # --- list -------------------------------------------------------------------
