@@ -189,9 +189,9 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             # Mirrors the explorer card: "fee paid" and "fee/B" as separate facts.
             print(f"fee          : {fee:,} sats")
             if tx_size:
-                print(f"fee/B        : {fee / tx_size:.1f} sats")
+                print(f"fee/B        : {fee / tx_size:.1f} sats/B")
         else:
-            rate = f" ({fee / tx_size:.1f} sat/B)" if tx_size else ""
+            rate = f" ({fee / tx_size:.1f} sats/B)" if tx_size else ""
             print(f"fee          : {fee:,} sats{rate}")
     if full and row["xcp_burned"] is not None:
         print(f"xcp_burned   : {row['xcp_burned'] / 1e8:g} XCP")
@@ -274,7 +274,7 @@ def _asset_info(config: Config, store: Store, rows: list[sqlite3.Row],
     unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
     print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
     if total_tx_size:
-        print(f"fee/B        : {total_fee / total_tx_size:.1f} sats")
+        print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
     print(f"asset_id     : {last['asset_id']}")
     print(f"owner        : {owner}")
     return 0
