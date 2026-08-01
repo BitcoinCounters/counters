@@ -260,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
     p_bal = wsub.add_parser("balance", parents=[common, wname],
                             help="BTC + Counterparty balances")
     p_bal.add_argument(
+        "--detailed", action="store_true",
+        help="per-address breakdown: every funded address in the wallet's "
+             "history with its BTC, Counterparty holdings, open dispensers "
+             "and open DEX orders",
+    )
+    p_bal.add_argument(
         "--no-rescan", action="store_true",
         help="skip Bitcoin Core's on-chain view: derive addresses from the "
              "wallet descriptors and query Counterparty directly (no rescan). "
@@ -763,6 +769,7 @@ def main(argv: list[str] | None = None) -> int:
                 return wallet.cmd_wallet_balance(
                     config, args.name,
                     no_rescan=args.no_rescan, addresses=args.addresses,
+                    detailed=args.detailed,
                 )
             if args.wallet_command == "rescan":
                 return wallet.cmd_wallet_rescan(
