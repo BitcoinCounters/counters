@@ -593,7 +593,7 @@ def cmd_wallet_rescan(config: Config, name: str, *, start_height: int | None = N
 
 
 def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
-                       addresses: int = 20) -> int:
+                       addresses: int = 20, detailed: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -610,6 +610,8 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
         print("BTC confirmed : (skipped — needs a rescan)")
         print(f"checking Counterparty for {len(addrs)} derived addresses "
               f"({addresses}/chain)...")
+        if detailed:
+            return _report_addresses(cp, addrs, None)
         return _report_cp_balances(cp, addrs)
 
     try:
@@ -631,6 +633,13 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
         addrs.update(_derived_addresses(btc, name, addresses))
     except BitcoindError:
         pass                                   # on-chain view alone still works
+    if detailed:
+        btc_by_addr: dict[str, Decimal] = {}
+        for u in btc.wallet_call(name, "listunspent", [0, 9999999]):
+            if u.get("address"):
+                btc_by_addr[u["address"]] = (btc_by_addr.get(u["address"], Decimal(0))
+                                             + Decimal(str(u["amount"])))
+        return _report_addresses(cp, sorted(addrs), btc_by_addr)
     return _report_cp_balances(cp, sorted(addrs))
 
 
@@ -701,6 +710,86 @@ def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
         print("\nOwnership rights assets (transferable control, independent of supply):")
         for asset, name in sorted(owned.items()):
             print(f"  {name}")
+    return 0
+
+
+def _report_addresses(cp: CounterpartyClient, addrs: list[str],
+                      btc_by_addr: dict[str, Decimal] | None) -> int:
+    """Per-address breakdown: every address holding anything — BTC, Counterparty
+    assets, issuance rights, an open dispenser, or an open DEX order. Addresses
+    with nothing on them are omitted. btc_by_addr is None when the on-chain
+    view was skipped (--no-rescan)."""
+    # Local imports: every sibling command module imports this one, so pulling
+    # their helpers in at module level would be a cycle.
+    from .dispenser import _OPEN, _describe
+    from .send import _fmt_raw
+    shown = 0
+    unreachable = 0
+    for addr in addrs:
+        reachable = True
+        totals: dict[str, dict] = {}
+        owned: list[str] = []
+        dispensers: list[str] = []
+        orders: list[str] = []
+        try:
+            for r in cp.get_address_balances(addr):
+                q = int(r.get("quantity") or 0)
+                if q <= 0:
+                    continue
+                agg = totals.setdefault(r["asset"], {
+                    "qty": 0,
+                    "name": r.get("asset_longname") or r["asset"],
+                    "divisible": bool((r.get("asset_info") or {}).get("divisible")),
+                })
+                agg["qty"] += q
+            owned = [a.get("asset_longname") or a["asset"]
+                     for a in cp.get_address_owned_assets(addr)]
+            dispensers = [_describe(d) for d in cp.get_address_dispensers(addr)
+                          if int(d.get("status") or 0) in _OPEN]
+            for o in cp.get_address_orders(addr, status="open"):
+                give_div = (o.get("give_asset") == "BTC") or bool(
+                    (o.get("give_asset_info") or {}).get("divisible"))
+                get_div = (o.get("get_asset") == "BTC") or bool(
+                    (o.get("get_asset_info") or {}).get("divisible"))
+                expire = o.get("expire_index")
+                orders.append(
+                    f"{_fmt_raw(int(o.get('give_remaining') or 0), give_div)} "
+                    f"{o.get('give_asset')} for "
+                    f"{_fmt_raw(max(int(o.get('get_remaining') or 0), 0), get_div)} "
+                    f"{o.get('get_asset')}, "
+                    + (f"expires at block {expire}" if expire else "never expires"))
+        except CounterpartyError:
+            unreachable += 1
+            reachable = False
+        btc_here = (btc_by_addr or {}).get(addr)
+        if not any((totals, owned, dispensers, orders, btc_here)):
+            continue
+        shown += 1
+        print(f"\n{addr}")
+        if btc_here:
+            print(f"  {'BTC':<28} {_fmt_btc(btc_here)}")
+        for asset, agg in sorted(totals.items()):
+            print(f"  {agg['name']:<28} {_fmt_qty(agg['qty'], agg['divisible'])}")
+        for asset_name in sorted(owned):
+            print(f"  {asset_name:<28} (ownership rights)")
+        for line in dispensers:
+            print(f"  open dispenser: {line}")
+        for line in orders:
+            print(f"  open order: {line}")
+        if not reachable:
+            print("  Counterparty assets UNKNOWN — address could not be queried")
+    if not shown:
+        if unreachable:
+            # Never let an unreachable oracle read as "you own nothing".
+            print(f"\nno funded addresses found, but {unreachable} address(es) "
+                  f"could not be queried (is Counterparty synced? try "
+                  f"`counters status`)")
+            return 1
+        print("\nno funded addresses")
+        return 0
+    if unreachable:
+        print(f"\n(warning: {unreachable} address(es) could not be queried, so "
+              f"this may be incomplete)")
     return 0
 
 
