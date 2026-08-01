@@ -41,7 +41,9 @@ class _DuckCp:
 def test_is_segwit_address():
     assert _is_segwit_address(TAPROOT)
     assert _is_segwit_address(SEGWIT)
-    assert _is_segwit_address(NESTED)      # nested segwit spends with a witness
+    # Nested 3... spends with a witness, but its scriptPubKey is P2SH — not a
+    # witness program — so counterparty-core rejects it as a taproot source.
+    assert not _is_segwit_address(NESTED)
     assert not _is_segwit_address(LEGACY)  # legacy P2PKH can't fund taproot
 
 

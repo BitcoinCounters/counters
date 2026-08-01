@@ -66,10 +66,13 @@ def _spendable_addresses(btc: BitcoindClient, wallet: str) -> dict[str, int]:
 
 
 def _is_segwit_address(addr: str) -> bool:
-    """True if coins on `addr` can fund a taproot-encoded commit. Taproot
-    encoding rejects legacy (P2PKH, 1...) inputs; native segwit (bc1q), taproot
-    (bc1p), and nested segwit (3...) all spend with a witness and qualify."""
-    return not addr.startswith("1")
+    """True if `addr` can be the source of a taproot-encoded compose. Counterparty
+    checks the source's scriptPubKey is a witness program (composer.py
+    is_segwit_address), so only NATIVE segwit qualifies: bc1q (P2WPKH) and bc1p
+    (P2TR). Legacy 1... AND nested-segwit 3... are both rejected — a 3...
+    address's scriptPubKey is P2SH, not a witness program, even though its
+    coins spend with a witness."""
+    return addr.startswith(("bc1", "tb1", "bcrt1"))
 
 
 def _xcp_holders(cp: CounterpartyClient, addresses: list[str],
@@ -147,8 +150,9 @@ def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
                  funding: bool = False) -> tuple[str | None, str | None]:
     """Auto-select a Counterparty source that can actually fund a TAPROOT
     inscription. The commit is funded from the source's OWN coins, so a working
-    source needs spendable SEGWIT BTC — a legacy 1... address can't fund taproot
-    encoding (build ref v3 §11). A NAMED asset additionally needs >= 0.5 XCP on
+    source needs spendable NATIVE-SEGWIT BTC — neither a legacy 1... nor a
+    nested 3... address can be a taproot-encoding source (build ref v3 §11).
+    A NAMED asset additionally needs >= 0.5 XCP on
     that SAME address, since issuance is single-source. The richest eligible
     address wins, so the commit has the most room to fund. When --inputs-set
     pins the funding UTXOs, the spendable-BTC requirement is relaxed (the caller
@@ -197,8 +201,9 @@ def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
     if pinned and addrs:
         return addrs[0], None
     return None, (
-        "wallet has no spendable segwit BTC to fund the commit (taproot encoding "
-        "can't use legacy 1... coins); fund a bc1q/bc1p address and retry."
+        "wallet has no spendable native-segwit BTC to fund the commit (taproot "
+        "encoding can't compose from legacy 1... or nested 3... addresses); "
+        "fund a bc1q/bc1p address and retry."
     )
 
 
@@ -344,9 +349,10 @@ def cmd_inscribe(
                   file=sys.stderr)
             return 1
         if not _is_segwit_address(source) and inputs_set is None:
-            print(f"note: --source {source} is a legacy address; taproot encoding "
-                  f"can't fund a commit from 1... coins, so compose will likely "
-                  f"fail. Use a bc1q/bc1p source (or --inputs-set).", file=sys.stderr)
+            print(f"note: --source {source} is not a native-segwit address; "
+                  f"taproot encoding needs a bc1q/bc1p source (legacy 1... and "
+                  f"nested 3... are rejected), so compose will likely fail. Use "
+                  f"a bc1q/bc1p source (or --inputs-set).", file=sys.stderr)
     # The source may hold the XCP but no BTC (a common split: XCP parked on one
     # address, coins on another). Counterparty cannot take the fee from a second
     # address — the first input IS the issuer — so top the source up first.
