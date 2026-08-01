@@ -259,17 +259,20 @@ def cmd_wallet_create(config: Config, name: str) -> int:
     except BitcoindError as e:
         print(f"could not create wallet: {e}", file=sys.stderr)
         return 1
-    # A taproot (bc1p) address by default, plus a legacy 1... one: the legacy
-    # descriptor is imported active too, and legacy addresses are needed to
-    # receive from Counterwallet-family wallets (Freewallet), which only send to
-    # 1... — mirrors `wallet receive`.
+    # A taproot (bc1p) address by default, plus a segwit bc1q one (also a valid
+    # source for taproot inscriptions) and a legacy 1... one: all descriptors
+    # are imported active, and legacy addresses are needed to receive from
+    # Counterwallet-family wallets (Freewallet), which only send to 1... —
+    # mirrors `wallet receive`.
     first = btc.wallet_call(name, "getnewaddress", ["", "bech32m"])
+    segwit = btc.wallet_call(name, "getnewaddress", ["", "bech32"])
     legacy = btc.wallet_call(name, "getnewaddress", ["", "legacy"])
     print(f"created taproot wallet {name!r}.\n")
     print("=== WRITE DOWN YOUR SEED PHRASE (shown once) ===")
     print(f"  {mnemonic}")
     print("================================================\n")
     print(f"first receive address (taproot): {first}")
+    print(f"segwit receive address:          {segwit}")
     print(f"legacy receive address:          {legacy}")
     return 0
 
@@ -495,13 +498,25 @@ def _receive_chain(btc: BitcoindClient, name: str, prefix: str, count: int) -> l
     raise BitcoindError(f"wallet {name!r} has no ranged {prefix}...) receive descriptor")
 
 
+# The address types `receive` serves, in print order: CLI label, Core
+# `getnewaddress` address_type, and the receive-descriptor prefix that
+# provides it.
+_RECEIVE_KINDS = (("taproot", "bech32m", "tr("),
+                  ("segwit", "bech32", "wpkh("),
+                  ("legacy", "legacy", "pkh("))
+
+
 def cmd_wallet_receive(config: Config, name: str, *, new: bool = False,
                        number: int = 1) -> int:
-    # Addresses come in same-index pairs from the same wallet: the taproot bc1p
-    # (this tool's default), and a legacy 1... P2PKH from the wallet's legacy
-    # descriptor. The legacy one is for sending FROM Counterwallet-family
-    # wallets (Freewallet etc.), which are Electrum-v1 and only send to legacy
-    # 1... addresses. Both descriptors are imported active by _import_account.
+    # Addresses come in same-index sets from the same wallet: the taproot bc1p
+    # (this tool's default), a segwit bc1q P2WPKH (also able to fund taproot
+    # inscriptions — compose accepts any native-segwit source), and a legacy
+    # 1... P2PKH from the wallet's legacy descriptor. The legacy one is for
+    # sending FROM Counterwallet-family wallets (Freewallet etc.), which are
+    # Electrum-v1 and only send to legacy 1... addresses.
+    # _import_account imports every type active, but a wallet
+    # imported before that (or from a single key) may lack some — those types
+    # are skipped with a note rather than failing the whole command.
     #
     # The default is the wallet's FIRST address, always — Counterparty balances
     # are per-address, so steering every deposit to one address keeps BTC (for
@@ -512,26 +527,41 @@ def cmd_wallet_receive(config: Config, name: str, *, new: bool = False,
         return 1
     btc = BitcoindClient(config)
     try:
+        descs = btc.wallet_call(name, "listdescriptors", []).get("descriptors", [])
+
+        def has(prefix: str) -> bool:
+            return any(not d.get("internal") and "*" in d["desc"]
+                       and d["desc"].startswith(prefix) for d in descs)
+
+        kinds = [k for k in _RECEIVE_KINDS if has(k[2])]
+        if not kinds:
+            served = ", ".join(k[0] for k in _RECEIVE_KINDS)
+            print(f"error: wallet {name!r} has no receive descriptor for any "
+                  f"served address type ({served})", file=sys.stderr)
+            return 1
         if new:
-            pairs = [
-                (btc.wallet_call(name, "getnewaddress", ["", "bech32m"]),
-                 btc.wallet_call(name, "getnewaddress", ["", "legacy"]))
-                for _ in range(number)
-            ]
+            columns = [[btc.wallet_call(name, "getnewaddress", ["", addr_type])
+                        for _ in range(number)]
+                       for _, addr_type, _ in kinds]
         else:
-            pairs = list(zip(_receive_chain(btc, name, "tr(", number),
-                             _receive_chain(btc, name, "pkh(", number)))
+            columns = [_receive_chain(btc, name, prefix, number)
+                       for _, _, prefix in kinds]
     except BitcoindError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    for i, (taproot, legacy) in enumerate(pairs):
+    width = max(len(label) for label, _, _ in kinds) + 1
+    for i in range(number):
         if number > 1:
             if i:
                 print()
             if not new:
                 print(f"index {i}:")
-        print(f"taproot: {taproot}")
-        print(f"legacy:  {legacy}")
+        for (label, _, _), column in zip(kinds, columns):
+            print(f"{label + ':':<{width}} {column[i]}")
+    for label, _, _ in _RECEIVE_KINDS:
+        if all(k[0] != label for k in kinds):
+            print(f"note: wallet {name!r} has no {label} descriptor; "
+                  f"not serving a {label} address", file=sys.stderr)
     return 0
 
 
