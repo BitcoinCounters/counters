@@ -30,6 +30,7 @@ import mimetypes
 import os
 import random
 import sys
+import time
 from decimal import Decimal
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
@@ -43,6 +44,11 @@ NUMERIC_MIN = 26 ** 12 + 1     # Counterparty numeric-asset range
 NUMERIC_MAX = 2 ** 64 - 1
 NAMED_ISSUANCE_FEE_XCP = 50_000_000   # 0.5 XCP burned to register a named asset
 DUST_SAT = 330                        # below this an output is unspendable dust
+# Counterparty lists the source's coins straight from bitcoind, so a just-sent
+# funding output can be invisible for a beat. Long enough to cover that, short
+# enough that a genuinely unfunded source still fails promptly.
+_FUNDING_VISIBLE_TRIES = 6
+_FUNDING_VISIBLE_WAIT = 2.0           # seconds between tries
 
 
 def guess_content_type(path: str) -> str:
@@ -252,6 +258,7 @@ def cmd_inscribe(
     dry_run: bool = False,
     no_mempool_check: bool = False,
     fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -338,7 +345,7 @@ def cmd_inscribe(
     if source is None:
         source, err = _pick_source(
             cp, wallet_addrs, spendable, named=named, inputs_set=inputs_set,
-            funding=fund_from is not None,
+            funding=not no_fund,
         )
         if source is None:
             print(err, file=sys.stderr)
@@ -353,54 +360,80 @@ def cmd_inscribe(
                   f"taproot encoding needs a bc1q/bc1p source (legacy 1... and "
                   f"nested 3... are rejected), so compose will likely fail. Use "
                   f"a bc1q/bc1p source (or --inputs-set).", file=sys.stderr)
-    # The source may hold the XCP but no BTC (a common split: XCP parked on one
-    # address, coins on another). Counterparty cannot take the fee from a second
-    # address — the first input IS the issuer — so top the source up first.
+    # Counterparty cannot take the fee from a second address — the first input
+    # IS the issuer — so the source has to own its coins, and topping it up is
+    # the DEFAULT rather than a flag you have to know about. The source is
+    # whichever address holds the asset's rights or XCP, which is rarely where
+    # the wallet keeps its BTC: an owner sitting on nothing but the dust output
+    # that carries the asset is the normal case, not the exception.
+    # --fund-from pins who pays; --no-fund leaves the source untouched.
     have = spendable.get(source, 0)
-    if fund_from is not None and inputs_set is None:
-        need = _estimate_source_need(len(body), fee_rate or 1.0)
-        short = need - have
-        if short <= 0:
-            print(f"source {source} already holds {have} sat (~{need} needed); "
-                  f"no funding transfer required")
-        elif dry_run:
+    need = _estimate_source_need(len(body), fee_rate or 1.0)
+    short = need - have
+    funded_now = False
+    explicit_funder = fund_from is not None
+    if fund_from == "auto":  # accepted for compatibility; wallet-wide is default
+        fund_from = None
+    if inputs_set is None and not no_fund and short > 0:
+        origin = f"from {fund_from}" if fund_from else "wallet-wide"
+        if dry_run:
             print(f"[dry-run] would first move {short} sat to {source} "
-                  f"({'wallet-wide' if fund_from == 'auto' else f'from {fund_from}'}), "
-                  f"then inscribe. Re-run without --dry-run to do it.")
+                  f"({origin}), then inscribe. Re-run without --dry-run to do it.")
             return 0
-        else:
-            print(f"funding {source} with {short} sat "
-                  f"({'wallet-wide' if fund_from == 'auto' else f'from {fund_from}'}) "
-                  f"so it can pay for the commit and reveal...")
-            txid = _fund_source(btc, wallet, source, short,
-                                None if fund_from == "auto" else fund_from, fee_rate)
-            if txid is None:
-                return 1
-            print(f"  funding txid : {txid}")
-            spendable = _spendable_addresses(btc, wallet)
+        print(f"funding {source} with {short} sat ({origin}) so it can pay for "
+              f"the commit and reveal...")
+        txid = _fund_source(btc, wallet, source, short, fund_from, fee_rate)
+        if txid is None:
+            return 1
+        print(f"  funding txid : {txid}")
+        spendable = _spendable_addresses(btc, wallet)
+        funded_now = True
+    elif explicit_funder and short <= 0:
+        print(f"source {source} already holds {have} sat (~{need} needed); "
+              f"no funding transfer required")
 
-    if not spendable.get(source) and inputs_set is None:
-        print(f"note: source {source} has no spendable BTC on record; compose may "
-              f"fail — fund it, pass --fund-from ADDRESS, or --inputs-set TXID:VOUT",
-              file=sys.stderr)
+    # Enough, not merely non-empty: an address holding the asset's dust output
+    # has BTC on record and still cannot pay for a commit that carries the
+    # reveal's fee forward.
+    if inputs_set is None and spendable.get(source, 0) < need:
+        remedy = ("drop --no-fund to top it up automatically" if no_fund
+                  else "fund it, or pass --fund-from ADDRESS")
+        print(f"note: source {source} holds {spendable.get(source, 0)} sat but the "
+              f"commit and reveal need about {need}; compose will likely fail — "
+              f"{remedy}, or pass --inputs-set TXID:VOUT", file=sys.stderr)
 
-    # Compose the commit/reveal pair via Counterparty Core.
-    try:
-        composed = cp.compose_issuance(
-            source=source, asset=asset, quantity=quantity, divisible=divisible,
-            description=description, lock=lock, encoding="taproot",
-            mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
-        )
-    except CounterpartyError as e:
-        msg = str(e)
-        print(f"compose failed: {msg}", file=sys.stderr)
-        if "No UTXOs" in msg or "inputs_set" in msg:
-            print(f"hint: the source address {source} needs spendable BTC — the "
-                  f"commit is funded from its coins.", file=sys.stderr)
-        if "legacy inputs" in msg:
-            print("hint: taproot encoding needs segwit coins on the source; move "
-                  "funds off legacy 1... addresses first.", file=sys.stderr)
-        return 1
+    # Compose the commit/reveal pair via Counterparty Core. Counterparty reads
+    # the source's coins from its own bitcoind view, which can trail our
+    # broadcast by a beat — composing the instant the funding lands sees the
+    # OLD balance and fails for funds that are already sent. Retry briefly
+    # rather than making the caller re-run a command that just spent money.
+    attempts = _FUNDING_VISIBLE_TRIES if funded_now else 1
+    for attempt in range(attempts):
+        try:
+            composed = cp.compose_issuance(
+                source=source, asset=asset, quantity=quantity, divisible=divisible,
+                description=description, lock=lock, encoding="taproot",
+                mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
+            )
+            break
+        except CounterpartyError as e:
+            msg = str(e)
+            last = attempt + 1 >= attempts
+            if not last and ("Insufficient funds" in msg or "No UTXOs" in msg):
+                if attempt == 0:
+                    print("  waiting for Counterparty to see the funding...")
+                time.sleep(_FUNDING_VISIBLE_WAIT)
+                continue
+            print(f"compose failed: {msg}", file=sys.stderr)
+            if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
+                print(f"hint: the source address {source} needs spendable BTC — the "
+                      f"commit is funded from its coins. Drop --no-fund to move it "
+                      f"there automatically, or pin the payer with --fund-from "
+                      f"ADDRESS.", file=sys.stderr)
+            if "legacy inputs" in msg:
+                print("hint: taproot encoding needs segwit coins on the source; move "
+                      "funds off legacy 1... addresses first.", file=sys.stderr)
+            return 1
     commit_unsigned = composed.get("rawtransaction")
     reveal_hex = composed.get("signed_reveal_rawtransaction")
     if not commit_unsigned or not reveal_hex:
