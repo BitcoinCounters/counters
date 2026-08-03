@@ -296,6 +296,44 @@ def test_sync_never_passes_the_oracle():
         idx.close()
 
 
+def test_run_chases_a_catching_up_oracle_without_idling():
+    """The daemon must not sit out a poll interval between passes while
+    Counterparty is still parsing: an indexer that sleeps after every pass only
+    finishes catching up once the oracle is done. Here the oracle advances two
+    blocks per poll; the indexer should follow it to the end and sleep only
+    when there is finally nothing left to do."""
+    txs = {"t-1": reveal_tx("t-1")}
+    blocks = {G: [issuance("t-1", 1)]}
+
+    class CatchingUpCP(FakeCP):
+        """Oracle mid-sync: its parsed height climbs on every poll."""
+
+        def counterparty_height(self):
+            height = self.tip
+            self.tip = min(self.tip + 2, G + 10)
+            return height
+
+    with tempfile.TemporaryDirectory() as tmp:
+        btc = FakeBTC(txs, tip=G + 100)          # bitcoind is way ahead
+        cp = CatchingUpCP(blocks, tip=G)
+        idx = make_indexer(tmp, btc, cp)
+
+        sleeps = []
+
+        def record_sleep(seconds):
+            sleeps.append(seconds)
+            idx._stop = True  # first genuine idle ends the test
+
+        idx._interruptible_sleep = record_sleep
+        idx._install_signal_handler = lambda: None  # keep pytest's handlers
+        idx.run()
+
+        # One continuous catch-up to the oracle's final height, then one sleep.
+        assert idx.store.get_last_height(G) == G + 10
+        assert len(sleeps) == 1
+        idx.close()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -71,6 +71,10 @@ class Indexer:
         # None while the backend is healthy.
         self._btc_note: str | None = None
         self._cp_note: str | None = None
+        # Whether the last sync pass found nothing left to do. False while
+        # blocks are still arriving, so run() re-polls the tip immediately
+        # instead of idling a poll interval between passes.
+        self._idle = False
 
     # --- signal handling ---------------------------------------------------
 
@@ -412,9 +416,14 @@ class Indexer:
         try:
             if start > tip:
                 # Caught up: pin the bar at the current tip (100%) and idle.
+                self._idle = True
                 if bar is not None:
                     bar.update(tip, postfix=f"{base} counters")
                 return 0
+            # Blocks to do: whatever this pass indexes, the tip may have moved
+            # again by the time it ends (it always has while the oracle is
+            # catching up), so run() should re-poll at once rather than sleep.
+            self._idle = False
             for height in range(start, tip + 1):
                 total += self.process_block(height)
                 if bar is not None:
@@ -451,6 +460,7 @@ class Indexer:
             while not self._stop:
                 retry = f"retrying in {self.config.poll_interval:.0f}s"
                 ok = False
+                self._idle = True  # a failed pass sleeps before retrying
                 try:
                     self.sync_to_tip()
                     ok = True
@@ -474,6 +484,13 @@ class Indexer:
                         self._show_heights(self._progress)
                 if self._stop:
                     break
+                if not self._idle:
+                    # Still work in sight: the oracle is parsing blocks faster
+                    # than one pass consumes them (or new blocks landed while
+                    # this pass ran). Chase its tip instead of waiting out a
+                    # poll interval — an indexer that sleeps 15s between passes
+                    # only finishes catching up after Counterparty does.
+                    continue
                 self._interruptible_sleep(self.config.poll_interval)
         finally:
             if self._progress is not None:
