@@ -6,6 +6,7 @@ falling back to explicit user/password if configured.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,7 @@ class BitcoindClient:
         params: list[Any] | None = None,
         wallet: str | None = None,
         timeout: float | None = -1.0,
+        _loaded: bool = False,
     ) -> Any:
         self._id += 1
         payload = {"jsonrpc": "1.0", "id": self._id, "method": method, "params": params or []}
@@ -107,11 +109,18 @@ class BitcoindClient:
                 try:
                     on_disk = wallet in self.list_wallet_dir()
                 except BitcoindError:
-                    on_disk = True  # can't tell: assume it exists, suggest load
+                    on_disk = True  # can't tell: assume it exists, try loading
+                if on_disk and not _loaded:
+                    # The wallet is right there and the user just asked to use
+                    # it: load it and carry on rather than making them run
+                    # loadwallet by hand. Retried once (_loaded) so a wallet
+                    # that loads but still 404s can't loop.
+                    self._load_wallet(wallet)
+                    return self._call(method, params, wallet=wallet, timeout=timeout, _loaded=True)
                 if on_disk:
                     raise BitcoindError(
-                        f"wallet {wallet!r} exists but is not loaded in Bitcoin Core. "
-                        f"Load it with: bitcoin-cli loadwallet {wallet}"
+                        f"wallet {wallet!r} exists but Bitcoin Core will not keep it "
+                        f"loaded. Try: bitcoin-cli loadwallet {wallet}"
                     )
                 raise BitcoindError(
                     f"wallet {wallet!r} does not exist. "
@@ -139,6 +148,21 @@ class BitcoindClient:
     ) -> Any:
         """Invoke a wallet-scoped RPC against /wallet/<name>."""
         return self._call(method, params, wallet=wallet, timeout=timeout)
+
+    def _load_wallet(self, wallet: str) -> None:
+        """Load a wallet that is on disk but not loaded in Bitcoin Core.
+
+        Loading is not always instant — Core rescans a wallet that fell behind
+        the chain — so say what is happening on stderr (stdout stays parseable)
+        and wait as long as it takes rather than timing out mid-load."""
+        print(f"loading wallet {wallet!r}…", file=sys.stderr, flush=True)
+        try:
+            self._call("loadwallet", [wallet], timeout=None)
+        except BitcoindError as e:
+            # Another process may have loaded it in the meantime — that is the
+            # outcome we wanted, not a failure.
+            if "already loaded" not in str(e).lower():
+                raise
 
     def list_wallet_dir(self) -> list[str]:
         """Names of wallets present in Bitcoin Core's wallet directory (whether
