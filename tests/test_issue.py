@@ -24,6 +24,8 @@ class FakeBtc:
         self.sent = None
 
     def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listunspent":   # ensure_funded: the source pays its own fee
+            return [{"address": OWNER, "amount": 0.01, "spendable": True}]
         assert method == "signrawtransactionwithwallet"
         return {"complete": True, "hex": "signed00"}
 

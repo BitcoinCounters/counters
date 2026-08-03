@@ -41,6 +41,7 @@ from .send import (
     _sign_and_broadcast,
     _to_raw_quantity,
 )
+from .funding import compose_retrying, ensure_funded
 from .wallet import _wallet_addresses
 
 # counterparty-core lib/messages/order.py
@@ -97,6 +98,8 @@ def cmd_open_order(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -179,11 +182,15 @@ def cmd_open_order(
     except (CounterpartyError, ValueError, TypeError):
         pass
 
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     try:
-        composed = cp.compose_order(
+        composed = compose_retrying(lambda: cp.compose_order(
             source, give_asset, give_raw, get_asset, get_raw, expiration,
             fee_required=fee_required, sat_per_vbyte=fee_rate,
-        )
+        ), fund.funded)
     except CounterpartyError as e:
         return _report_compose_failure(e, source, give_asset)
     rawtx = composed.get("rawtransaction")
@@ -240,6 +247,8 @@ def cmd_cancel_order(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -265,8 +274,13 @@ def cmd_cancel_order(
         (order.get("give_asset_info") or {}).get("divisible"))
     give_remaining = int(order.get("give_remaining") or 0)
 
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     try:
-        composed = cp.compose_cancel_order(source, order_hash, sat_per_vbyte=fee_rate)
+        composed = compose_retrying(lambda: cp.compose_cancel_order(
+            source, order_hash, sat_per_vbyte=fee_rate), fund.funded)
     except CounterpartyError as e:
         return _report_compose_failure(e, source, give_asset or "the order")
     rawtx = composed.get("rawtransaction")

@@ -34,6 +34,7 @@ import sys
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .funding import compose_retrying, ensure_funded
 from .send import (
     _confirm_prompt,
     _fmt_raw,
@@ -79,6 +80,8 @@ def cmd_burn(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -135,15 +138,21 @@ def cmd_burn(
         print("aborted", file=sys.stderr)
         return 1
 
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
+
     try:
-        composed = cp.compose_destroy(source, asset, need, tag=tag, sat_per_vbyte=fee_rate)
+        composed = compose_retrying(lambda: cp.compose_destroy(
+            source, asset, need, tag=tag, sat_per_vbyte=fee_rate), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
         print(f"compose failed: {msg}", file=sys.stderr)
-        if "No UTXOs" in msg or "inputs_set" in msg:
+        if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
             print(f"hint: {source} holds {asset} but has no spendable BTC. A destroy "
-                  f"is sourced from the asset-holding address, so fund it with a "
-                  f"little BTC (for the tx fee), then retry.", file=sys.stderr)
+                  f"is sourced from the asset-holding address, so it pays its own "
+                  f"fee. Drop --no-fund to top it up automatically.", file=sys.stderr)
         return 1
     rawtx = composed.get("rawtransaction")
     if not rawtx:
