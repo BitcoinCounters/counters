@@ -210,6 +210,17 @@ def main(argv: list[str] | None = None) -> int:
     # never clobbers the wallet-level value when absent.
     wname = argparse.ArgumentParser(add_help=False)
     wname.add_argument("--name", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    # Every Counterparty message is debited from ONE address and paid for by
+    # that same address's coins, so a source holding only tokens is topped up
+    # automatically. These pin who pays, or turn the top-up off.
+    fundargs = argparse.ArgumentParser(add_help=False)
+    fundargs.add_argument("--fund-from", metavar="ADDRESS", default=None,
+                          help="pay for the source's top-up from this address instead "
+                               "of wallet-wide coin selection")
+    fundargs.add_argument("--no-fund", action="store_true",
+                          help="never move BTC to the source; compose against whatever "
+                               "it already holds and fail if that is not enough")
     p_wallet = sub.add_parser(
         "wallet",
         parents=[common],
@@ -285,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="last block to scan (default: chain tip)")
     wsub.add_parser("inscriptions", parents=[common, wname], help="counters held by this wallet")
     p_insc = wsub.add_parser(
-        "inscribe", parents=[common, wname], help="mint a counter from a file"
+        "inscribe", parents=[common, wname, fundargs], help="mint a counter from a file"
     )
     p_insc.add_argument("--file", required=True, help="file to inscribe")
     p_insc.add_argument("--asset",
@@ -304,16 +315,6 @@ def main(argv: list[str] | None = None) -> int:
     p_insc.add_argument("--inputs-set", metavar="TXID:VOUT[,...]",
                         help="pin the exact UTXO(s) that fund the commit (Counterparty "
                              "inputs_set format)")
-    p_insc.add_argument("--fund-from", metavar="ADDRESS",
-                        help="pay for the source's top-up from this address instead of "
-                             "wallet-wide coin selection. A short source is funded "
-                             "automatically; Counterparty takes the issuance fee from "
-                             "the first input's address, so the source must own its own "
-                             "coins — this consolidates rather than trying to fund "
-                             "across addresses")
-    p_insc.add_argument("--no-fund", action="store_true",
-                        help="never move BTC to the source; compose against whatever it "
-                             "already holds and fail if that is not enough")
     p_insc.add_argument("--dry-run", action="store_true",
                         help="compose + sign but do not broadcast; print raw hex")
     p_insc.add_argument("--no-mempool-check", action="store_true",
@@ -323,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                              "directly to a miner")
 
     p_send = wsub.add_parser(
-        "send", parents=[common, wname],
+        "send", parents=[common, wname, fundargs],
         help="transfer a counter (asset), or plain BTC, to an address",
         usage="counters wallet [--name NAME] send <ADDRESS> <ASSET|BTC> <AMOUNT>\n"
               "       counters wallet [--name NAME] send --destination ADDRESS "
@@ -342,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_lock_supply = wsub.add_parser(
-        "lock-supply", parents=[common, wname], aliases=["lock"],
+        "lock-supply", parents=[common, wname, fundargs], aliases=["lock"],
         help="freeze an asset's supply (no future issuance can change it)",
     )
     _add_dual(p_lock_supply, "asset", "asset",
@@ -353,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
                                help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_lock_desc = wsub.add_parser(
-        "lock-description", parents=[common, wname],
+        "lock-description", parents=[common, wname, fundargs],
         help="freeze an asset's description (the image/metadata reference)",
     )
     _add_dual(p_lock_desc, "asset", "asset",
@@ -364,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
                              help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_issue = wsub.add_parser(
-        "issue", parents=[common, wname],
+        "issue", parents=[common, wname, fundargs],
         help="issue additional supply of an existing asset you own",
     )
     _add_dual(p_issue, "asset", "asset",
@@ -379,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_xfer = wsub.add_parser(
-        "transfer-ownership", parents=[common, wname],
+        "transfer-ownership", parents=[common, wname, fundargs],
         help="hand an asset's issuance rights (reissue/lock/reinscribe) to an address",
         usage="counters wallet [--name NAME] transfer-ownership <ASSET> <ADDRESS>",
     )
@@ -394,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_burn = wsub.add_parser(
-        "burn", parents=[common, wname],
+        "burn", parents=[common, wname, fundargs],
         help="permanently destroy a quantity of an asset (Counterparty destroy)",
         usage="counters wallet [--name NAME] burn <ASSET> <AMOUNT>",
     )
@@ -438,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_dopen = wsub.add_parser(
-        "open-dispenser", parents=[common, wname],
+        "open-dispenser", parents=[common, wname, fundargs],
         help="open a dispenser: escrow an asset and vend it for BTC",
         usage="counters wallet [--name NAME] open-dispenser <ASSET> <AMOUNT> --price SATS [--lot AMOUNT]",
     )
@@ -461,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_drefill = wsub.add_parser(
-        "refill-dispenser", parents=[common, wname],
+        "refill-dispenser", parents=[common, wname, fundargs],
         help="add stock to an open dispenser (same terms; max 5 refills)",
         usage="counters wallet [--name NAME] refill-dispenser <ASSET> <AMOUNT>",
     )
@@ -477,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
                            help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_dclose = wsub.add_parser(
-        "close-dispenser", parents=[common, wname],
+        "close-dispenser", parents=[common, wname, fundargs],
         help="close a dispenser (vends ~5 more blocks, then returns unsold stock)",
         usage="counters wallet [--name NAME] close-dispenser <ASSET>",
     )
@@ -495,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="list the dispensers this wallet runs")
 
     p_oopen = wsub.add_parser(
-        "open-order", parents=[common, wname],
+        "open-order", parents=[common, wname, fundargs],
         help="place a DEX order (BTC allowed on either side)",
         usage="counters wallet [--name NAME] open-order <GIVE_ASSET> <GIVE_AMOUNT> "
               "<GET_ASSET> <GET_AMOUNT>",
@@ -524,7 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                          help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_ocancel = wsub.add_parser(
-        "cancel-order", parents=[common, wname],
+        "cancel-order", parents=[common, wname, fundargs],
         help="withdraw an open DEX order (returns its escrow); not the RBF `cancel`",
         usage="counters wallet [--name NAME] cancel-order <TXHASH>",
     )
@@ -658,16 +659,19 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_send, args, "asset"),
                     _dual_value(p_send, args, "amount"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command in ("lock-supply", "lock"):
                 return issue.cmd_lock_supply(
                     config, args.name, _dual_value(p_lock_supply, args, "asset"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "lock-description":
                 return issue.cmd_lock_description(
                     config, args.name, _dual_value(p_lock_desc, args, "asset"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "issue":
                 return issue.cmd_issue(
@@ -675,6 +679,7 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_issue, args, "asset"),
                     _dual_value(p_issue, args, "amount"),
                     lock=args.lock, fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "burn":
                 return burn.cmd_burn(
@@ -683,6 +688,7 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_burn, args, "amount"),
                     tag=args.tag, source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "buy-from-dispenser":
                 return dispenser.cmd_buy_from_dispenser(
@@ -700,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.price,
                     lot=args.lot, source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "refill-dispenser":
                 return dispenser.cmd_refill_dispenser(
@@ -708,12 +715,14 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_drefill, args, "amount"),
                     source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "close-dispenser":
                 return dispenser.cmd_close_dispenser(
                     config, args.name, _dual_value(p_dclose, args, "asset"),
                     source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "dispensers":
                 return dispenser.cmd_list_dispensers(config, args.name)
@@ -727,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
                     expiration=args.expiration, fee_required=args.fee_required,
                     source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "cancel-order":
                 return order.cmd_cancel_order(
@@ -734,6 +744,7 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_ocancel, args, "order_hash"),
                     fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "pay-order":
                 return order.cmd_pay_order(
@@ -761,6 +772,7 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_xfer, args, "asset"),
                     _dual_value(p_xfer, args, "destination"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "restore":
                 return wallet.cmd_wallet_restore(

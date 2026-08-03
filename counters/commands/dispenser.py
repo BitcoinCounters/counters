@@ -48,6 +48,7 @@ from .send import (
     _sign_and_broadcast,
     _to_raw_quantity,
 )
+from .funding import compose_retrying, ensure_funded
 from .wallet import _wallet_addresses
 
 # counterparty-core lib/messages/dispenser.py
@@ -281,6 +282,8 @@ def cmd_open_dispenser(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -336,11 +339,15 @@ def cmd_open_dispenser(
                   file=sys.stderr)
         return 1
 
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     try:
-        composed = cp.compose_dispenser(
+        composed = compose_retrying(lambda: cp.compose_dispenser(
             source, asset, lot_raw, escrow_raw, price, status=STATUS_OPEN,
             sat_per_vbyte=fee_rate,
-        )
+        ), fund.funded)
     except CounterpartyError as e:
         return _report_compose_failure(e, source, asset)
     rawtx = composed.get("rawtransaction")
@@ -381,6 +388,8 @@ def cmd_refill_dispenser(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -416,11 +425,15 @@ def cmd_refill_dispenser(
               f"{_fmt_raw(escrow_raw, divisible)} to add", file=sys.stderr)
         return 1
 
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     try:
-        composed = cp.compose_dispenser(
+        composed = compose_retrying(lambda: cp.compose_dispenser(
             source, asset, lot_raw, escrow_raw, rate, status=STATUS_OPEN,
             sat_per_vbyte=fee_rate,
-        )
+        ), fund.funded)
     except CounterpartyError as e:
         return _report_compose_failure(e, source, asset)
     rawtx = composed.get("rawtransaction")
@@ -455,6 +468,8 @@ def cmd_close_dispenser(
     fee_rate: float | None = None,
     assume_yes: bool = False,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -477,10 +492,14 @@ def cmd_close_dispenser(
 
     # A close still carries the three quantity fields; zeros are the protocol's
     # close convention.
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     try:
-        composed = cp.compose_dispenser(
+        composed = compose_retrying(lambda: cp.compose_dispenser(
             source, asset, 0, 0, 0, status=STATUS_CLOSED, sat_per_vbyte=fee_rate,
-        )
+        ), fund.funded)
     except CounterpartyError as e:
         return _report_compose_failure(e, source, asset)
     rawtx = composed.get("rawtransaction")
@@ -536,7 +555,8 @@ def _address_asset_balance(cp, address: str, asset: str) -> int:
 def _report_compose_failure(e: CounterpartyError, source: str, asset: str) -> int:
     msg = str(e)
     print(f"compose failed: {msg}", file=sys.stderr)
-    if "No UTXOs" in msg or "inputs_set" in msg:
+    if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
         print(f"hint: {source} holds {asset} but has no spendable BTC for the tx "
-              f"fee — fund it with a little BTC and retry.", file=sys.stderr)
+              f"fee — it pays its own way, so drop --no-fund to top it up "
+              f"automatically.", file=sys.stderr)
     return 1

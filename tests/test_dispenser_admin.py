@@ -45,6 +45,8 @@ class FakeBtc:
         raise AssertionError(f"unexpected _call {method}")
 
     def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listunspent":   # ensure_funded: the source pays its own fee
+            return [{"address": SOURCE, "amount": 0.01, "spendable": True}]
         assert method == "signrawtransactionwithwallet"
         return {"complete": True, "hex": "signed00"}
 

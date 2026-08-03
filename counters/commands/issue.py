@@ -36,6 +36,7 @@ import sys
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .funding import compose_retrying, ensure_funded
 from .send import _fmt_raw, _is_valid_address, _sign_and_broadcast, _to_raw_quantity
 from .wallet import _wallet_addresses
 
@@ -69,23 +70,23 @@ def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
 
 def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
              lock: bool, description, transfer_destination: str | None = None,
-             fee_rate: float | None = None) -> str | None:
+             fee_rate: float | None = None, funded: bool = False) -> str | None:
     """Compose the issuance from the owner address; return its unsigned raw tx,
     or None after printing the failure (with a funding hint when relevant)."""
     try:
-        composed = cp.compose_issuance(
+        composed = compose_retrying(lambda: cp.compose_issuance(
             source=owner, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock,
             transfer_destination=transfer_destination,
             sat_per_vbyte=fee_rate,
-        )
+        ), funded)
     except CounterpartyError as e:
         msg = str(e)
         print(f"compose failed: {msg}", file=sys.stderr)
-        if "No UTXOs" in msg or "inputs_set" in msg:
+        if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
             print(f"hint: {owner} owns {asset} but has no spendable BTC. The issuance is "
-                  f"sourced from the owner address, so fund it with a little BTC (for the "
-                  f"tx fee), then retry.", file=sys.stderr)
+                  f"sourced from the owner address, so it pays its own fee. Drop "
+                  f"--no-fund to top it up automatically.", file=sys.stderr)
         return None
     rawtx = composed.get("rawtransaction")
     if not rawtx:
@@ -95,7 +96,8 @@ def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
 
 
 def cmd_lock_supply(config: Config, wallet: str, asset: str,
-                    fee_rate: float | None = None, dry_run: bool = False) -> int:
+                    fee_rate: float | None = None, dry_run: bool = False,
+                    fund_from: str | None = None, no_fund: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -114,8 +116,13 @@ def cmd_lock_supply(config: Config, wallet: str, asset: str,
     # re-sending it in an OP_RETURN issuance would fail for large content or
     # rewrite the stored content's MIME classification. Omitted, Counterparty
     # preserves it.
+    fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=divisible,
-                     lock=True, description=None, fee_rate=fee_rate)
+                     lock=True, description=None, fee_rate=fee_rate,
+                     funded=fund.funded)
     if rawtx is None:
         return 1
 
@@ -127,7 +134,8 @@ def cmd_lock_supply(config: Config, wallet: str, asset: str,
 
 
 def cmd_lock_description(config: Config, wallet: str, asset: str,
-                         fee_rate: float | None = None, dry_run: bool = False) -> int:
+                         fee_rate: float | None = None, dry_run: bool = False,
+                         fund_from: str | None = None, no_fund: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -142,8 +150,13 @@ def cmd_lock_description(config: Config, wallet: str, asset: str,
     # (The asset API doesn't expose description_locked, so a double-lock is left
     # for Counterparty to reject — "Cannot update a locked description".)
     divisible = bool(info.get("divisible"))
+    fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=divisible,
-                     lock=False, description="LOCK_DESCRIPTION", fee_rate=fee_rate)
+                     lock=False, description="LOCK_DESCRIPTION", fee_rate=fee_rate,
+                     funded=fund.funded)
     if rawtx is None:
         return 1
 
@@ -156,7 +169,8 @@ def cmd_lock_description(config: Config, wallet: str, asset: str,
 
 
 def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination: str,
-                           fee_rate: float | None = None, dry_run: bool = False) -> int:
+                           fee_rate: float | None = None, dry_run: bool = False,
+                           fund_from: str | None = None, no_fund: bool = False) -> int:
     """Hand an asset's issuance rights to another address.
 
     A zero-quantity issuance carrying `transfer_destination`: the recipient
@@ -192,9 +206,13 @@ def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination:
     # description omitted (None): preserve the asset's content — see lock-supply.
     # lock=False leaves the supply lock as it is; locks are one-way, so this
     # can never unlock an already-locked asset.
+    fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     rawtx = _compose(cp, owner, asset, quantity=0, divisible=bool(info.get("divisible")),
                      lock=False, description=None, transfer_destination=destination,
-                     fee_rate=fee_rate)
+                     fee_rate=fee_rate, funded=fund.funded)
     if rawtx is None:
         return 1
 
@@ -210,7 +228,8 @@ def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination:
 
 def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
               lock: bool = False, fee_rate: float | None = None,
-              dry_run: bool = False) -> int:
+              dry_run: bool = False,
+              fund_from: str | None = None, no_fund: bool = False) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -233,8 +252,13 @@ def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
         return 1
 
     # description omitted (None): preserve the asset's content — see lock-supply.
+    fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
     rawtx = _compose(cp, owner, asset, quantity=raw, divisible=divisible,
-                     lock=lock, description=None, fee_rate=fee_rate)
+                     lock=lock, description=None, fee_rate=fee_rate,
+                     funded=fund.funded)
     if rawtx is None:
         return 1
 

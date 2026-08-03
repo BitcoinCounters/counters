@@ -109,6 +109,8 @@ def cmd_send(
     amount: str,
     fee_rate: float | None = None,
     dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
 ) -> int:
     # BTC is not a Counterparty asset — it takes the plain-bitcoin path.
     if asset.upper() == "BTC":
@@ -162,15 +164,24 @@ def cmd_send(
         )
         return 1
 
+    from .funding import compose_retrying, ensure_funded   # local: funding imports us
+
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run,
+                         outputs=1)
+    if fund.code is not None:
+        return fund.code
+
     try:
-        composed = cp.compose_send(source, asset, need, destination, sat_per_vbyte=fee_rate)
+        composed = compose_retrying(lambda: cp.compose_send(
+            source, asset, need, destination, sat_per_vbyte=fee_rate), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
         print(f"compose failed: {msg}", file=sys.stderr)
-        if "No UTXOs" in msg or "inputs_set" in msg:
+        if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
             print(f"hint: {source} holds {asset} but has no spendable BTC. A send is "
-                  f"sourced from the asset-holding address, so fund it with a little "
-                  f"BTC (for the tx fee), then retry.", file=sys.stderr)
+                  f"sourced from the asset-holding address, so it pays its own fee. "
+                  f"Drop --no-fund to top it up automatically.", file=sys.stderr)
         return 1
     rawtx = composed.get("rawtransaction")
     if not rawtx:
