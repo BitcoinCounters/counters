@@ -63,6 +63,14 @@ class Config:
     # Counterparty Core v2 API
     cp_api_url: str = field(default_factory=lambda: _env("CP_API_URL", "http://127.0.0.1:4000"))
 
+    # MARA Slipstream — out-of-band submission for oversized inscriptions.
+    # The key is OPTIONAL: submission works unauthenticated, and a key only
+    # applies whatever fee discount MARA has assigned it.
+    slipstream_api_url: str = field(
+        default_factory=lambda: _env("SLIPSTREAM_API_URL", "https://slipstream.mara.com")
+    )
+    slipstream_api_key: str = field(default_factory=lambda: _env("SLIPSTREAM_API_KEY", ""))
+
     # Storage
     data_dir: str = field(
         default_factory=lambda: _env(
