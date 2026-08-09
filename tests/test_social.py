@@ -210,7 +210,13 @@ def test_card_wraps_without_dropping_content():
     assert card._wrap("a" * 100, 4, 2) == ["aaaa", "a..."]
     assert card.fmt_size(64) == "64 B"
     assert card.fmt_size(2048) == "2.0 KB"
-    assert card.fmt_size(1433209) == "1.37 MB"
+    assert card.fmt_size(1433209) == "1.43 MB"
+    # Decimal, like mempool.space — and like the explorer's own size badges,
+    # whose thresholds are decimal. Binary divisors rendered these as
+    # "390.6 KB" and "3.34 MB", contradicting the "over 400 KB" / "over 3.5 MB"
+    # badge sitting beside them.
+    assert card.fmt_size(400_000) == "400.0 KB"
+    assert card.fmt_size(3_500_000) == "3.50 MB"
 
 
 # --- server ---------------------------------------------------------------

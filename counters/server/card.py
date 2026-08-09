@@ -178,12 +178,16 @@ def _wrap(s: str, cols: int, max_lines: int) -> list[str]:
 
 
 def fmt_size(n: int) -> str:
-    """Byte counts exactly as the explorer's `fmtSize` prints them."""
-    if n < 1024:
+    """Byte counts exactly as the explorer's `fmtSize` prints them.
+
+    Decimal units, matching mempool.space and the explorer's own decimal
+    LARGE_BYTES/WHOLE_BLOCK_BYTES thresholds.
+    """
+    if n < 1000:
         return f"{n} B"
-    if n < 1048576:
-        return f"{n / 1024:.1f} KB"
-    return f"{n / 1048576:.2f} MB"
+    if n < 1_000_000:
+        return f"{n / 1000:.1f} KB"
+    return f"{n / 1_000_000:.2f} MB"
 
 
 def _meter(c: Canvas, x: int, y: int, number: int, scale: int) -> None:

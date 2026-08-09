@@ -510,7 +510,11 @@ function sampleRender(c){
     ${esc(t)}</div></div>`;
 }
 const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m]));
-const fmtSize=b=> b<1024?`${b} B`: b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(2)} MB`;
+// Decimal (1 KB = 1000 B), matching mempool.space and every block explorer a
+// counter gets compared against — and matching LARGE_BYTES/WHOLE_BLOCK_BYTES
+// below, which are decimal. Binary divisors printed "390.6 KB" next to a badge
+// reading "over 400 KB". Keep in step with card.py's fmt_size.
+const fmtSize=b=> b<1000?`${b} B`: b<1e6?`${(b/1000).toFixed(1)} KB`:`${(b/1e6).toFixed(2)} MB`;
 const LARGE_BYTES=400000;      // over 400 KB: too big for standard relay, mined direct
 const WHOLE_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
 const sizeTag=c=> c.size>WHOLE_BLOCK_BYTES?'whole block': c.size>LARGE_BYTES?'large': null;
