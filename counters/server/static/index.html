@@ -481,8 +481,21 @@ function renderContent(c){
   // — the immutable /content bytes cache in the browser like any image.
   if(API){
     const ct=(c.content_type||'').split(';')[0].trim().toLowerCase();
+    // PDFs are the one kind that needs BOTH: scripts, because the browser's own
+    // PDF viewer is a plugin and the sandbox blocks plugins in every frame, so
+    // pdf.js has to paint the pages itself; and same-origin, because an opaque
+    // origin cannot start a worker or load a module, and pdf.js without a
+    // worker renders nothing at all. What runs in that frame is still only our
+    // own wrapper and our own vendored pdf.js — never the inscription's markup,
+    // the way HTML/SVG counters are. The PDF is *data* handed to a parser that
+    // does not execute a PDF's embedded JavaScript, so the frame never hosts
+    // attacker-controlled code; that is why it can hold the origin that raw
+    // HTML and SVG must never be given. allow-downloads keeps the
+    // "Download the PDF" fallback working if pdf.js is what failed.
     const active=ct==='text/html'||ct==='image/svg+xml'||ct.startsWith('model/');
-    const sandbox=active?'allow-scripts':'allow-same-origin';
+    const sandbox=ct==='application/pdf'
+                 ?'allow-scripts allow-same-origin allow-downloads'
+                 :active?'allow-scripts':'allow-same-origin';
     return `<div class="render"><iframe class="sandboxed" sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" title="counter ${c.number}" src="${API}/preview/${c.number}"></iframe></div>`;
   }
   return sampleRender(c);   // file:// has no server: render the bundled sample inline

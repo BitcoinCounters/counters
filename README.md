@@ -338,6 +338,42 @@ PNG codec over `zlib`, and `glyphs.py` embeds the public-domain X11
 `$COUNTER_DATA_DIR/social`, keyed by content hash and renderer version, so a
 redesign invalidates them and the directory is safe to delete at any time.
 
+## PDFs
+
+Counters run to whole blocks, so a counter can be an entire book. A PDF counter
+previews as a scrolling document: every page in one column, painted as it comes
+into view and released once it is well past, so a 400-page file costs about a
+screenful of bitmap rather than hundreds of megabytes. `/content/<n>` serves
+`Range`, and the viewer asks for byte ranges as it goes — a card thumbnail
+showing page 1 costs a few KB, not the whole inscription.
+
+This is the one media kind whose frame gets a real origin
+(`sandbox="allow-scripts allow-same-origin"`), and the reason is worth writing
+down, because it is the only place the preview model bends:
+
+* **The browser's own PDF viewer can never be used.** It is a plugin, and the
+  sandbox flags that confine every preview frame block plugins outright — a
+  PDF in an `<iframe>` renders as a broken-document icon and nothing else.
+  So the pages have to be painted by JavaScript, which means pdf.js.
+* **pdf.js cannot run on an opaque origin.** A frame without
+  `allow-same-origin` cannot start a worker, and cannot load an ES module at
+  all — the entry script arrives, its imports are never fetched, and a dynamic
+  `import()` hangs instead of failing. Without a worker pdf.js falls back to
+  decoding on the main thread, and that fallback paints nothing.
+
+What that frame runs is still only our own wrapper and our own vendored pdf.js;
+the inscription is *data* handed to a parser that does not execute a PDF's
+embedded JavaScript, with `isEvalSupported` off. That is the difference from an
+HTML or SVG counter, which really is executable content and must keep the
+opaque origin it has today.
+
+pdf.js is vendored (`static/pdfjs.min.js` + its worker, ~1.4 MB, pinned to
+3.11.174 — 4.x ships ES modules only) rather than loaded from a CDN, so the
+explorer renders the same offline as online. The standard 14 fonts ship with it
+(~0.8 MB): a PDF paying by the on-chain byte has every reason to name a base
+font instead of embedding one, and without that data such a file renders with
+no text at all.
+
 ## Tests
 
 ```bash
@@ -382,6 +418,11 @@ counters/
     card.py         the 1200x630 og:image drawn for non-image counters
     png.py          minimal PNG encoder/decoder/downscaler (stdlib only)
     glyphs.py       embedded public-domain bitmap font (generated)
+    static/
+      preview-pdf.js         the scrolling PDF viewer (see "PDFs" below)
+      pdfjs.min.js           vendored pdf.js 3.11.174 (classic build)
+      pdfjs.worker.min.js    its decoder worker
+      pdfjs-standard-fonts/  the standard 14 fonts, for PDFs that embed none
 docs/
   build-reference-v3.md   the authoritative protocol spec (v3)
   build-reference-v2.md   superseded COUNT-envelope spec (historical)

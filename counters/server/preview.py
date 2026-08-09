@@ -85,7 +85,17 @@ _CSP = {
     "image": "default-src 'self'",
     "markdown": "default-src 'self'",
     "model": "default-src 'self'; script-src 'self' https://ajax.googleapis.com; style-src 'self' 'unsafe-inline'",
-    "pdf": "default-src 'self'",
+    # pdf.js is vendored, so this policy never reaches off the server: the
+    # library, its worker and the standard fonts are all 'self'. The blob:
+    # allowances are pdf.js's own plumbing — it wraps its worker in a blob when
+    # it cannot load the script directly, and passes decoded images around as
+    # blob URLs. See static/preview-pdf.js.
+    "pdf": (
+        "default-src 'self'; "
+        "script-src 'self' blob:; "
+        "worker-src 'self' blob:; "
+        "img-src 'self' blob: data:"
+    ),
     "text": "default-src 'self'",
     "unknown": "default-src 'self'",
     "video": "default-src 'self'",
@@ -129,9 +139,18 @@ def wrapper(kind: str, number: int, content_type: str, extra: str | None,
     elif kind == "video":
         body = f"<body class='preview video'><video controls playsinline src={src}></video></body>"
     elif kind == "pdf":
+        # No native element to hand this to: the browser's PDF viewer is a
+        # plugin, and plugins are exactly what the sandbox flags forbid. The
+        # page is drawn by `static/preview-pdf.js` (pdf.js, one canvas per
+        # page) into the container below — see that file for why.
         body = (
             "<body class='preview pdf'>"
-            f"<iframe title='counter {number}' src={src}></iframe></body>"
+            f"<div id=pdfdoc data-src={src} data-number={number}></div>"
+            "<div id=pdfstatus>Loading…</div>"
+            "<div id=pdfpage></div>"
+            "<script src=/pdfjs.min.js></script>"
+            "<script src=/preview-pdf.js></script>"
+            "</body>"
         )
     elif kind == "font":
         body = (
