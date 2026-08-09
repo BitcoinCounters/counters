@@ -114,6 +114,8 @@ Core running on the host.
 | `BTC_COOKIE_FILE` | `~/.bitcoin/.cookie` | bitcoind cookie (preferred auth) |
 | `BTC_RPC_USER` / `BTC_RPC_PASSWORD` | — | fallback if no cookie |
 | `CP_API_URL` | `http://127.0.0.1:4000` | Counterparty Core v2 API |
+| `SLIPSTREAM_API_URL` | `https://slipstream.mara.com` | MARA Slipstream endpoint (`--slipstream`) |
+| `SLIPSTREAM_API_KEY` | — | optional; only applies a fee discount, never required to submit |
 | `COUNTER_DATA_DIR` | `data/` | SQLite + blobs location |
 | `COUNTER_START_HEIGHT` | `902000` | first block a fresh scan starts at (never below genesis) |
 | `COUNTER_CONFIRMATIONS` | `0` | blocks behind tip to stay (6 recommended for near-final numbering) |
@@ -238,6 +240,14 @@ counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from auto
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from bc1p...
 
+# --- large inscriptions: MARA Slipstream ---
+# Over 400k WU a reveal is non-standard: no node relays it and sendrawtransaction
+# is a dead end. --slipstream submits it straight to MARA's mempool instead.
+# No API key required. Pays Slipstream's live minimum rate unless --fee-rate is higher.
+counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream
+counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream --dry-run
+counters wallet inscribe --slipstream-status <TXID>   # the only way to watch it
+
 # --- asset management (owner-sourced Counterparty issuances) ---
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
 counters wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
@@ -263,6 +273,34 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > with a destination output (so no `transfer_destination` on an inscription
 > mint — an ownership transfer is always its own transaction), and attaching
 > new content to an existing asset requires its description to be unlocked.
+
+> **`--slipstream` — minting past the relay limit.** An inscription whose reveal
+> exceeds Bitcoin's 400,000 WU standard-relay cap is a perfectly *valid*
+> transaction that no node will forward, so the local node cannot publish it.
+> MARA Slipstream accepts such transactions directly into its own mempool.
+> Four things follow, and the flag handles each:
+>
+> - **No API key.** `/api/rates`, `/api/transactions` and the status endpoint all
+>   answer unauthenticated. `SLIPSTREAM_API_KEY` is honoured if set, but it only
+>   applies a fee discount MARA has assigned — it is never needed to mint.
+> - **The minimum fee rate is live.** It is the higher of `submit_fee_rate`× the
+>   current mempool priority rate or `submit_fee_rate` sat/vB, published resolved
+>   as `effective_rate`. `--slipstream` fetches it *before* funding (the source
+>   top-up is sized from the rate) and adopts it as the default. A `--fee-rate`
+>   *below* it is refused rather than silently raised — on a ~1M vB reveal, one
+>   sat/vB is ~1M sats.
+> - **A hard 3,991,000 WU ceiling** (~99.8% of a block) caps how large any single
+>   inscription can be. It is checked locally before the commit is sent, because
+>   past that point the reveal cannot be re-composed (see below).
+> - **Submissions stay private until mined** — they are not relayed publicly until
+>   they have a confirmation, so bitcoind and every explorer are blind to them.
+>   `--slipstream-status TXID` is the only way to watch one.
+>
+> Slipstream has no package endpoint, so the commit and reveal are submitted
+> individually, commit first. If the commit is accepted and the reveal is not,
+> the reveal hex is printed loudly: Counterparty signed that reveal with an
+> ephemeral key it discarded, making it the only transaction that can ever spend
+> the commit output — it cannot be re-composed, fee-bumped, or replaced.
 
 > **Dispensers cannot be paid with a plain BTC send.** Since Counterparty's
 > `disable_vanilla_btc_dispense` (block 866,000) a payment carrying no

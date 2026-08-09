@@ -298,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     p_insc = wsub.add_parser(
         "inscribe", parents=[common, wname, fundargs], help="mint a counter from a file"
     )
-    p_insc.add_argument("--file", required=True, help="file to inscribe")
+    p_insc.add_argument("--file", help="file to inscribe")
     p_insc.add_argument("--asset",
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
@@ -322,6 +322,20 @@ def main(argv: list[str] | None = None) -> int:
                              "over 400k WU) inscription that the local node won't relay; "
                              "use with --dry-run to get the commit/reveal hex to submit "
                              "directly to a miner")
+    p_insc.add_argument("--slipstream", action="store_true",
+                        help="mint an oversized inscription the relay network refuses: "
+                             "the commit goes out over normal relay (it is an ordinary "
+                             "small transaction) and only the oversized reveal goes to "
+                             "MARA Slipstream. No API key needed. Pays Slipstream's live "
+                             "minimum submission rate unless --fee-rate sets a higher one")
+    p_insc.add_argument("--slipstream-all", action="store_true",
+                        help="with --slipstream, send the COMMIT through Slipstream too "
+                             "instead of over public relay. Keeps the commit private "
+                             "until it confirms; use if a publicly-relayed commit is not "
+                             "visible to MARA in time for the reveal")
+    p_insc.add_argument("--slipstream-status", metavar="TXID",
+                        help="look up a Slipstream submission (it is invisible to "
+                             "bitcoind and to explorers until it confirms)")
 
     p_send = wsub.add_parser(
         "send", parents=[common, wname, fundargs],
@@ -644,6 +658,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         try:
             if args.wallet_command == "inscribe":
+                # A status lookup is a read, not a mint: no wallet, no file.
+                if args.slipstream_status:
+                    return inscribe.cmd_slipstream_status(config, args.slipstream_status)
+                if not args.file:
+                    p_insc.error("--file is required (or use --slipstream-status TXID)")
                 return inscribe.cmd_inscribe(
                     config, args.name, args.file,
                     asset=args.asset, fee_rate=args.fee_rate,
@@ -651,6 +670,8 @@ def main(argv: list[str] | None = None) -> int:
                     source=args.source, inputs_set=args.inputs_set,
                     dry_run=args.dry_run, no_mempool_check=args.no_mempool_check,
                     fund_from=args.fund_from, no_fund=args.no_fund,
+                    slipstream=args.slipstream,
+                    slipstream_all=args.slipstream_all,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(

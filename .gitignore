@@ -14,6 +14,11 @@ dist/
 .pytest_cache/
 .hypothesis/
 
+# Raw commit/reveal hex stashed by `inscribe --slipstream` before broadcast.
+# Contains no key material, but it is the only copy of a reveal that cannot be
+# re-composed — keep it locally until the mint confirms, never publish it.
+reveal-*.hex
+
 # Local env / editor
 .env
 .venv/

@@ -30,12 +30,20 @@ import mimetypes
 import os
 import random
 import sys
+import time
 from decimal import Decimal
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..slipstream import (
+    MAX_WEIGHT,
+    STANDARD_MAX_WEIGHT,
+    SlipstreamClient,
+    SlipstreamError,
+    describe_status,
+)
 from .funding import (
     _fund_source,
     compose_retrying,
@@ -194,6 +202,231 @@ def _reveal_fee_sat(commit_dec: dict, reveal_dec: dict) -> int | None:
     return round((total_in - total_out) * COIN)
 
 
+def _stash_hex(commit_hex: str, reveal_hex: str, reveal_txid: str) -> str:
+    """Write both raw transactions to disk BEFORE anything is broadcast.
+
+    The reveal cannot be re-composed: Counterparty signs it with an ephemeral
+    envelope key it discards, so the hex in memory is the only copy in
+    existence, and it is the only transaction that can ever spend the commit.
+    Printing it on the failure paths is not enough — stdout may be redirected,
+    a terminal may scroll, and a Ctrl-C between broadcast and submission takes
+    the process down with the hex still in RAM. So it goes to a file first, and
+    every later message points at that file.
+    """
+    path = os.path.abspath(f"reveal-{reveal_txid[:16]}.hex")
+    with open(path, "w") as fh:
+        fh.write(f"# reveal txid: {reveal_txid}\n")
+        fh.write(f"commit_raw: {commit_hex}\n")
+        fh.write(f"reveal_raw: {reveal_hex}\n")
+    print(f"saved raw transactions to {path}")
+    print("  keep this file until the reveal confirms — the reveal cannot be "
+          "re-composed and nothing else can spend the commit")
+    return path
+
+
+def _submit_split(
+    btc: BitcoindClient,
+    slip: SlipstreamClient,
+    commit_hex: str,
+    reveal_hex: str,
+    commit_txid: str,
+    reveal_txid: str,
+    reveal_weight: int | None,
+) -> int:
+    """Commit over public relay, reveal over Slipstream.
+
+    Only the reveal is oversized. The commit is an ordinary ~200 vB transaction
+    the relay network takes without complaint, and sending it the normal way
+    buys visibility the all-Slipstream path cannot: it appears in the local
+    mempool and in explorers immediately, instead of staying invisible until it
+    confirms.
+
+    The commit still goes FIRST, and the gap after it is the same hazard as
+    ever — once it is out, the pre-signed reveal is the only transaction that
+    can ever spend its output (Counterparty signed with an ephemeral key it
+    discarded; the 0-value OP_RETURN forecloses CPFP and the 64-byte signature
+    forecloses RBF), so a reveal Slipstream will not take strands those funds
+    permanently. Every failure path prints the reveal hex.
+
+    The new failure mode is propagation: MARA cannot accept a reveal whose
+    parent its node has not seen yet, so the reveal is retried on a backoff
+    rather than abandoned on the first refusal.
+    """
+    print()
+    stash = _stash_hex(commit_hex, reveal_hex, reveal_txid)
+
+    print(f"\nbroadcasting commit over public relay ({len(commit_hex) / 2:,.0f} bytes)…")
+    try:
+        ctxid = btc._call("sendrawtransaction", [commit_hex])
+    except BitcoindError as e:
+        print(f"\ncommit broadcast FAILED: {e}", file=sys.stderr)
+        print("\nNothing reached the chain — no coins moved and nothing is "
+              "stranded. Fix the cause and re-run; the hex in "
+              f"{stash} stays valid until its inputs are spent elsewhere.",
+              file=sys.stderr)
+        return 1
+    print(f"  accepted by the network: {ctxid}")
+
+    # Slipstream resolves a transaction's inputs from its own submissions and
+    # from the chain — NOT from the public mempool. A reveal whose parent is
+    # only in the public mempool therefore prices as fee 0 and is refused
+    # ("Fee rate of 0 is below the threshold"). Waiting for the commit to
+    # confirm is the only thing that makes the split work; retrying sooner
+    # cannot succeed, however long the backoff.
+    print(f"\nwaiting for the commit to confirm before the reveal can be "
+          f"submitted — Slipstream cannot price a reveal whose parent it "
+          f"cannot see, and it does not read the public mempool.")
+    print(f"  at this fee rate that can take a long time. Ctrl-C is safe: the "
+          f"hex is in {stash}, and the commit stays spendable by that reveal "
+          f"until it is used.")
+    while True:
+        try:
+            info = btc._call("getrawtransaction", [ctxid, True])
+        except BitcoindError as e:
+            print(f"  lost track of the commit: {e}", file=sys.stderr)
+            print(f"  the reveal is still the only spend of it; hex in {stash}",
+                  file=sys.stderr)
+            return 1
+        if (info.get("confirmations") or 0) >= 1:
+            print(f"  commit confirmed in block {info.get('blockhash', '?')[:16]}…")
+            break
+        time.sleep(30)
+
+    print(f"\nsubmitting reveal to Slipstream ({len(reveal_hex) / 2 / 1024:,.1f} kB)…")
+    try:
+        result = slip.submit(reveal_hex)
+    except SlipstreamError as e:
+        print(f"\nThe COMMIT IS CONFIRMED ON CHAIN but Slipstream would not take "
+              f"the reveal: {e}", file=sys.stderr)
+        print("\nThat reveal is the only transaction that can ever spend the commit "
+              "output — it cannot be re-composed, fee-bumped, or replaced. The hex is "
+              f"in {stash}; retry submitting it (the commit stays spendable until it "
+              "is used), or the commit's funds are lost.", file=sys.stderr)
+        return 1
+
+    note = result.get("message")
+    extra = f"  ({note})" if note and note != reveal_txid else ""
+    print(f"  accepted: {reveal_txid}{extra}")
+    print(f"\nsubmitted\n  commit: {ctxid}  (public — visible in explorers now)"
+          f"\n  reveal: {reveal_txid}  (Slipstream — invisible until it confirms)")
+    if reveal_weight:
+        print(f"  reveal weight: {reveal_weight:,} WU")
+
+    time.sleep(2)
+    try:
+        st = slip.status(reveal_txid)
+        print(f"  status: {describe_status(st)}")
+    except SlipstreamError as e:
+        print(f"  status unavailable: {e}", file=sys.stderr)
+
+    print("\nAcceptance is not a guarantee of mining — the transaction competes for "
+          "block space like any other.")
+    print("Track the reveal with:")
+    print(f"  counters wallet inscribe --slipstream-status {reveal_txid}")
+    print("the counter is numbered once the reveal confirms and Counterparty "
+          "parses the issuance.")
+    return 0
+
+
+def _submit_via_slipstream(
+    slip: SlipstreamClient,
+    commit_hex: str,
+    reveal_hex: str,
+    commit_txid: str,
+    reveal_txid: str,
+    reveal_weight: int | None,
+) -> int:
+    """Send the pair to Slipstream, commit first.
+
+    Slipstream has no package endpoint, so these are two independent calls and
+    the gap between them is the hazard. Once the commit is accepted, the
+    pre-signed reveal is the ONLY transaction that can ever spend its output:
+    Counterparty signed it with an ephemeral key it discarded, both spend paths
+    of the commit need that key, and the reveal's single 0-value OP_RETURN
+    output makes CPFP impossible and its 64-byte signature makes RBF
+    impossible. A reveal hex lost here strands the commit's funds forever, so
+    every failure path prints it.
+    """
+    print()
+    stash = _stash_hex(commit_hex, reveal_hex, reveal_txid)
+    print()
+    for name, raw, txid in (("commit", commit_hex, commit_txid),
+                            ("reveal", reveal_hex, reveal_txid)):
+        print(f"submitting {name} to Slipstream ({len(raw) / 2 / 1024:,.1f} kB)…")
+        try:
+            result = slip.submit(raw)
+        except SlipstreamError as e:
+            print(f"\n{name} submission FAILED: {e}", file=sys.stderr)
+            if name == "commit":
+                print("\nNothing reached the chain — the commit was not accepted, so "
+                      "no coins moved and nothing is stranded. Fix the cause and "
+                      "re-run; the hex below is still valid until its inputs are "
+                      "spent elsewhere.", file=sys.stderr)
+            else:
+                print("\nThe COMMIT WAS ACCEPTED but the reveal was not. That reveal "
+                      "is the only transaction that can ever spend the commit output "
+                      "— it cannot be re-composed, fee-bumped, or replaced. The hex is "
+                      f"in {stash}; retry submitting it, or the commit's funds are "
+                      "lost.", file=sys.stderr)
+            print(f"\nhex saved at: {stash}", file=sys.stderr)
+            return 1
+        note = result.get("message")
+        extra = f"  ({note})" if note and note != txid else ""
+        print(f"  accepted: {txid}{extra}")
+
+    print(f"\nsubmitted to Slipstream\n  commit: {commit_txid}\n  reveal: {reveal_txid}")
+    if reveal_weight:
+        print(f"  reveal weight: {reveal_weight:,} WU")
+
+    # Give MARA a moment to register it, then report what they say. This is the
+    # only view there is: a Slipstream submission is not relayed to the public
+    # network until it has a confirmation, so bitcoind and every block explorer
+    # stay blind to it until it is mined.
+    time.sleep(2)
+    try:
+        st = slip.status(reveal_txid)
+        print(f"  status: {describe_status(st)}")
+    except SlipstreamError as e:
+        print(f"  status unavailable: {e}", file=sys.stderr)
+
+    print("\nAcceptance is not a guarantee of mining — the transaction competes for "
+          "block space like any other.")
+    print("It stays invisible to bitcoind and to explorers until it confirms; track it with:")
+    print(f"  counters wallet inscribe --slipstream-status {reveal_txid}")
+    print("the counter is numbered once the reveal confirms and Counterparty "
+          "parses the issuance.")
+    return 0
+
+
+def cmd_slipstream_status(config: Config, txid: str) -> int:
+    """`--slipstream-status TXID` — the only way to watch a submission, since it
+    is not on the public network until it confirms."""
+    slip = SlipstreamClient(config)
+    try:
+        st = slip.status(txid)
+    except SlipstreamError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    tx = st.get("transaction") or {}
+    state = tx.get("status") or {}
+    print(f"txid     : {txid}")
+    print(f"status   : {describe_status(st)}")
+    if tx.get("weight"):
+        print(f"weight   : {tx['weight']:,} WU  ({tx.get('vsize', 0):,} vB)")
+    if tx.get("fee") is not None:
+        fee = tx["fee"]
+        vsize = tx.get("vsize") or 0
+        rate = f"  ({fee / vsize:.2f} sat/vB)" if vsize else ""
+        print(f"fee      : {fee:,} sat{rate}")
+    if state.get("confirmed"):
+        print(f"block    : {state.get('block_height')}  {state.get('block_hash', '')}")
+    else:
+        odds = st.get("last_24h_odds")
+        if odds is not None:
+            print(f"odds     : {odds} (last 24h)")
+    return 0
+
+
 def cmd_inscribe(
     config: Config,
     wallet: str,
@@ -209,6 +442,8 @@ def cmd_inscribe(
     no_mempool_check: bool = False,
     fund_from: str | None = None,
     no_fund: bool = False,
+    slipstream: bool = False,
+    slipstream_all: bool = False,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -235,6 +470,48 @@ def cmd_inscribe(
               f"UTF-8 — rename/convert the file or use a binary MIME type.",
               file=sys.stderr)
         return 1
+
+    # --slipstream: MARA mines what the relay network refuses, but on its own
+    # terms. Settle the rate HERE, before anything is funded: `need` below is
+    # sized from fee_rate, so letting it fall through as None (estimated at 1.0)
+    # against Slipstream's live minimum would under-fund the source severalfold
+    # and strand the compose.
+    slip: SlipstreamClient | None = None
+    if slipstream:
+        slip = SlipstreamClient(config)
+        try:
+            floor, mineable = slip.fee_floors()
+        except SlipstreamError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if fee_rate is None:
+            # Default to the mineable rate, not the floor: an unattended default
+            # should confirm rather than sit. Undercutting it is a choice the
+            # user makes explicitly, below.
+            fee_rate = mineable
+            print(f"slipstream       : submit floor {floor:g} sat/vB, mineable "
+                  f"{mineable:g} — using {mineable:g} (override with --fee-rate)")
+        elif fee_rate < floor:
+            # Never silently raise it. On a ~1M vB reveal one sat/vB is ~1M sat,
+            # so the difference is the user's money, not a detail to paper over.
+            print(f"--fee-rate {fee_rate:g} is below Slipstream's minimum submission "
+                  f"rate of {floor:g} sat/vB and would be rejected. Re-run with "
+                  f"--fee-rate {floor:g} or higher.", file=sys.stderr)
+            return 1
+        elif fee_rate < mineable:
+            # Accepted, but it sits in MARA's queue until the market falls to it.
+            print(f"slipstream       : submit floor {floor:g} sat/vB, paying "
+                  f"{fee_rate:g} — under the {mineable:g} sat/vB mineable rate, so "
+                  f"it will be accepted and wait, not confirm soon")
+        else:
+            print(f"slipstream       : submit floor {floor:g} sat/vB, mineable "
+                  f"{mineable:g}, paying {fee_rate:g}")
+        # Only the REVEAL is the transaction the local node won't relay. In the
+        # default split the commit still goes out over public relay, so the
+        # node's verdict on it is real evidence and worth having; it is only
+        # under --slipstream-all that neither leg touches the local node.
+        if slipstream_all:
+            no_mempool_check = True
 
     # Union the on-chain view with descriptor-derived addresses: Core omits
     # CHANGE addresses from listreceivedbyaddress, and XCP parked on one whose
@@ -388,13 +665,32 @@ def cmd_inscribe(
     # commit/reveal hex for you to submit directly to a miner.
     checks: list = []
     all_ok = True
+    split = slip is not None and not slipstream_all
     if not no_mempool_check:
+        # In a split submission only the commit is offered: it is the leg that
+        # actually goes over public relay, and including the oversized reveal
+        # would fail the whole package on `tx-size` by design. Slipstream judges
+        # the reveal.
+        batch = [commit_hex] if split else [commit_hex, reveal_hex]
         try:
-            checks = btc._call("testmempoolaccept", [[commit_hex, reveal_hex]])
+            checks = btc._call("testmempoolaccept", [batch])
         except BitcoindError as e:
             print(f"testmempoolaccept failed to run: {e}", file=sys.stderr)
             checks = []
         all_ok = bool(checks) and all(c.get("allowed") for c in checks)
+
+    # Slipstream's policy caps a transaction at MAX_WEIGHT. Check it here, while
+    # the only thing spent is time: past this point the commit goes on chain,
+    # and Counterparty signs the reveal with an ephemeral key it discards, so a
+    # commit whose reveal Slipstream will not accept is unrecoverable.
+    reveal_weight = reveal_dec.get("weight")
+    if slip is not None and reveal_weight and reveal_weight > MAX_WEIGHT:
+        over = reveal_weight - MAX_WEIGHT
+        print(f"\nreveal is {reveal_weight:,} WU — {over:,} over Slipstream's "
+              f"{MAX_WEIGHT:,} WU limit. It would be rejected on submission, so "
+              f"nothing was sent. Shrink the file by roughly {over // 4:,} bytes "
+              f"and re-run.", file=sys.stderr)
+        return 1
 
     # report
     if reinscribe:
@@ -422,7 +718,27 @@ def cmd_inscribe(
     if named:
         print("XCP cost         : 0.5 XCP (named-asset issuance burn)")
 
-    if no_mempool_check:
+    if reveal_weight:
+        print(f"reveal weight    : {reveal_weight:,} WU"
+              + (f" of {MAX_WEIGHT:,} allowed" if slip is not None else ""))
+    if slip is not None and reveal_weight and reveal_weight <= STANDARD_MAX_WEIGHT:
+        print(f"note             : at {reveal_weight:,} WU this is under the "
+              f"{STANDARD_MAX_WEIGHT:,} WU standard-relay cap — the public network "
+              f"would take it, usually cheaper. --slipstream is for what it won't.")
+
+    if split:
+        print("\nsubmission route : commit over public relay, reveal to Slipstream")
+        print("commit validity (testmempoolaccept):")
+        for c in checks:
+            verdict = "allowed" if c.get("allowed") else f"REJECTED: {c.get('reject-reason')}"
+            print(f"  {c.get('txid', '?')[:16]}…  {verdict}")
+        print("reveal validity  : not checked locally — the relay network refuses it "
+              "by design; Slipstream is the judge")
+    elif slip is not None:
+        print("\nsubmission route : commit and reveal both to Slipstream (--slipstream-all)")
+        print("package validity : not checked locally — this is a transaction the "
+              "relay network refuses by design; Slipstream is the judge")
+    elif no_mempool_check:
         print("\npackage validity : skipped (--no-mempool-check); submit the hex "
               "below directly to a miner")
     else:
@@ -436,6 +752,23 @@ def cmd_inscribe(
         print(f"commit_raw: {commit_hex}")
         print(f"reveal_raw: {reveal_hex}")
         return 0 if all_ok else 1
+
+    if split:
+        # The commit is about to go out over public relay; refusing on its own
+        # testmempoolaccept verdict is the last cheap place to stop.
+        if not all_ok:
+            print("\nrefusing to broadcast: the commit failed validation (see above).",
+                  file=sys.stderr)
+            print(f"commit_raw: {commit_hex}\nreveal_raw: {reveal_hex}", file=sys.stderr)
+            return 1
+        return _submit_split(
+            btc, slip, commit_hex, reveal_hex, unsigned_txid, reveal_txid, reveal_weight
+        )
+
+    if slip is not None:
+        return _submit_via_slipstream(
+            slip, commit_hex, reveal_hex, unsigned_txid, reveal_txid, reveal_weight
+        )
 
     if not all_ok:
         print("\nrefusing to broadcast: package failed validation (see above).", file=sys.stderr)
