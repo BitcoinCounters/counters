@@ -156,6 +156,12 @@ CONTENT_HEADERS = [
     ("Content-Security-Policy", "default-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:"),
     ("Content-Security-Policy", "default-src *:*/content/ 'unsafe-eval' 'unsafe-inline' data: blob:"),
     ("X-Content-Type-Options", "nosniff"),
+    # A scripted preview reads these bytes from an opaque origin (the
+    # `sandbox=allow-scripts` frame), so its fetches are cross-origin and it can
+    # only see the headers named here. The PDF viewer needs them to page through
+    # a large inscription by byte range instead of pulling the whole file.
+    # `Range` itself is CORS-safelisted, so this costs no preflight.
+    ("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length"),
 ]
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -169,6 +175,11 @@ STATIC_TYPES = {
     ".json": "application/json; charset=utf-8",
     ".webmanifest": "application/manifest+json",
     ".md": "text/markdown; charset=utf-8",
+    # pdf.js's copies of the standard 14 fonts, fetched by the PDF preview for
+    # documents that name a base font instead of embedding one — which an
+    # inscription, paying by the byte, has every reason to do.
+    ".pfb": "application/x-font-type1",
+    ".ttf": "font/ttf",
 }
 
 # Inline only small textual blobs in JSON responses; larger or binary content
@@ -692,7 +703,8 @@ class Handler(BaseHTTPRequestHandler):
             # reporting the declared content_type. Deterministic in the bytes,
             # so the content-addressed immutable cache still holds.
             ctype = sniff_media(blob) or row["content_type"] or "application/octet-stream"
-            self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS)
+            self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS,
+                       ranged=True)
         finally:
             store.close()
 
@@ -892,8 +904,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send(self, status: int, ctype: str, body: bytes, *, immutable: bool = False,
               max_age: int | None = None,
-              extra_headers: list[tuple[str, str]] | None = None) -> None:
-        self.send_response(status)
+              extra_headers: list[tuple[str, str]] | None = None,
+              ranged: bool = False) -> None:
+        span = _parse_range(self.headers.get("Range"), len(body)) if ranged else None
+        if span is not None:
+            start, end = span
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+            body = body[start:end + 1]
+        else:
+            self.send_response(status)
+        if ranged:
+            self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -909,6 +931,40 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args) -> None:  # quiet by default; -v shows it
         log.debug("%s %s", self.address_string(), fmt % args)
+
+
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """A single `Range: bytes=…` span as inclusive (start, end), or None to send
+    the whole body — which is always a valid answer to a range request.
+
+    Only the single-span form is honoured; a multi-range request gets the entire
+    resource rather than a multipart body. What needs this is a reader pulling
+    one piece of a large inscription at a time — the PDF viewer asking for the
+    few KB that hold page 1 of a whole-block book, or a seek in a long audio
+    file — and those ask for one span.
+    """
+    if not header or size == 0:
+        return None
+    unit, _, spec = header.partition("=")
+    if unit.strip().lower() != "bytes" or "," in spec:
+        return None
+    start_s, sep, end_s = spec.strip().partition("-")
+    if not sep:
+        return None
+    try:
+        if not start_s:                       # "-N": the final N bytes
+            n = int(end_s)
+            if n <= 0:
+                return None
+            return max(0, size - n), size - 1
+        start = int(start_s)
+        end = int(end_s) if end_s else size - 1
+    except ValueError:
+        return None
+    end = min(end, size - 1)
+    if start > end or start < 0:
+        return None                           # unsatisfiable: fall back to 200
+    return start, end
 
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):

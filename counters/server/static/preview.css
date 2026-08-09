@@ -23,11 +23,79 @@ body.preview {
 }
 .preview.image.pixelated img { image-rendering: pixelated; }
 
-/* audio / video / pdf */
+/* audio / video */
 .preview.audio audio { width: min(90%, 480px); }
 .preview.video video { width: 100%; height: 100%; object-fit: contain; }
-.preview.pdf { align-items: stretch; justify-content: stretch; }
-.preview.pdf iframe { width: 100%; height: 100%; border: 0; }
+
+/* pdf — a scrolling column of canvases painted by preview-pdf.js. This is the
+   one preview that scrolls its own document: an inscription can be a whole
+   book, and paging it is the point. */
+/* The background goes on the root as well as the body: with the body as the
+   scroll container its own background does not tile the whole scrollable area,
+   and the frame underneath these previews is white. */
+html:has(.preview.pdf) { background: #0f0d0a; }
+.preview.pdf {
+  display: block;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: #0f0d0a;
+}
+#pdfdoc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+/* Sized from the page's aspect ratio before it paints, so the scrollbar is
+   right from the start and arriving pages never shove the view around. */
+.pdfpage {
+  width: 100%;
+  max-width: 900px;
+  background: #fff;
+  box-shadow: 0 1px 10px rgba(0, 0, 0, .5);
+}
+.pdfpage canvas { display: block; width: 100%; height: auto; }
+
+/* Status and page counter sit above the column; the counter only appears once
+   there is more than one page to be on. */
+#pdfstatus {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #8c8375;
+  pointer-events: none;
+}
+/* Bottom *left*: the explorer draws its own type/size chip over the bottom-right
+   corner of this frame, and the two would sit on top of each other. */
+#pdfpage {
+  position: fixed;
+  left: 12px;
+  bottom: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(20, 17, 13, .82);
+  border: 1px solid #2e2921;
+  font-size: 11px;
+  color: #ece3d4;
+  pointer-events: none;
+}
+#pdfpage:empty { display: none; }
+
+.pdffail { text-align: center; font-size: 13px; padding: 24px; }
+.pdffail a {
+  color: #f3905a;
+  display: inline-block;
+  margin-top: 12px;
+  border: 1px solid #e0682f;
+  border-radius: 8px;
+  padding: 7px 16px;
+  text-decoration: none;
+}
 
 /* text / code / markdown */
 .preview.text { align-items: stretch; justify-content: stretch; }

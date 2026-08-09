@@ -24,5 +24,5 @@ version = {attr = "counters.__version__"}
 include = ["counters*"]
 
 [tool.setuptools.package-data]
-"counters.server" = ["static/*"]
+"counters.server" = ["static/*", "static/pdfjs-standard-fonts/*"]
 "counters" = ["electrum1_words.txt"]

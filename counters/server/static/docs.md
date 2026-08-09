@@ -109,8 +109,8 @@ This explorer reads these endpoints from `counters server`:
 - `GET /counters?before=N&limit=K` — recent counters
 - `GET /counter/<number|asset>` — one counter's record
 - `GET /block/<height>` — counters minted in a block
-- `GET /content/<number>` — the raw file, served with its stored MIME
-- `GET /preview/<number>` — the sandboxed render used by this explorer's cards
+- `GET /content/<number>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing
+- `GET /preview/<number>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
 - `GET /stamp/<number>` — the decoded image of a `STAMP:` counter
 
 Served over HTTP by `counters server`, this explorer talks to its own origin; opened straight from disk it falls back to a bundled sample.
