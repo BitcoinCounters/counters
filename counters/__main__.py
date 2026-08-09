@@ -325,14 +325,14 @@ def main(argv: list[str] | None = None) -> int:
 
     p_send = wsub.add_parser(
         "send", parents=[common, wname, fundargs],
-        help="transfer a counter (asset), or plain BTC, to an address",
+        help="transfer a Counterparty asset, or plain BTC, to an address",
         usage="counters wallet [--name NAME] send <ADDRESS> <ASSET|BTC> <AMOUNT>\n"
               "       counters wallet [--name NAME] send --destination ADDRESS "
               "--asset ASSET --amount AMOUNT",
     )
     _add_dual(p_send, "destination", "address", help="recipient Bitcoin address")
     _add_dual(p_send, "asset", "asset",
-              help="asset name or longname of the counter, or BTC for a "
+              help="Counterparty asset name or longname, or BTC for a "
                    "plain bitcoin payment")
     _add_dual(p_send, "amount", "amount",
               help="quantity to send (e.g. 1, 0.5 for a divisible "

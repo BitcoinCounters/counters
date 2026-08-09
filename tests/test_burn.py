@@ -161,8 +161,7 @@ def test_burn_divisible_quantity_scaled():
 
 
 def test_burn_xcp_is_allowed():
-    # Destroying XCP is a legitimate use of the message (unlike send, which
-    # treats reserved assets as non-counters).
+    # Destroying XCP is a legitimate use of the message.
     fake_btc, fake_cp, orig = _patch(_asset("XCP", divisible=True),
                                      {HOLDER: [_bal("XCP", 50_000_000)]}, [HOLDER])
     try:

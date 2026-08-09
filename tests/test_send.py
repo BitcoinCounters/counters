@@ -190,6 +190,26 @@ def test_send_happy_path_passes_fee_rate_and_dry_run():
         _restore(orig)
 
 
+def test_send_xcp_is_allowed_in_any_case():
+    # XCP is a sendable Counterparty asset. It used to be barred by a
+    # case-SENSITIVE RESERVED_ASSETS guard, so the canonical `XCP` failed while
+    # `xcp` slipped through and worked — every spelling must compose the same.
+    xcp = {"XCP": {"asset": "XCP", "divisible": True, "asset_longname": None}}
+    for spelling in ("XCP", "xcp", "Xcp"):
+        btc = _FakeBtc(valid_addresses={DEST, SOURCE})
+        cp = _FakeCp(xcp, {SOURCE: [{"asset": "XCP", "quantity": 500_000_000}]})
+        orig = _patch(btc, cp, [SOURCE])
+        try:
+            rc = S.cmd_send(Config(), "me", DEST, spelling, "1", dry_run=True)
+            assert rc == 0, f"{spelling!r} was rejected"
+            k = cp.compose_kwargs
+            assert k is not None, f"{spelling!r} never composed"
+            # Canonical name reaches Counterparty, divisible amount in sats.
+            assert k["asset"] == "XCP" and k["quantity"] == 100_000_000
+        finally:
+            _restore(orig)
+
+
 class _FakeBtcWallet:
     """Bitcoin Core stand-in for the plain-BTC path (`send <ADDR> BTC <AMT>`)."""
 

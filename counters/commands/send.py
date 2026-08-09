@@ -1,12 +1,12 @@
-"""`counters wallet send` — transfer a counter (its Counterparty asset), or BTC.
+"""`counters wallet send` — transfer a Counterparty asset, or BTC.
 
 Argument order mirrors `ord wallet send`: DESTINATION first, then ASSET, then
 AMOUNT (`send <ADDRESS> <ASSET> <AMOUNT>`). `BTC` in the ASSET slot means a
 plain bitcoin payment (`send <ADDRESS> BTC <AMOUNT>`); anything else is a
-counter transfer.
+Counterparty asset transfer — any asset, whether or not it carries a counter.
 
 A counter is owned by whoever holds its Counterparty asset balance, so
-transferring ownership is a plain Counterparty *send*: compose the OP_RETURN
+transferring one is a plain Counterparty *send*: compose the OP_RETURN
 via Core, have the wallet (which holds the keys) sign it, validate against the
 mempool, and broadcast. Custody stays in Bitcoin Core — we never touch keys.
 
@@ -20,7 +20,7 @@ import sys
 from decimal import Decimal, InvalidOperation
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
-from ..config import Config, RESERVED_ASSETS
+from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
 from .wallet import _wallet_addresses
 
@@ -130,10 +130,6 @@ def cmd_send(
         print(_ORDER_HINT, file=sys.stderr)
         return 1
 
-    if asset in RESERVED_ASSETS:
-        print(f"{asset} is a reserved asset, not a counter", file=sys.stderr)
-        return 1
-
     info = cp.get_asset(asset) or cp.get_asset(asset.upper())
     if not info:
         print(f"unknown asset {asset!r} (Counterparty has no record)", file=sys.stderr)
@@ -207,7 +203,7 @@ def cmd_send_btc(
     """`send <ADDRESS> BTC <AMOUNT>` — a plain bitcoin payment, no Counterparty
     involved. Bitcoin Core selects the inputs across the whole wallet, signs,
     and broadcasts. Counterparty balances are bound to *addresses*, not to the
-    UTXOs sitting at them, so paying out BTC never moves a counter."""
+    UTXOs sitting at them, so paying out BTC never moves a Counterparty asset."""
     btc = BitcoindClient(config)
 
     if not _is_valid_address(btc, destination):
