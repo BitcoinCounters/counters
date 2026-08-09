@@ -166,8 +166,9 @@ counters wallet --name mywallet receive --new     # ...a fresh unused address in
 counters wallet --name mywallet receive --number 5  # ...the first 5 addresses
 counters wallet --name mywallet balance           # BTC + aggregated Counterparty balances
 counters wallet --name mywallet inscriptions      # counters held by the wallet
-counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a counter (ADDRESS ASSET AMOUNT)
+counters wallet --name mywallet send bc1p... XDUALS 1         # transfer a Counterparty asset (ADDRESS ASSET AMOUNT)
 counters wallet --name mywallet send bc1p... XDUALS 1 --dry-run   # compose+sign, no broadcast
+counters wallet --name mywallet send bc1p... XCP 1            # any Counterparty asset, not just counters
 # every positional also has a flag form (here and on the other wallet commands):
 counters wallet --name mywallet send --destination bc1p... --asset XDUALS --amount 1
 

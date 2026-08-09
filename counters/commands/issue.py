@@ -46,8 +46,9 @@ _ORDER_HINT = "note: the argument order is  transfer-ownership <ASSET> <ADDRESS>
 def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
     """Resolve `asset` to (canonical_name, asset_info, owner) when this wallet
     holds its issuance rights. Prints the reason and returns None otherwise."""
-    if asset in RESERVED_ASSETS:
-        print(f"{asset} is a reserved asset, not an issuable counter", file=sys.stderr)
+    if asset.upper() in RESERVED_ASSETS:
+        print(f"{asset.upper()} is a reserved asset, not an issuable "
+              "Counterparty asset", file=sys.stderr)
         return None
     info = cp.get_asset(asset) or cp.get_asset(asset.upper())
     if not info:

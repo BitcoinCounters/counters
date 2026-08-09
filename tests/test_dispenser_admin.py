@@ -139,8 +139,8 @@ def test_open_refuses_btc():
 
 
 def test_open_allows_xcp():
-    # XCP is in RESERVED_ASSETS for `send`, but XCP dispensers are legal —
-    # regression guard against blindly reusing that filter here.
+    # XCP dispensers are legal — regression guard against blindly reusing the
+    # RESERVED_ASSETS filter (which only bars *issuing* XCP) here.
     btc, cp = FakeBtc(), FakeCp(asset_info={"asset": "XCP", "divisible": True})
     orig = _patch(btc, cp)
     try:
