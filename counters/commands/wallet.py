@@ -34,7 +34,8 @@ def _checksummed(btc: BitcoindClient, descriptor: str) -> str:
     return descriptor + "#" + info["checksum"]
 
 
-def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool) -> None:
+def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool,
+                    network: str = "mainnet") -> None:
     """Create a blank descriptor wallet and import ALL standard BIP39 accounts
     (legacy/nested/segwit/taproot). A BIP39 seed can hold coins under any of
     them, so importing all four lets one rescan find funds wherever they are —
@@ -45,7 +46,7 @@ def _import_account(btc: BitcoindClient, name: str, seed: bytes, rescan: bool) -
     timestamp = 0 if rescan else "now"
     requests = []
     for kind in bip32.ACCOUNT_TYPES:
-        recv, change = bip32.account_descriptors(seed, kind)
+        recv, change = bip32.account_descriptors(seed, kind, network)
         for desc, internal in ((recv, False), (change, True)):
             requests.append({
                 "desc": _checksummed(btc, desc),
@@ -255,7 +256,7 @@ def cmd_wallet_create(config: Config, name: str) -> int:
     mnemonic = Mnemonic("english").generate(strength=128)  # 12 words
     seed = Mnemonic("english").to_seed(mnemonic)
     try:
-        _import_account(btc, name, seed, rescan=False)
+        _import_account(btc, name, seed, rescan=False, network=config.network)
     except BitcoindError as e:
         print(f"could not create wallet: {e}", file=sys.stderr)
         return 1
@@ -332,7 +333,7 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
         print("BIP39 seed — first receive address of each account type (NOTHING "
               "imported — dry run):")
         for kind in bip32.ACCOUNT_TYPES:
-            print(f"  {kind:8} {bip32.first_address(seed, kind)}")
+            print(f"  {kind:8} {bip32.first_address(seed, kind, network=config.network)}")
         print("\nre-run without --dry-run to import all four accounts + rescan.")
         return 0
     btc = BitcoindClient(config)
@@ -344,7 +345,8 @@ def cmd_wallet_restore(config: Config, name: str, *, counterwallet: bool = False
               "chain — this can take several minutes:", file=sys.stderr)
     try:
         _import_maybe_rescan(
-            config, name, lambda rescan: _import_account(btc, name, seed, rescan=rescan),
+            config, name,
+            lambda rescan: _import_account(btc, name, seed, rescan=rescan, network=config.network),
             no_rescan,
         )
     except BitcoindError as e:

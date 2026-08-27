@@ -150,9 +150,11 @@ def main(argv: list[str] | None = None) -> int:
     parser._action_groups.insert(0, parser._action_groups.pop())
 
     # --- daemon / indexing ---
-    # A first-time scan always starts at the protocol genesis (block
-    # 902000): rule N3 — nothing can qualify earlier. Stored sync progress
-    # takes precedence on later runs; COUNTER_START_HEIGHT can raise the floor.
+    # A first-time scan always starts at the protocol genesis (block 902000 on
+    # mainnet; 0 on regtest, where every protocol change is active from
+    # genesis — see COUNTER_NETWORK / GENESIS_HEIGHT in config.py): rule N3 —
+    # nothing can qualify earlier. Stored sync progress takes precedence on
+    # later runs; COUNTER_START_HEIGHT can raise the floor.
     # `--restart` wipes the local index (DB + content blobs) and rebuilds from
     # genesis — handy after a schema change or to re-derive from scratch.
     restart_help = "delete the local index (DB + blobs) and rebuild from genesis"

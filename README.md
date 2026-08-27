@@ -110,21 +110,83 @@ Core running on the host.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `COUNTER_NETWORK` | `mainnet` | `mainnet` or `regtest` — see [Regtest](#regtest) below |
 | `BTC_RPC_URL` | `http://127.0.0.1:8332` | bitcoind JSON-RPC URL |
 | `BTC_COOKIE_FILE` | `~/.bitcoin/.cookie` | bitcoind cookie (preferred auth) |
 | `BTC_RPC_USER` / `BTC_RPC_PASSWORD` | — | fallback if no cookie |
 | `CP_API_URL` | `http://127.0.0.1:4000` | Counterparty Core v2 API |
 | `SLIPSTREAM_API_URL` | `https://slipstream.mara.com` | MARA Slipstream endpoint (`--slipstream`) |
 | `SLIPSTREAM_API_KEY` | — | optional; only applies a fee discount, never required to submit |
-| `COUNTER_DATA_DIR` | `data/` | SQLite + blobs location |
-| `COUNTER_START_HEIGHT` | `902000` | first block a fresh scan starts at (never below genesis) |
+| `COUNTER_DATA_DIR` | `data/` (`data-regtest/` on regtest) | SQLite + blobs location |
+| `COUNTER_START_HEIGHT` | `902000` (`0` on regtest) | first block a fresh scan starts at (never below genesis) |
 | `COUNTER_CONFIRMATIONS` | `0` | blocks behind tip to stay (6 recommended for near-final numbering) |
 | `COUNTER_POLL_INTERVAL` | `15` | seconds between tip polls in `index` |
 
-> A fresh scan starts at the protocol genesis (block **902,000**, Counterparty
-> v11's `taproot_support` activation) — by rule N3 nothing can qualify
-> earlier, so there is no exhaustive-from-0 mode. Stored progress always wins;
-> to rescan, `rm -rf data` first.
+> A fresh scan starts at the protocol genesis (block **902,000** on mainnet,
+> Counterparty v11's `taproot_support` activation) — by rule N3 nothing can
+> qualify earlier, so there is no exhaustive-from-0 mode. Stored progress
+> always wins; to rescan, `rm -rf data` first.
+
+## Regtest
+
+Setting `COUNTER_NETWORK=regtest` points every default at a local regtest
+stack instead of mainnet:
+
+| | mainnet | regtest |
+| --- | --- | --- |
+| `BTC_RPC_URL` | `http://127.0.0.1:8332` | `http://127.0.0.1:18443` |
+| `CP_API_URL` | `http://127.0.0.1:4000` | `http://127.0.0.1:24000` |
+| protocol genesis | block `902000` | block `0` |
+| `EXTENDED_MIME_GATE` | block `952800` | block `0` |
+| `COUNTER_DATA_DIR` | `data/` | `data-regtest/` |
+| wallet address encoding | `bc1p...` / `bc1q...` / `1...`, `xprv` | `bcrt1p...` / `bcrt1q...` / regtest legacy, `tprv` |
+
+The genesis/MIME-gate heights collapse to `0` because Counterparty Core's own
+regtest activation table has no per-feature height — every protocol change is
+active from block 0 on regtest (`counterpartycore.lib.parser.protocol.enabled`
+short-circuits to `True` when `config.REGTEST`). `data-regtest/` is a
+separate directory from mainnet's `data/` on purpose: the two networks have
+incompatible genesis heights and rolling-hash chains, so sharing one index
+would silently corrupt it.
+
+```bash
+export COUNTER_NETWORK=regtest
+counters status                                    # confirms it's talking to your regtest node
+counters wallet --name mywallet create              # a regtest (bcrt1p...) wallet, same commands as mainnet
+counters index                                      # syncs from block 0, not 902,000
+```
+
+Everything under [Usage](#usage) works identically once `COUNTER_NETWORK` is
+set — the wallet, indexer, and CLI don't otherwise know which network they're
+on. One thing regtest doesn't give you for free: `counters` has no BTC→XCP
+burn composer (mainnet's burn window closed at block 283,810, so no command
+exposes it — see `commands/burn.py`), but regtest keeps that window open
+indefinitely. To get XCP on a fresh regtest wallet, compose and broadcast a
+classic burn directly against Counterparty Core's API:
+
+```bash
+# fund the wallet first (regtest coinbase needs 100 confirmations to mature)
+bitcoin-cli -regtest generatetoaddress 101 <wallet receive address>
+
+# then burn BTC for XCP (needs a UTXO on that address — inputs_set is
+# required if your Counterparty regtest node has no address indexer)
+curl "http://127.0.0.1:24000/v2/addresses/<address>/compose/burn?quantity=100000000&inputs_set=<txid>:<vout>"
+# sign the returned rawtransaction with bitcoin-cli signrawtransactionwithwallet
+# and broadcast with sendrawtransaction, then mine a block to confirm it
+```
+
+If `counters wallet inscribe` (or `send`/`issue`) fails with `No UTXOs found`,
+your Counterparty regtest node has no Electrs/address-indexer configured, so
+it can't auto-select inputs for anyone. Pass `--inputs-set TXID:VOUT`
+(from `bitcoin-cli listunspent`) to work around it — every compose command
+that funds itself accepts the flag.
+
+The bundled `docker-compose.yml` defaults both services to regtest
+(`COUNTER_NETWORK=regtest`, ports `18443`/`24000`, `rpcuser`/`rpcpassword`
+`mempool`/`mempool` — matching the `counterparty/counterparty` regtest image's
+own defaults). Override with `COUNTER_NETWORK=mainnet` plus the mainnet
+`BTC_RPC_URL`/`CP_API_URL` (see the comment in the file) for a production
+deploy.
 
 ## Usage
 

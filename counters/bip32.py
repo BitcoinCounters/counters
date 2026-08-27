@@ -23,8 +23,22 @@ from . import tap  # bech32/bech32m + BIP341 taproot tweak for address encoding
 _CURVE_ORDER = SECP256k1.order
 _G = SECP256k1.generator
 _HARDENED = 0x80000000
-_XPRV_VERSION = bytes.fromhex("0488ADE4")  # mainnet xprv
 _B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+# Network-scoped encoding constants. regtest reuses testnet's base58 version
+# bytes and bech32 HRP (there's no separate "regtest" chainparams family in
+# Bitcoin Core for these) except for the bech32 HRP, which regtest keeps
+# distinct ("bcrt" vs testnet's "tb") specifically so a regtest address can
+# never be mistaken for (or accidentally pasted onto) testnet.
+_XPRV_VERSIONS = {
+    "mainnet": bytes.fromhex("0488ADE4"),  # xprv
+    "regtest": bytes.fromhex("04358394"),  # tprv
+}
+_B58_VERSIONS = {
+    "mainnet": {"p2pkh": 0x00, "p2sh": 0x05, "wif": 0x80},
+    "regtest": {"p2pkh": 0x6F, "p2sh": 0xC4, "wif": 0xEF},
+}
+_HRP = {"mainnet": "bc", "regtest": "bcrt"}
 
 
 # --- RIPEMD160 (pure Python, used only for hash160 fingerprints) -----------
@@ -152,9 +166,9 @@ class _Node:
             raise ValueError("invalid BIP32 child key; pick a new mnemonic")
         return _Node(child_secret, i[32:], self.depth + 1, _fingerprint(self.secret), index)
 
-    def xprv(self) -> str:
+    def xprv(self, network: str = "mainnet") -> str:
         payload = (
-            _XPRV_VERSION
+            _XPRV_VERSIONS[network]
             + bytes([self.depth])
             + self.parent_fp
             + struct.pack(">L", self.child_number)
@@ -170,7 +184,7 @@ def _master_from_seed(seed: bytes) -> _Node:
     return _Node(int.from_bytes(i[:32], "big"), i[32:], 0, b"\x00\x00\x00\x00", 0)
 
 
-def bip86_account(seed: bytes) -> tuple[str, str]:
+def bip86_account(seed: bytes, network: str = "mainnet") -> tuple[str, str]:
     """Derive the BIP86 account at m/86'/0'/0'.
 
     Returns (account_xprv, master_fingerprint_hex). The account xprv is what we
@@ -179,7 +193,7 @@ def bip86_account(seed: bytes) -> tuple[str, str]:
     master = _master_from_seed(seed)
     master_fp = _fingerprint(master.secret).hex()
     account = master.ckd_priv(86 + _HARDENED).ckd_priv(0 + _HARDENED).ckd_priv(0 + _HARDENED)
-    return account.xprv(), master_fp
+    return account.xprv(network), master_fp
 
 
 def bip86_descriptors(account_xprv: str, master_fp: str) -> tuple[str, str]:
@@ -217,36 +231,43 @@ def _account_node(seed: bytes, purpose: int) -> tuple["_Node", str]:
     return node, fp
 
 
-def account_descriptors(seed: bytes, kind: str) -> tuple[str, str]:
+def account_descriptors(seed: bytes, kind: str, network: str = "mainnet") -> tuple[str, str]:
     """(receive, change) descriptors (no checksum) for a BIP39 account type:
-    'legacy'(44) / 'nested'(49) / 'segwit'(84) / 'taproot'(86)."""
+    'legacy'(44) / 'nested'(49) / 'segwit'(84) / 'taproot'(86).
+
+    `network` must match the Bitcoin Core node the descriptors will be
+    imported into: Core's `importdescriptors`/`getdescriptorinfo` validate an
+    embedded xprv's version bytes against its own chain and reject a mismatch
+    (e.g. a mainnet xprv against a regtest node)."""
     purpose, template = _ACCOUNTS[kind]
     node, fp = _account_node(seed, purpose)
-    xprv = node.xprv()
+    xprv = node.xprv(network)
     origin = f"[{fp}/{purpose}h/0h/0h]"
     return (template.format(inner=f"{origin}{xprv}/0/*"),
             template.format(inner=f"{origin}{xprv}/1/*"))
 
 
-def address_from_pubkey(kind: str, pub_compressed: bytes) -> str:
+def address_from_pubkey(kind: str, pub_compressed: bytes, network: str = "mainnet") -> str:
     """Encode a compressed pubkey as the address for the given account type."""
+    b58 = _B58_VERSIONS[network]
     if kind == "legacy":
-        return _b58check(b"\x00" + _hash160(pub_compressed))
+        return _b58check(bytes([b58["p2pkh"]]) + _hash160(pub_compressed))
     if kind == "nested":
         redeem = b"\x00\x14" + _hash160(pub_compressed)  # 0 <20-byte-keyhash>
-        return _b58check(b"\x05" + _hash160(redeem))
+        return _b58check(bytes([b58["p2sh"]]) + _hash160(redeem))
     if kind == "segwit":
-        return tap.encode_segwit_address("bc", 0, _hash160(pub_compressed))
+        return tap.encode_segwit_address(_HRP[network], 0, _hash160(pub_compressed))
     if kind == "taproot":
         _, tweaked = tap.taproot_tweak_pubkey(pub_compressed[1:], b"")  # BIP86: no script
-        return tap.p2tr_address(tweaked)
+        return tap.p2tr_address(tweaked, hrp=_HRP[network])
     raise ValueError(f"unknown account type {kind!r}")
 
 
-def first_address(seed: bytes, kind: str, *, change: int = 0, index: int = 0) -> str:
+def first_address(seed: bytes, kind: str, *, change: int = 0, index: int = 0,
+                   network: str = "mainnet") -> str:
     """Offline: the address at m/purpose'/0'/0'/change/index for the account type
     (used to preview a restore without touching Bitcoin Core)."""
     purpose, _ = _ACCOUNTS[kind]
     node, _ = _account_node(seed, purpose)
     child = node.ckd_priv(change).ckd_priv(index)
-    return address_from_pubkey(kind, _ser_pubkey(child.secret))
+    return address_from_pubkey(kind, _ser_pubkey(child.secret), network)
