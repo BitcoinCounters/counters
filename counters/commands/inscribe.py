@@ -37,6 +37,7 @@ from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..reveal import envelope_style
 from ..slipstream import (
     MAX_WEIGHT,
     STANDARD_MAX_WEIGHT,
@@ -444,6 +445,7 @@ def cmd_inscribe(
     no_fund: bool = False,
     slipstream: bool = False,
     slipstream_all: bool = False,
+    envelope: str = "generic",
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -615,6 +617,7 @@ def cmd_inscribe(
             source=source, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock, encoding="taproot",
             mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
+            inscription=(envelope == "ord"),
         ), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
@@ -652,6 +655,23 @@ def cmd_inscribe(
         return 1
     reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
     reveal_txid = reveal_dec["txid"]
+
+    # Confirm the envelope Core actually built is the one asked for. Core
+    # applies `inscription` only to a content-carrying issuance and otherwise
+    # drops back to the generic envelope without saying so — and a Core too old
+    # to know the parameter ignores it entirely. The style is baked into the
+    # tapscript the commit address commits to, so it cannot be corrected later:
+    # check it here, while nothing has been broadcast.
+    built = envelope_style(reveal_dec)
+    if built != envelope:
+        print(f"compose returned a {built or 'unrecognized'} envelope, not the "
+              f"{envelope} one requested — the style is committed to by the "
+              f"commit address and cannot be changed afterwards, so nothing was "
+              f"broadcast.", file=sys.stderr)
+        if envelope == "ord":
+            print("hint: the ord/xcp envelope needs Counterparty Core v11+ "
+                  "(the `inscription` compose parameter).", file=sys.stderr)
+        return 1
 
     # Validate BOTH transactions as a package without broadcasting — unless the
     # caller opts out. An oversized inscription is a VALID transaction that
@@ -697,6 +717,9 @@ def cmd_inscribe(
         kind = " (numeric, free)"
     print(f"asset            : {asset}{kind}")
     print(f"content_type     : {mime_type}  ({len(body)} bytes)")
+    print(f"envelope         : {envelope}"
+          + ("  (ordinals-compatible — also an ordinals inscription)"
+             if envelope == "ord" else "  (Counterparty native)"))
     if not reinscribe:
         print(f"supply           : {supply}{' divisible' if divisible else ''}"
               f"{' (LOCKED)' if lock else ''}")

@@ -233,6 +233,7 @@ class CounterpartyClient:
         encoding: str = "opreturn",
         mime_type: str | None = None,
         sat_per_vbyte: float | int | None = None,
+        inscription: bool = False,
     ) -> dict:
         """Compose an issuance and return Core's result dict.
 
@@ -244,6 +245,13 @@ class CounterpartyClient:
         signs itself with the ephemeral envelope key (build ref v3 §11).
         `mime_type` labels the description content; binary content is passed
         as hex per Core's content encoding (§5.1).
+
+        `inscription=True` asks Core for the ordinals-compatible "ord/xcp"
+        envelope instead of its native generic one (build ref v3 §13,
+        "Taproot envelope"). Core applies it only to a content-carrying
+        issuance/fairminter/broadcast and SILENTLY falls back to generic
+        otherwise, so callers that care must classify the composed reveal.
+        Only sent when True: an older Core rejects unknown parameters.
 
         `description=None` keeps the asset's current description on a
         reissue/lock — passing "" would WIPE it. `lock=True` locks the supply.
@@ -258,6 +266,8 @@ class CounterpartyClient:
             "allow_unconfirmed_inputs": "true",
             "verbose": "true",
         }
+        if inscription:
+            params["inscription"] = "true"
         if inputs_set is not None:
             params["inputs_set"] = inputs_set
         if description is not None:

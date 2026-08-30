@@ -266,6 +266,8 @@ counters wallet --name mywallet inscribe --file cat.png                     # fr
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
 counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
+# pick the taproot envelope style (default: generic, Counterparty's own)
+counters wallet --name mywallet inscribe --file cat.png --envelope ord   # also an ordinals inscription
 # XCP on one address, BTC on another? Counterparty takes the issuance fee from the
 # FIRST INPUT's address, so the source must own its coins — this moves them there first
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from auto
@@ -299,6 +301,30 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > coin has to be the largest — so funding a poor XCP address from a rich one
 > does not work directly. `--fund-from` moves the shortfall to the source first
 > and then inscribes.
+
+> **`--envelope` — which taproot envelope carries the file.** Counterparty v11
+> can build the witness two ways, and both count equally as counters (R4): the
+> style is enrichment, never validity or numbering.
+>
+> - **`generic`** (default) — Counterparty's own envelope: `OP_FALSE OP_IF`,
+>   the serialized message in 520-byte chunks, `OP_ENDIF`. Nothing but
+>   Counterparty reads it.
+> - **`ord`** — the ordinals-compatible **ord/xcp** envelope, tagged with the
+>   content type (tag 1), the metaprotocol `xcp` (tag 7) and the rest of the
+>   issuance as CBOR metadata (tag 5), with the file itself as the body. The
+>   reveal is then *simultaneously* a counter and an ordinals inscription —
+>   `ord` indexes the same transaction. It costs a flat **+185 WU (~46 vB)**
+>   over generic, whatever the file size.
+>
+> The style is fixed by the tapscript the commit address commits to, so it can
+> never be changed after the fact. Core applies `ord` only to a
+> content-carrying issuance and otherwise falls back to generic *silently* —
+> so the composed reveal is classified before anything is broadcast, and a mint
+> that did not get the style you asked for is refused rather than sent.
+>
+> Historically the choice mattered: of the first 87 counters, 34 were minted
+> ord-style and 8 as Bitcoin Stamps, while the native envelope was used 46
+> times — but 45 of those carried only an off-chain URL.
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
 > with a destination output (so no `transfer_destination` on an inscription

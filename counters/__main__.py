@@ -303,6 +303,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
                              "reinscription (new counter, same asset)")
+    p_insc.add_argument("--envelope", choices=["generic", "ord"], default="generic",
+                        help="taproot envelope style: 'generic' (default) is "
+                             "Counterparty's own; 'ord' is the ordinals-compatible "
+                             "ord/xcp envelope, which makes the reveal an ordinals "
+                             "inscription as well. Both count equally as counters")
     p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
@@ -672,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
                     fund_from=args.fund_from, no_fund=args.no_fund,
                     slipstream=args.slipstream,
                     slipstream_all=args.slipstream_all,
+                    envelope=args.envelope,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
