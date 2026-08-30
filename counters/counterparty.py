@@ -20,8 +20,9 @@ from .config import Config
 class CounterpartyError(Exception):
     """A Counterparty API call failed. `kind` classifies why so callers can
     report a specific reason: 'unreachable' (nothing listening on the port),
-    'timeout' (reachable but slow/busy), 'http' (non-200 response), or the
-    default 'error' (anything else)."""
+    'timeout' (reachable but slow/busy), 'not_ready' (503 while Core is
+    catching up), 'http' (any other non-200 response), 'unparsed' (the ledger
+    db has not finished the block asked for), or the default 'error'."""
 
     def __init__(self, message: str, kind: str = "error"):
         super().__init__(message)
@@ -78,8 +79,13 @@ class CounterpartyClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
+            # Core answers 503 "Counterparty not ready" to every ledger
+            # question while it trails bitcoind by more than a block (only
+            # /v2/ itself still answers). Its own kind, so the indexer can
+            # switch to reading the ledger db instead of merely retrying.
+            kind = "not_ready" if resp.status_code == 503 and "not ready" in resp.text else "http"
             raise CounterpartyError(
-                f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}", kind="http"
+                f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}", kind=kind
             )
         return resp.json()
 

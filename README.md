@@ -49,6 +49,36 @@ with fresh taproot-carried content). Reorgs roll back log-structured (the fork p
 stored block hashes; numbering re-derives identically), and the index never
 advances past Counterparty's parsed height.
 
+**Following Counterparty while it catches up.** Core answers every ledger
+question with `503 Counterparty not ready` whenever it trails bitcoind by more
+than a block (restart, reparse, downtime) — only `/v2/` keeps replying. An
+indexer that knows only the API would sit still until Core is completely done
+and then start on the whole backlog. So when `/v2/` reports
+`server_ready: false` and Core's ledger database is readable locally
+(`CP_DB_PATH`), the indexer reads that file directly — read-only, one
+snapshot per block, only blocks Core has fully committed — and follows the
+ledger block by block as Core parses. Rows are decoded to exactly the API's
+shape (hex hashes, asset names, address strings), so the rules, numbering
+and rolling hash see the same events through either door; the API takes
+over again the moment Core is ready. The status line says
+`counterparty - 964131/964249 · catching up · indexing from ledger db` while
+this is happening, and both backends are re-polled once a second *during* a
+pass, so that line and the bar's target (`y` in `x/y`) tick with Core while
+`x` is the block the index has actually reached. With a remote Core there is no file to read: the index
+waits, as before (or run Core with `--force`, which disables the not-ready
+gate — Core marks that option as not for production).
+
+One difference is deliberate. The API serves fairminters from Core's derived
+state db, which keeps a single row per deploy and **moves its `block_index`
+to the block of the latest status change** (pending → open → closed): a
+deploy shows up under `/v2/blocks/{h}/fairminters` at its deploy block only
+while it is still pending, and later under the block it opened or closed in.
+The ledger logs one row per change and the deploy row keeps the deploy
+block, so the ledger reader returns only deploy rows (joined to
+`transactions`). Through the ledger a deploy is therefore always numbered at
+its deploy block — which is also what the API path yields when the index is
+following live, but not when a stretch of blocks is indexed after the fact.
+
 ## Requirements
 
 - Python 3.10+
@@ -114,6 +144,7 @@ Core running on the host.
 | `BTC_COOKIE_FILE` | `~/.bitcoin/.cookie` | bitcoind cookie (preferred auth) |
 | `BTC_RPC_USER` / `BTC_RPC_PASSWORD` | — | fallback if no cookie |
 | `CP_API_URL` | `http://127.0.0.1:4000` | Counterparty Core v2 API |
+| `CP_DB_PATH` | `~/.local/share/counterparty/counterparty.db` | Core's ledger db, read directly (read-only) while Core is catching up and its API is closed; ignored if the file does not exist |
 | `SLIPSTREAM_API_URL` | `https://slipstream.mara.com` | MARA Slipstream endpoint (`--slipstream`) |
 | `SLIPSTREAM_API_KEY` | — | optional; only applies a fee discount, never required to submit |
 | `COUNTER_DATA_DIR` | `data/` | SQLite + blobs location |
@@ -428,6 +459,7 @@ counters/
   content.py        deterministic content derivation + MIME normalization — §5
   bitcoind.py       JSON-RPC client (cookie auth, raw tx / fee lookups)
   counterparty.py   Core v2 client (the oracle): block issuances/fairminters, compose
+  ledger.py         the same oracle questions answered from Core's ledger db, read-only (API closed while catching up)
   store.py          SQLite schema + blob store + rolling hash + reorg rollback
   tap.py            BIP340/341 primitives (address encoding for the wallet)
   bip32.py          BIP32/BIP86 derivation (pure-Python RIPEMD160 + ecdsa)

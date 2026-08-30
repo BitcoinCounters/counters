@@ -17,6 +17,7 @@ from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..content import classify_mime_type, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..ledger import CounterpartyLedger
 from ..reveal import commit_txid, envelope_style
 from ..store import Store
 
@@ -56,6 +57,18 @@ def cmd_status(config: Config) -> int:
         cp_h = st.get("counterparty_height")
         print(f"counterparty height : {cp_h if cp_h is not None else '?'}")
         print(f"counterparty state  : {st.get('ledger_state', '?')}")
+        if st and st.get("server_ready") is False:
+            # Core refuses ledger questions until caught up; say whether the
+            # indexer can read the ledger db directly in the meantime.
+            ledger = CounterpartyLedger.open(config)
+            if ledger is not None:
+                print(f"ledger db           : {ledger.path} (API not ready — "
+                      f"indexer reads the ledger directly, parsed to "
+                      f"{ledger.counterparty_height()})")
+                ledger.close()
+            else:
+                print(f"ledger db           : none at {config.cp_db_path} — the index "
+                      f"waits for the API (set CP_DB_PATH to follow meanwhile)")
 
         index_h = store.get_last_height(config.start_height)
         print(f"index height        : {index_h}")
