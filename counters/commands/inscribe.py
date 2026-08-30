@@ -50,7 +50,7 @@ from .funding import (
     ensure_funded,
     spendable_by_address as _spendable_addresses,
 )
-from .wallet import _derived_addresses, _wallet_addresses
+from .wallet import _wallet_addresses
 
 NUMERIC_MIN = 26 ** 12 + 1     # Counterparty numeric-asset range
 NUMERIC_MAX = 2 ** 64 - 1
@@ -513,14 +513,10 @@ def cmd_inscribe(
         if slipstream_all:
             no_mempool_check = True
 
-    # Union the on-chain view with descriptor-derived addresses: Core omits
-    # CHANGE addresses from listreceivedbyaddress, and XCP parked on one whose
-    # coins are spent would otherwise look like "no XCP anywhere".
+    # On-chain view plus the derived window (see _wallet_addresses): XCP
+    # parked on a change address, or on one that only ever received assets,
+    # would otherwise look like "no XCP anywhere".
     wallet_addrs = set(_wallet_addresses(btc, wallet))
-    try:
-        wallet_addrs.update(_derived_addresses(btc, wallet, 20))
-    except BitcoindError:
-        pass
     try:
         spendable = _spendable_addresses(btc, wallet)
     except BitcoindError as e:
