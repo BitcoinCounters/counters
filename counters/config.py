@@ -62,6 +62,15 @@ class Config:
 
     # Counterparty Core v2 API
     cp_api_url: str = field(default_factory=lambda: _env("CP_API_URL", "http://127.0.0.1:4000"))
+    # Counterparty Core's ledger database, read directly (read-only) while
+    # Core is catching up and its API answers "not ready" (see ledger.py).
+    # Default: Core's own mainnet location. Used only if the file exists, so a
+    # remote Core (docker, another host) simply never has one.
+    cp_db_path: str = field(
+        default_factory=lambda: _env(
+            "CP_DB_PATH", str(Path.home() / ".local" / "share" / "counterparty" / "counterparty.db")
+        )
+    )
 
     # MARA Slipstream — out-of-band submission for oversized inscriptions.
     # The key is OPTIONAL: submission works unauthenticated, and a key only

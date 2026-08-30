@@ -27,6 +27,7 @@ from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import GENESIS_HEIGHT, Config
 from ..content import classify_mime_type, content_bytes, is_pointer_like, normalize_mime
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..ledger import CounterpartyLedger
 from ..progress import ProgressBar
 from ..reveal import is_taproot_reveal
 from ..store import CounterRecord, Store
@@ -46,12 +47,22 @@ def has_content(row: dict) -> bool:
 
 
 class Indexer:
-    def __init__(self, config: Config, btc=None, cp=None, store=None):
+    def __init__(self, config: Config, btc=None, cp=None, store=None, ledger=None):
         # Clients are injectable for testing; default to real implementations.
         self.config = config
         self.btc = btc if btc is not None else BitcoindClient(config)
         self.cp = cp if cp is not None else CounterpartyClient(config)
         self.store = store if store is not None else Store(config)
+        # Core's ledger db, read directly while its API is "not ready"
+        # (catching up). Opened lazily the first time it is needed, so a
+        # setup whose Core is always caught up never touches the file.
+        self.ledger = ledger
+        self._ledger_probed = ledger is not None
+        # Which oracle the current pass reads blocks from: the API normally,
+        # the ledger db while the API refuses (_target_tip decides per poll).
+        self._oracle = self.cp
+        self._cp_ready = True
+        self._via_ledger = False
         self._progress: ProgressBar | None = None
         self._stop = False  # set by SIGINT for graceful shutdown
         # Latest heights seen by _target_tip(), so run() can tell "caught up"
@@ -75,6 +86,10 @@ class Indexer:
         # blocks are still arriving, so run() re-polls the tip immediately
         # instead of idling a poll interval between passes.
         self._idle = False
+        # How often (seconds of wall clock) a sync pass re-polls the backends
+        # WHILE it walks blocks, so the height lines and the bar's target keep
+        # tracking the live chain instead of freezing until the pass ends.
+        self.tip_refresh_interval = 1.0
 
     # --- signal handling ---------------------------------------------------
 
@@ -120,12 +135,22 @@ class Indexer:
                 "unreachable": "API not up yet — server starting/migrating · retrying",
                 # Busy applying migrations or catching up.
                 "timeout": "not responding — server busy · retrying",
+                # Core refuses ledger questions until it is caught up, and no
+                # ledger db is at hand to read instead (remote Core, or
+                # CP_DB_PATH pointing nowhere).
+                "not_ready": "API not ready (catching up) — no ledger db to read "
+                             "meanwhile, set CP_DB_PATH · retrying",
+                # The ledger db is behind the block asked for: Core is
+                # reparsing/rolling it back right now.
+                "unparsed": "ledger db still parsing · retrying",
             }.get(kind, "API error · retrying")
         else:  # BitcoindError (or other backend RPC failure)
             self._btc_note = "Core RPC unreachable — is bitcoind running? · retrying"
 
     def close(self) -> None:
         self.store.close()
+        if self.ledger is not None:
+            self.ledger.close()
 
     # --- candidate selection (R1-R3) ----------------------------------------
 
@@ -164,8 +189,8 @@ class Indexer:
         """Process a single block; returns the number of counters recorded."""
         block_hash = self.btc.get_block_hash(height)
 
-        issuances = self.cp.get_block_issuances(height)
-        fairminters = self.cp.get_block_fairminters(height)
+        issuances = self._oracle.get_block_issuances(height)
+        fairminters = self._oracle.get_block_fairminters(height)
         candidates = self._qualifying_events(issuances, fairminters)
 
         recorded = 0
@@ -204,7 +229,7 @@ class Indexer:
         content_type, content_type_raw = normalize_mime(mime_raw or "text/plain")
 
         asset = row.get("asset")
-        asset_info = self.cp.get_asset(asset) or {}
+        asset_info = self._oracle.get_asset(asset) or {}
 
         # Inscription cost (commit + reveal) is enrichment, never a blocker.
         try:
@@ -314,14 +339,18 @@ class Indexer:
         else:
             btc_line = "bitcoin - connecting…"
 
+        # While Core catches up its API is closed, so the index follows the
+        # ledger db instead; say so on the line, since the bar then tracks a
+        # height the API is not yet reporting.
+        via = " · indexing from ledger db" if getattr(self, "_via_ledger", False) else ""
         if self._cp_down:
             cp_line = f"counterparty - {cp_note or 'down'}"
         elif cp is not None:
             if btc is not None and not self._btc_down:
                 tag = " · catching up" if cp < btc else ""
-                cp_line = f"counterparty - {cp}/{btc}{tag}"
+                cp_line = f"counterparty - {cp}/{btc}{tag}{via}"
             else:
-                cp_line = f"counterparty - {cp}"
+                cp_line = f"counterparty - {cp}{via}"
         else:
             cp_line = "counterparty - connecting…"
 
@@ -355,6 +384,13 @@ class Indexer:
         bitcoind the indexer would walk blocks the oracle hasn't seen, record
         nothing for them, advance its cursor, and silently skip any counters
         minted in that gap (only recoverable by a full rescan).
+
+        Also picks the oracle for the pass. Counterparty's API answers 503 to
+        every ledger question while the node is catching up (only /v2/ still
+        replies, with `server_ready: false`), which would park the index until
+        Core is completely done. If Core's ledger db is readable locally, the
+        pass reads it directly instead and the index follows the ledger block
+        by block as Core parses; the API is used again once it is ready.
         """
         # Poll both backends even if the first one fails, so the height lines
         # can report each one's up/down state independently.
@@ -366,7 +402,9 @@ class Indexer:
             self._btc_down = True
             btc_err = e
         try:
-            self._cp_tip = self.cp.counterparty_height()
+            st = self.cp.status()
+            self._cp_tip = int(st.get("counterparty_height", 0))
+            self._cp_ready = bool(st.get("server_ready", True))
             self._cp_down = False
         except CounterpartyError:
             self._cp_down = True
@@ -374,7 +412,48 @@ class Indexer:
                 raise
         if btc_err is not None:
             raise btc_err
+
+        ledger = None if self._cp_ready else self._find_ledger()
+        if ledger is not None:
+            # The ledger's own parsed height, not the API's: the API reports
+            # its derived state db, which trails the ledger, and the ledger
+            # is what this pass reads.
+            self._cp_tip = ledger.counterparty_height()
+        self._oracle = ledger if ledger is not None else self.cp
+        self._via_ledger = ledger is not None
         return min(self._btc_tip, self._cp_tip) - self.config.confirmations
+
+    def _find_ledger(self) -> CounterpartyLedger | None:
+        """Core's ledger db if one is readable at config.cp_db_path (probed
+        once; a missing file means a remote Core and is not an error)."""
+        if not self._ledger_probed:
+            self._ledger_probed = True
+            self.ledger = CounterpartyLedger.open(self.config)
+            if self.ledger is not None:
+                self._notify(
+                    f"Counterparty API not ready (catching up): indexing from "
+                    f"its ledger db at {self.ledger.path} until it is"
+                )
+        return self.ledger
+
+    def _refresh_tip(self, tip: int, stop_at: int | None, bar: ProgressBar | None) -> int:
+        """Mid-pass re-poll of both backends. Returns the new target height
+        (the old one if a backend is unreachable — the pass carries on with
+        what it had, and the failure shows on that backend's height line)."""
+        try:
+            new_tip = self._target_tip()
+        except (CounterpartyError, BitcoindError) as e:
+            self._set_wait_note(e)
+            new_tip = tip
+        else:
+            if self._btc_note or self._cp_note:
+                self._btc_note = self._cp_note = None
+        if stop_at is not None:
+            new_tip = min(new_tip, stop_at)
+        if bar is not None:
+            bar.total = max(new_tip, 1)
+            self._show_heights(bar)
+        return new_tip
 
     def sync_to_tip(self, stop_at: int | None = None) -> int:
         self.check_reorg()
@@ -424,12 +503,27 @@ class Indexer:
             # again by the time it ends (it always has while the oracle is
             # catching up), so run() should re-poll at once rather than sleep.
             self._idle = False
-            for height in range(start, tip + 1):
+            height = start
+            last_poll = time.monotonic()
+            while height <= tip:
                 total += self.process_block(height)
                 if bar is not None:
                     bar.update(height, postfix=f"{base + total} counters")
+                height += 1
                 if self._stop:
                     break
+                # Keep the display honest DURING the pass: the backends keep
+                # moving while blocks are walked (Core parses a block every few
+                # hundred ms while catching up), and a pass over the ledger can
+                # span thousands of blocks. Re-poll on a wall-clock cadence so
+                # the counterparty line ticks with Core and the bar's target
+                # (the y in x/y) follows it, while x stays the block actually
+                # indexed. A refreshed tip also extends this pass, so it chases
+                # the oracle instead of stopping at a stale target.
+                now = time.monotonic()
+                if now - last_poll >= self.tip_refresh_interval:
+                    last_poll = now
+                    tip = self._refresh_tip(tip, stop_at, bar)
         finally:
             if own_bar:
                 bar.close()

@@ -90,6 +90,12 @@ class FakeCP:
     def counterparty_height(self):
         return self.tip
 
+    def status(self):
+        # What the indexer polls: the parsed height and whether the API is
+        # open for ledger questions (False while Core is catching up).
+        return {"counterparty_height": self.counterparty_height(),
+                "server_ready": getattr(self, "ready", True)}
+
     def get_block_issuances(self, height):
         return list(self.issuances.get(height, []))
 
@@ -339,3 +345,66 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"ok  {name}")
+
+
+def test_pass_repolls_backends_while_walking_blocks():
+    """The height lines and the bar's target must track the backends DURING a
+    pass, not just between passes: a pass over a catching-up oracle can span
+    thousands of blocks, and a display refreshed only at pass boundaries
+    shows Counterparty advancing in batches at the indexer's own rate. Here
+    the oracle parses one block per poll; with the mid-pass re-poll on, a
+    single pass follows it all the way and the bar's total moves with it."""
+    txs = {"t-1": reveal_tx("t-1")}
+    blocks = {G: [issuance("t-1", 1)]}
+
+    class CatchingUpCP(FakeCP):
+        polls = 0
+
+        def counterparty_height(self):
+            self.polls += 1
+            height = self.tip
+            self.tip = min(self.tip + 1, G + 20)
+            return height
+
+    with tempfile.TemporaryDirectory() as tmp:
+        btc = FakeBTC(txs, tip=G + 100)
+        cp = CatchingUpCP(blocks, tip=G + 5)
+        idx = make_indexer(tmp, btc, cp)
+        idx.config.confirmations = 0
+        idx.tip_refresh_interval = 0  # re-poll after every block
+        totals = []
+
+        class SpyBar:
+            enabled = False
+            total = 0
+
+            def update(self, n, postfix=""):
+                totals.append((n, self.total))
+
+            def write(self, msg):
+                pass
+
+            def close(self):
+                pass
+
+        idx._progress = SpyBar()
+        idx.sync_to_tip()
+        # One pass chased the oracle from G+5 to its final height.
+        assert idx.store.get_last_height(G) == G + 20
+        assert cp.polls > 2
+        # The bar's y (target) climbed with the oracle while x walked blocks.
+        assert totals[0][1] == G + 5
+        assert totals[-1] == (G + 20, G + 20)
+        assert all(y >= x for x, y in totals)
+
+        # And with the re-poll effectively off, a pass stops at the target it
+        # started with (the daemon's next pass picks the rest up).
+        cp2 = CatchingUpCP(blocks, tip=G + 5)
+        with tempfile.TemporaryDirectory() as tmp2:
+            idx2 = make_indexer(tmp2, btc, cp2)
+            idx2.config.confirmations = 0
+            idx2.tip_refresh_interval = 10 ** 9
+            idx2.sync_to_tip()
+            assert idx2.store.get_last_height(G) == G + 5
+            idx2.close()
+        idx.close()
