@@ -576,7 +576,7 @@ async function renderDetail(id){
   showView('detail');
   document.title = c ? `Counter #${c.number} · ${c.asset} — Bitcoin Counters` : 'Bitcoin Counters — Explorer';
   if(!c){el('detail').innerHTML=`<div class="empty"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
-  const mp=`https://mempool.space/tx/${c.txid}`;
+  const mp=`https://explore.block.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
   const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
   el('detail').innerHTML=`
