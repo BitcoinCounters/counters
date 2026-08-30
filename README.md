@@ -174,7 +174,7 @@ counters list --recent 50
 counters list --source bc1q...                    # by mint-time source address
 counters list --block 902000-902100               # by block range
 counters info 0                                   # one counter: the inscription event
-counters info 0 --full                            # every event field (block, txids, hashes, ...)
+counters info 0 --detailed                        # every event field (block, txids, hashes, ...)
 counters info XDUALS                              # the ASSET: supply, holders, its counters, totals
 counters info XDUALS --trading                    # market state: DEX orders & matches, dispensers & dispenses
 counters info 0 --json                            # metadata as JSON (asset name gives asset JSON)
