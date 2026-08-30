@@ -123,6 +123,20 @@ def _ensure_fee(config: Config, store: Store, row: sqlite3.Row) -> tuple[int | N
     return fee, tx_size
 
 
+def _dispenser_unit_price(d: dict, divisible: bool) -> str:
+    """Sats per whole unit of the dispensed asset, formatted. Core reports
+    it as `price`; derive it from satoshirate / give_quantity if absent."""
+    price = d.get("price")
+    if price is None:
+        per_lot = d["satoshirate"]
+        lot = d["give_quantity"] / (10**8 if divisible else 1)
+        price = per_lot / lot
+    price = float(price)
+    if price == int(price):
+        return f"{int(price):,}"
+    return f"{price:,.8f}".rstrip("0").rstrip(".")
+
+
 def _fmt_qty(qty: int, divisible: bool) -> str:
     if not divisible:
         return f"{int(qty):,}"
@@ -442,12 +456,19 @@ def _market_sections(config: Config, asset: str, divisible: bool) -> None:
         print(f"{pad}{unit(qty)} @ {price} each — block {m['block_index']:,}{status}")
 
     dispensers, n_disp = cp.get_asset_dispensers(asset)
-    print(f"dispensers   : {n_disp} open")
+    cheapest = " — cheapest first" if n_disp > 1 else ""
+    print(f"dispensers   : {n_disp} open{cheapest}")
     for d in dispensers[:10]:
         try:
-            print(f"{pad}{unit(d['give_quantity'])} for {d['satoshirate']:,} sats "
+            # Lead with the price PER UNIT, which is what makes dispensers
+            # comparable: a 10-XCP lot at 98,000 sats is 9,800 each, not the
+            # cheap one. The lot size only matters when it is not one unit.
+            per_unit = _dispenser_unit_price(d, divisible)
+            lot = d["give_quantity"]
+            lot_note = "" if lot == (10**8 if divisible else 1) else f" (lots of {unit(lot)})"
+            print(f"{pad}{per_unit} sats each{lot_note} "
                   f"— {unit(d['give_remaining'])} left @ {d['source']}")
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ZeroDivisionError):
             continue
 
     dispenses, n_dispenses = cp.get_asset_dispenses(asset)
