@@ -205,8 +205,11 @@ class CounterpartyClient:
         return data.get("result", []), data.get("result_count", 0)
 
     def get_asset_dispensers(self, asset: str, limit: int = 10) -> tuple[list[dict], int]:
+        """Open dispensers, CHEAPEST first: `price` is Core's sats per whole
+        unit of the asset (satoshirate / give_quantity, normalized), so lots
+        of different sizes rank correctly against each other."""
         return self._page(f"/v2/assets/{asset}/dispensers",
-                          {"status": "open", "limit": limit})
+                          {"status": "open", "limit": limit, "sort": "price:asc"})
 
     def get_asset_orders(self, asset: str, limit: int = 50) -> tuple[list[dict], int]:
         return self._page(f"/v2/assets/{asset}/orders",
