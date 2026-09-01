@@ -14,9 +14,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from counters.bitcoind import BitcoindError  # noqa: E402
 from counters.commands.funding import (  # noqa: E402
     DUST_SAT,
     Funding,
+    _fund_source,
+    _wallet_fee_floor,
     compose_retrying,
     dispense_floor,
     ensure_funded,
@@ -194,3 +197,69 @@ def test_unrelated_compose_errors_are_not_retried():
     except CounterpartyError:
         pass
     assert len(calls) == 1
+
+
+# --- the wallet's own fee floor ---------------------------------------------
+# bitcoind's WALLET will not build a transaction under max(-mintxfee,
+# -minrelaytxfee); -mintxfee defaults to 1 sat/vB. That is wallet policy, not a
+# relay rule, and it must not veto a sub-1 sat/vB mint — only the top-up is
+# built by the wallet, so only the top-up pays the floor.
+
+_FLOOR_ERROR = ("bitcoind RPC error for send: Fee rate (0.400 sat/vB) is lower "
+                "than the minimum fee rate setting (1.000 sat/vB)")
+
+
+def test_wallet_fee_floor_is_read_off_the_error():
+    assert _wallet_fee_floor(_FLOOR_ERROR) == 1.0
+    assert _wallet_fee_floor("Insufficient funds") is None
+
+
+class _FloorBtc:
+    """Refuses any `send` below `floor` sat/vB, the way bitcoind's wallet does."""
+
+    def __init__(self, floor: float = 1.0):
+        self.floor = floor
+        self.attempts = []
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return []
+        assert method == "send"
+        rate = params[3]
+        self.attempts.append(rate)
+        if rate is not None and rate < self.floor:
+            raise BitcoindError(
+                f"bitcoind RPC error for send: Fee rate ({rate:.3f} sat/vB) is lower "
+                f"than the minimum fee rate setting ({self.floor:.3f} sat/vB)")
+        return {"txid": "fundtxid"}
+
+
+def test_funding_retries_at_the_floor_when_the_wallet_refuses_the_rate(capsys):
+    btc = _FloorBtc()
+    txid = _fund_source(btc, "w", SRC, 22993, None, 0.4)
+    assert txid == "fundtxid"
+    assert btc.attempts == [0.4, 1.0]        # asked for 0.4, funded at the floor
+    out = capsys.readouterr().out
+    assert "-mintxfee" in out and "still goes at 0.4 sat/vB" in out
+
+
+def test_funding_at_or_above_the_floor_is_not_retried():
+    btc = _FloorBtc()
+    assert _fund_source(btc, "w", SRC, 5000, None, 3.0) == "fundtxid"
+    assert btc.attempts == [3.0]
+
+
+def test_other_funding_failures_are_not_retried(capsys):
+    class _Broke(_FloorBtc):
+        def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+            if method == "listdescriptors":
+                return {"descriptors": []}
+            self.attempts.append(params[3] if method == "send" else None)
+            raise BitcoindError("Insufficient funds")
+
+    btc = _Broke()
+    assert _fund_source(btc, "w", SRC, 5000, None, 0.4) is None
+    assert btc.attempts == [0.4]
+    assert "funding the source failed" in capsys.readouterr().err

@@ -22,6 +22,7 @@ untouched; only the automatic top-up is fenced.
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from decimal import Decimal
@@ -40,6 +41,23 @@ VISIBLE_WAIT = 2.0        # seconds between tries
 # Generous, but not so generous it clears a dispenser's rate for no reason —
 # whatever is not spent simply stays on the source.
 TYPICAL_VSIZE = 250
+
+# Bitcoin Core's WALLET refuses to build a transaction under
+# max(-mintxfee, -minrelaytxfee) (wallet/fees.cpp, GetRequiredFeeRate) and says
+# so with this message. -mintxfee defaults to 1 sat/vB, which is a wallet
+# policy, NOT a relay rule: a node whose -minrelaytxfee is lower relays and
+# mines below it happily, and the inscription itself never goes through the
+# wallet builder — Counterparty composes it and we broadcast the raw hex. Only
+# the top-up is built by the wallet, so only the top-up is bound by the floor.
+_FEE_FLOOR_RE = re.compile(
+    r"lower than the minimum fee rate setting \(([0-9]*\.?[0-9]+) sat/vB\)")
+
+
+def _wallet_fee_floor(error: object) -> float | None:
+    """The sat/vB floor Bitcoin Core's wallet just refused to go under, read
+    off its error message; None when the failure was something else."""
+    match = _FEE_FLOOR_RE.search(str(error))
+    return float(match.group(1)) if match else None
 
 
 def spendable_by_address(btc: BitcoindClient, wallet: str) -> dict[str, int]:
@@ -112,8 +130,26 @@ def _fund_source(btc: BitcoindClient, wallet: str, source: str, amount: int,
     try:
         result = btc.wallet_call(wallet, "send", params)
     except BitcoindError as e:
-        print(f"funding the source failed: {e}", file=sys.stderr)
-        return None
+        # The top-up is plumbing — a couple of hundred vbytes moving the coins
+        # the source needs. When the wallet's own floor forbids the rate asked
+        # for, price just this transaction at the floor and say so, rather than
+        # failing the whole mint: the message the user is actually paying for
+        # keeps the rate they chose.
+        floor = _wallet_fee_floor(e)
+        if floor is None or fee_rate is None or floor <= fee_rate:
+            print(f"funding the source failed: {e}", file=sys.stderr)
+            return None
+        print(f"  bitcoind's wallet will not build a transaction under {floor} sat/vB "
+              f"(-mintxfee, wallet policy — not a relay rule), so the {amount} sat "
+              f"top-up goes at {floor} instead of {fee_rate}. Everything after it "
+              f"still goes at {fee_rate} sat/vB. Set mintxfee in bitcoin.conf to "
+              f"fund at the lower rate too.")
+        params[3] = floor
+        try:
+            result = btc.wallet_call(wallet, "send", params)
+        except BitcoindError as e2:
+            print(f"funding the source failed: {e2}", file=sys.stderr)
+            return None
     txid = result.get("txid")
     if not txid:
         print(f"funding transaction was not broadcast: {result}", file=sys.stderr)
