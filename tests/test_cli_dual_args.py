@@ -91,6 +91,60 @@ def test_send_missing_value_is_a_usage_error():
         restore()
 
 
+def test_describe_positional_and_flag_forms_dispatch_identically():
+    calls, restore = _stub(M.issue, "cmd_describe")
+    try:
+        assert M.main(["wallet", "describe", "BONPARTY", "BURN THEM ALL"]) == 0
+        assert M.main(["wallet", "describe", "--asset", "BONPARTY",
+                       "--text", "BURN THEM ALL"]) == 0
+        assert calls[0] == calls[1]
+        (_, _, asset), kw = calls[0]
+        assert asset == "BONPARTY" and kw["text"] == "BURN THEM ALL"
+        assert kw["file_path"] is None and kw["clear"] is False
+    finally:
+        restore()
+
+
+def test_describe_text_is_optional_so_file_and_clear_can_supply_it():
+    # <text> is the only dual value here that may be absent: --file and
+    # --clear are the other two ways to say what the description becomes.
+    calls, restore = _stub(M.issue, "cmd_describe")
+    try:
+        assert M.main(["wallet", "describe", "BONPARTY", "--file", "desc.txt"]) == 0
+        assert calls[0][1]["text"] is None
+        assert calls[0][1]["file_path"] == "desc.txt"
+        assert M.main(["wallet", "describe", "BONPARTY", "--clear"]) == 0
+        assert calls[1][1]["clear"] is True
+    finally:
+        restore()
+
+
+def test_describe_file_and_clear_are_mutually_exclusive():
+    calls, restore = _stub(M.issue, "cmd_describe")
+    try:
+        try:
+            M.main(["wallet", "describe", "BONPARTY", "--file", "d.txt", "--clear"])
+            raise AssertionError("expected a usage error")
+        except SystemExit as e:
+            assert e.code == 2
+        assert calls == []
+    finally:
+        restore()
+
+
+def test_describe_text_given_twice_is_a_usage_error():
+    calls, restore = _stub(M.issue, "cmd_describe")
+    try:
+        try:
+            M.main(["wallet", "describe", "BONPARTY", "one", "--text", "two"])
+            raise AssertionError("expected a usage error")
+        except SystemExit as e:
+            assert e.code == 2
+        assert calls == []
+    finally:
+        restore()
+
+
 def test_open_order_flag_form():
     calls, restore = _stub(M.order, "cmd_open_order")
     try:
@@ -165,6 +219,7 @@ def test_every_tx_creating_command_accepts_fee_rate():
         (M.send, "cmd_send", ["send", DEST, "BONPARTY", "1"]),
         (M.issue, "cmd_lock_supply", ["lock-supply", "BONPARTY"]),
         (M.issue, "cmd_lock_description", ["lock-description", "BONPARTY"]),
+        (M.issue, "cmd_describe", ["describe", "BONPARTY", "a tagline"]),
         (M.issue, "cmd_issue", ["issue", "BONPARTY", "10"]),
         (M.issue, "cmd_transfer_ownership", ["transfer-ownership", "BONPARTY", DEST]),
         (M.burn, "cmd_burn", ["burn", "BONPARTY", "10"]),

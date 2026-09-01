@@ -286,7 +286,27 @@ counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the suppl
 counters wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
 counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply (no new counter — no new content)
 counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand over the issuance rights (ASSET ADDRESS)
+
+# --- the traditional description (OP_RETURN text, NOT a counter) ---
+# What Counterparty assets carried before taproot: a tagline, or a URL to the
+# metadata — ZOMBIEPEPES reads "BURN THEM ALL", HONDACIVIC reads
+# "https://xcp.fun/HONDACIVIC.json". It is a zero-quantity issuance whose text
+# rides in the OP_RETURN, so nothing is numbered: `inscribe --asset` is what
+# commits content and mints a counter.
+counters wallet --name mywallet describe MYASSET "https://xcp.fun/MYASSET.json"
+counters wallet --name mywallet describe MYASSET --file description.txt   # UTF-8 text; one trailing newline dropped
+counters wallet --name mywallet describe MYASSET --clear                  # empty the description
+counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" --dry-run
 ```
+
+> **How much text fits.** The whole Counterparty message must fit a single
+> 80-byte `OP_RETURN`: after the `CNTRPRTY` prefix and the CBOR-framed issuance
+> fields (asset id, quantity, flags, mime type), that leaves **54-58 bytes** of
+> description — 58 for a small asset id, 54 for the largest, and fewer still if
+> the issuance carries a quantity. This is why the tradition is to point at the metadata
+> rather than to embed it. Anything larger needs the taproot envelope
+> (`inscribe --asset MYASSET --file ...`), which mints a NEW counter.
+> `describe` never falls back to it silently.
 
 > The 12-word seed is the only backup and is shown once at create time. The
 > keys are imported into a Bitcoin Core descriptor wallet, which holds them and
@@ -501,7 +521,7 @@ counters/
     read.py         status / info / list
     wallet.py       create / restore / receive / balance / inscriptions
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
-    issue.py        lock-supply / lock-description / issue (owner-sourced)
+    issue.py        lock-supply / lock-description / describe / issue (owner-sourced)
     send.py         transfer a counter (Counterparty send) or plain BTC
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child
