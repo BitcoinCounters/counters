@@ -717,9 +717,8 @@ def cmd_inscribe(
         kind = " (numeric, free)"
     print(f"asset            : {asset}{kind}")
     print(f"content_type     : {mime_type}  ({len(body)} bytes)")
-    print(f"envelope         : {envelope}"
-          + ("  (two assets — also an ordinals inscription)"
-             if envelope == "counterparty/ord" else "  (counterparty native — one asset)"))
+    print("envelope         : "
+          + ("counterparty + ord" if envelope == "counterparty/ord" else "counterparty native"))
     if not reinscribe:
         print(f"supply           : {supply}{' divisible' if divisible else ''}"
               f"{' (LOCKED)' if lock else ''}")

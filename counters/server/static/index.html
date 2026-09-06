@@ -601,7 +601,7 @@ async function renderDetail(id){
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
-        ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? 'counterparty + ord — two assets (also an ordinals inscription)' : 'counterparty native — one asset') : ''}
+        ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? 'counterparty + ord' : 'counterparty native') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
