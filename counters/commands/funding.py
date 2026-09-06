@@ -60,6 +60,71 @@ def _wallet_fee_floor(error: object) -> float | None:
     return float(match.group(1)) if match else None
 
 
+def unsafe_sats(btc: BitcoindClient, wallet: str) -> int:
+    """Sats the wallet holds in coins Bitcoin Core will not select on its own.
+
+    Core marks an unconfirmed output `safe: false` unless the wallet made the
+    transaction from its own inputs — a coin received from outside, or one
+    whose parents are themselves unconfirmed, is spendable but not *trusted*,
+    so `getbalances` files it under `untrusted_pending` and coin selection
+    skips it. Counterparty has no such rule (we compose with
+    `allow_unconfirmed_inputs`), which is why a wallet can look funded here and
+    still fail at the wallet-built top-up.
+    """
+    total = 0
+    try:
+        rows = btc.wallet_call(wallet, "listunspent", [0, 9999999])
+    except BitcoindError:
+        return 0                      # cannot prove there is anything to unlock
+    for u in rows:
+        if u.get("spendable", True) and not u.get("safe", True):
+            total += int(round(u.get("amount", 0) * COIN))
+    return total
+
+
+def _relax_send(error: object, params: list, options: dict, btc: BitcoindClient,
+                wallet: str, amount: int, fee_rate: float | None) -> bool:
+    """Loosen one wallet-policy constraint that just refused the top-up.
+
+    Bitcoin Core's wallet declines transactions its own policy dislikes even
+    when the node would relay them and the coins are there. Each refusal has
+    exactly one narrow answer, applied once and announced; anything else is a
+    real failure. Returns True when `params` was changed and the send is worth
+    retrying.
+    """
+    message = str(error)
+
+    # 1. Fee floor: -mintxfee (default 1 sat/vB) is wallet policy, not a relay
+    #    rule, and binds only this transaction — the message being paid for
+    #    keeps the rate the user asked for.
+    floor = _wallet_fee_floor(error)
+    if floor is not None and fee_rate is not None and floor > fee_rate and params[3] != floor:
+        print(f"  bitcoind's wallet will not build a transaction under {floor} sat/vB "
+              f"(-mintxfee, wallet policy — not a relay rule), so the {amount} sat "
+              f"top-up goes at {floor} instead of {fee_rate}. Everything after it "
+              f"still goes at {fee_rate} sat/vB. Set mintxfee in bitcoin.conf to "
+              f"fund at the lower rate too.")
+        params[3] = floor
+        return True
+
+    # 2. Untrusted coins: the wallet has the money, in outputs Core will not
+    #    select because their parents are still unconfirmed.
+    if ("insufficient BTC in wallet" in message or "Insufficient funds" in message) \
+            and not options.get("include_unsafe"):
+        pending = unsafe_sats(btc, wallet)
+        if pending >= amount:
+            print(f"  wallet {wallet!r} holds {pending} sat in UNCONFIRMED coins it did not "
+                  f"originate, which Bitcoin Core skips by default (`safe: false` — they are "
+                  f"`untrusted_pending`, not a zero balance). Spending them anyway. If a parent "
+                  f"transaction is replaced before it confirms, this one dies with it and has to "
+                  f"be redone — nothing is lost either way.")
+            options["include_unsafe"] = True
+            params[4] = options
+            return True
+
+    return False
+
+
 def spendable_by_address(btc: BitcoindClient, wallet: str) -> dict[str, int]:
     """{address: total sats} of confirmed+unconfirmed spendable coins."""
     totals: dict[str, int] = {}
@@ -126,30 +191,24 @@ def _fund_source(btc: BitcoindClient, wallet: str, source: str, amount: int,
     if change_type:
         options["change_type"] = change_type
 
+    # The top-up is plumbing — a couple of hundred vbytes moving the coins the
+    # source needs — so a wallet-policy refusal should not sink the message the
+    # user is actually paying for. Each refusal gets one narrow relaxation
+    # (see _relax_send), announced; two at most, since there are two rules.
     params = [{source: _fmt_btc(Decimal(amount) / COIN)}, None, "unset", fee_rate, options]
-    try:
-        result = btc.wallet_call(wallet, "send", params)
-    except BitcoindError as e:
-        # The top-up is plumbing — a couple of hundred vbytes moving the coins
-        # the source needs. When the wallet's own floor forbids the rate asked
-        # for, price just this transaction at the floor and say so, rather than
-        # failing the whole mint: the message the user is actually paying for
-        # keeps the rate they chose.
-        floor = _wallet_fee_floor(e)
-        if floor is None or fee_rate is None or floor <= fee_rate:
-            print(f"funding the source failed: {e}", file=sys.stderr)
-            return None
-        print(f"  bitcoind's wallet will not build a transaction under {floor} sat/vB "
-              f"(-mintxfee, wallet policy — not a relay rule), so the {amount} sat "
-              f"top-up goes at {floor} instead of {fee_rate}. Everything after it "
-              f"still goes at {fee_rate} sat/vB. Set mintxfee in bitcoin.conf to "
-              f"fund at the lower rate too.")
-        params[3] = floor
+    result = None
+    for _ in range(3):
         try:
             result = btc.wallet_call(wallet, "send", params)
-        except BitcoindError as e2:
-            print(f"funding the source failed: {e2}", file=sys.stderr)
-            return None
+            break
+        except BitcoindError as e:
+            if not _relax_send(e, params, options, btc, wallet, amount, fee_rate):
+                print(f"funding the source failed: {e}", file=sys.stderr)
+                return None
+    if result is None:
+        print("funding the source failed: bitcoind kept refusing the transaction",
+              file=sys.stderr)
+        return None
     txid = result.get("txid")
     if not txid:
         print(f"funding transaction was not broadcast: {result}", file=sys.stderr)
