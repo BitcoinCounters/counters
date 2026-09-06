@@ -20,6 +20,7 @@ from counters.commands.funding import (  # noqa: E402
     Funding,
     _fund_source,
     _wallet_fee_floor,
+    unsafe_sats,
     compose_retrying,
     dispense_floor,
     ensure_funded,
@@ -256,10 +257,78 @@ def test_other_funding_failures_are_not_retried(capsys):
         def wallet_call(self, wallet, method, params=None, timeout=-1.0):
             if method == "listdescriptors":
                 return {"descriptors": []}
-            self.attempts.append(params[3] if method == "send" else None)
+            if method == "listunspent":
+                return []                      # genuinely empty: nothing to unlock
+            self.attempts.append(params[3])
             raise BitcoindError("Insufficient funds")
 
     btc = _Broke()
     assert _fund_source(btc, "w", SRC, 5000, None, 0.4) is None
     assert btc.attempts == [0.4]
+    assert "funding the source failed" in capsys.readouterr().err
+
+
+# --- coins Bitcoin Core will not select on its own --------------------------
+# An unconfirmed output the wallet did not originate is `safe: false`: spendable
+# and listed, but skipped by coin selection and filed under untrusted_pending.
+# Counterparty composes with allow_unconfirmed_inputs and has no such rule, so
+# a wallet can look funded and still fail at the wallet-built top-up.
+
+class _UntrustedBtc:
+    """Holds one unconfirmed, unsafe coin; refuses `send` until told to include it."""
+
+    def __init__(self, sats: int = 99389):
+        self.sats = sats
+        self.sends = []
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return [{"address": SRC, "amount": self.sats / 1e8,
+                     "spendable": True, "safe": False, "confirmations": 0}]
+        assert method == "send"
+        options = params[4]
+        self.sends.append(dict(options))
+        if not options.get("include_unsafe"):
+            raise BitcoindError("insufficient BTC in wallet w to cover the amount "
+                                "plus the transaction fee — fund a wallet address and retry.")
+        return {"txid": "fundtxid"}
+
+
+def test_unsafe_sats_counts_only_untrusted_coins():
+    btc = _UntrustedBtc(99389)
+    assert unsafe_sats(btc, "w") == 99389
+
+
+def test_funding_spends_untrusted_coins_after_core_refuses(capsys):
+    btc = _UntrustedBtc()
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) == "fundtxid"
+    assert [s.get("include_unsafe") for s in btc.sends] == [None, True]
+    out = capsys.readouterr().out
+    assert "UNCONFIRMED" in out and "safe: false" in out
+
+
+def test_untrusted_coins_that_do_not_cover_it_are_not_spent(capsys):
+    btc = _UntrustedBtc(500)                     # less than the 862 sat needed
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) is None
+    assert [s.get("include_unsafe") for s in btc.sends] == [None]
+    assert "funding the source failed" in capsys.readouterr().err
+
+
+def test_a_wallet_that_is_actually_empty_still_fails(capsys):
+    btc = _UntrustedBtc(0)
+    btc.sats = 0
+
+    def listunspent_empty(wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return []
+        btc.sends.append(dict(params[4]))
+        raise BitcoindError("Insufficient funds")
+
+    btc.wallet_call = listunspent_empty
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) is None
+    assert len(btc.sends) == 1
     assert "funding the source failed" in capsys.readouterr().err
