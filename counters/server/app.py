@@ -471,7 +471,7 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         # Envelope style is computed from the reveal tx (a bitcoind fetch), so
         # it is filled only on the single-counter endpoint; null in lists
         # (unknown, not "no"). Server-determined, never indexed.
-        "envelope": None,  # 'ord' | 'generic'
+        "envelope": None,  # 'counterparty/ord' | 'counterparty'
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],
         "txid": row["mint_txid"],
@@ -624,11 +624,11 @@ class Handler(BaseHTTPRequestHandler):
             # human viewer saw. COALESCE semantics: None never wipes a value.
             store.set_asset_snapshot(row["asset"], info.get("supply"), live_burned)
             rec["block_time"] = _block_time(self.config, row["block_index"])
-            # Envelope style (ord/generic) from the reveal tx — server-side,
+            # Envelope style (counterparty vs counterparty/ord) from the reveal tx — server-side,
             # serve-time; never indexed; never affects validity or numbering.
             tx = self._reveal_tx(row)
             if tx is not None:
-                rec["envelope"] = envelope_style(tx)      # 'ord' | 'generic'
+                rec["envelope"] = envelope_style(tx)      # 'counterparty/ord' | 'counterparty'
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:

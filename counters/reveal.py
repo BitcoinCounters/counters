@@ -137,23 +137,39 @@ def is_taproot_reveal(tx: dict) -> bool:
 
 
 def envelope_style(tx: dict) -> str | None:
-    """'ord' | 'generic' for a taproot reveal, None for non-reveals.
+    """'counterparty/ord' | 'counterparty' for a taproot reveal, None for non-reveals.
 
     Mirrors counterparty-rs's own classifier (bitcoin_client.rs): the envelope
-    is ord-style iff the tapscript's third instruction pushes the literal
+    is counterparty/ord iff the tapscript's third instruction pushes the literal
     b"ord" and the fourth pushes the single byte 0x07 (the metaprotocol tag,
     followed by "xcp"). Enrichment metadata only — both styles count equally
-    (R4), so this never gates validity or numbering."""
+    (R4), so this never gates validity or numbering.
+
+    Two details that look like omissions but match Core exactly:
+
+    - The metaprotocol *value* at ops[4] is deliberately not compared.
+      counterparty-rs requires the 0x07 tag to be PRESENT but never reads what
+      follows it (its loop jumps straight to index 7), so an envelope declaring
+      any other metaprotocol still parses as counterparty/ord. Do not "fix" this by testing
+      for b"xcp" — that would diverge from consensus. ("xcp" IS required, but
+      as the CBOR *map key* under tag 0x05 in the v11.1.0
+      ordinals_metadata_support form: a different check, in the metadata.)
+    - counterparty-rs gates is_ord (what this returns as "counterparty/ord") on instructions.len() >= 7; the floor here
+      is 4. A degenerate 4-6 op script opening OP_FALSE OP_IF "ord" 0x07 would
+      be called counterparty/ord here and counterparty there. Both floors classify all counters
+      to date identically, and the field is enrichment, so the divergence
+      cannot move a number.
+    """
     if not is_taproot_reveal(tx):
         return None
     witness = (tx.get("vin") or [{}])[0].get("txinwitness") or []
     try:
         ops = parse_script(bytes.fromhex(witness[1]))
     except (ScriptParseError, ValueError, IndexError):
-        return "generic"
+        return "counterparty"
     if len(ops) >= 4 and ops[2][1] == b"ord" and ops[3][1] == b"\x07":
-        return "ord"
-    return "generic"
+        return "counterparty/ord"
+    return "counterparty"
 
 
 def commit_txid(tx: dict) -> str | None:

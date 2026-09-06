@@ -445,7 +445,7 @@ def cmd_inscribe(
     no_fund: bool = False,
     slipstream: bool = False,
     slipstream_all: bool = False,
-    envelope: str = "generic",
+    envelope: str = "counterparty",
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -617,7 +617,7 @@ def cmd_inscribe(
             source=source, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock, encoding="taproot",
             mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
-            inscription=(envelope == "ord"),
+            inscription=(envelope == "counterparty/ord"),
         ), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
@@ -658,7 +658,7 @@ def cmd_inscribe(
 
     # Confirm the envelope Core actually built is the one asked for. Core
     # applies `inscription` only to a content-carrying issuance and otherwise
-    # drops back to the generic envelope without saying so — and a Core too old
+    # drops back to the counterparty-only envelope without saying so — and a Core too old
     # to know the parameter ignores it entirely. The style is baked into the
     # tapscript the commit address commits to, so it cannot be corrected later:
     # check it here, while nothing has been broadcast.
@@ -668,8 +668,8 @@ def cmd_inscribe(
               f"{envelope} one requested — the style is committed to by the "
               f"commit address and cannot be changed afterwards, so nothing was "
               f"broadcast.", file=sys.stderr)
-        if envelope == "ord":
-            print("hint: the ord/xcp envelope needs Counterparty Core v11+ "
+        if envelope == "counterparty/ord":
+            print("hint: the counterparty/ord envelope needs Counterparty Core v11+ "
                   "(the `inscription` compose parameter).", file=sys.stderr)
         return 1
 
@@ -718,8 +718,8 @@ def cmd_inscribe(
     print(f"asset            : {asset}{kind}")
     print(f"content_type     : {mime_type}  ({len(body)} bytes)")
     print(f"envelope         : {envelope}"
-          + ("  (ordinals-compatible — also an ordinals inscription)"
-             if envelope == "ord" else "  (Counterparty native)"))
+          + ("  (two assets — also an ordinals inscription)"
+             if envelope == "counterparty/ord" else "  (counterparty native — one asset)"))
     if not reinscribe:
         print(f"supply           : {supply}{' divisible' if divisible else ''}"
               f"{' (LOCKED)' if lock else ''}")

@@ -58,7 +58,7 @@ chain by a fresh sync. Only Bitcoin's copy is load-bearing.
 
 | Term | Meaning |
 |------|---------|
-| **Taproot envelope** | Counterparty v11's witness data encoding: an `OP_FALSE OP_IF … OP_ENDIF`/`OP_CHECKSIG` tapscript revealed by a commit/reveal pair. Two styles exist — the size-optimised **generic** envelope and the ordinals-compatible **"ord/xcp"** envelope (emitted with `inscription=true`). Both count equally; the style is recorded as enrichment (`envelope`, [§10](#10-enrichment-non-consensus)). An ord/xcp-style event is **also an ordinals inscription** — ord indexes the same reveal — the same dual-identity §5.4 describes for `STAMP:` payloads (34 of the first 87 counters are ord-style; #83/#84 are all three at once: counter, cursed stamp, and ordinals inscription). |
+| **Taproot envelope** | Counterparty v11's witness data encoding: an `OP_FALSE OP_IF … OP_ENDIF`/`OP_CHECKSIG` tapscript revealed by a commit/reveal pair. Two styles exist — the size-optimised **counterparty native** envelope and the **counterparty/ord** envelope (emitted with `inscription=true`). Neither name is upstream's: Core names only the ordinals one (`generate_ordinal_envelope_script`, "Ordinals envelope script"), leaves the other unnamed outside a counterparty `// Generic inscription` comment in counterparty-rs, and the Taproot Envelope spec names neither. The two are written **counterparty native** and **counterparty/ord** in prose; the stored and API value for the first is the bare `counterparty`, since a CLI flag and a JSON value cannot carry the space. **counterparty native** says whose envelope it is and that nothing else reads it, and the `/ord` says what the second style adds: it is not an alternative to the counterparty envelope but a superset of it, and its reveal creates **two independently ownable assets** — the Counterparty asset, and an ordinals inscription on its own UTXO that can be transferred away from it. That second asset is why Core adds a dust output for this style and not for counterparty: the inscription needs a sat to live on. The name is the ecosystem's own — the first five counters ever minted are all this style and all named for it: XDUALS (#0), DUALNAKA (#1-#3), DUALPEPE (#4). That it is genuinely both is structural: every field Core writes is an official ordinals tag — `ContentType` (1), `Metadata` (5), `Metaprotocol` (7), per ord's own `Tag` enum — and tag 7 carries the literal `xcp`, which is ordinals' designated mechanism for another protocol to declare itself inside an inscription. All three are odd-numbered, so ord indexes the reveal normally and defers the metadata's meaning to the metaprotocol named in it. Both count equally; the style is recorded as enrichment (`envelope`, [§10](#10-enrichment-non-consensus)). A counterparty/ord event is **also an ordinals inscription** — ord indexes the same reveal — the same dual-identity §5.4 describes for `STAMP:` payloads (34 of the first 87 counters are counterparty/ord, 47 of 164 today; #83/#84 are all three at once: counter, cursed stamp, and ordinals inscription). |
 | **Commit tx** | Pays to the P2TR address committing to the envelope tapscript. |
 | **Reveal tx** | Script-path-spends the commit output, exposing the envelope in **input 0's witness**, and carries an `OP_RETURN` holding only the literal marker `CNTRPRTY`. This is the transaction Counterparty parses and the one a counter is keyed to. |
 | **File event** | A qualifying Counterparty message (issuance or fairminter deploy) whose description is non-empty and taproot-carried. One counter per file event. |
@@ -322,9 +322,9 @@ recorded.
 ### 10.1 Dual-identity tags (serve-time display)
 
 The same on-chain bytes a counter commits can *also* be read by another
-protocol — an **ordinals inscription** (`envelope: ord`, the ord-compatible
+protocol — an **ordinals inscription** (`envelope: counterparty/ord`, the ord-compatible
 carrier) or a **Bitcoin Stamp** (a `STAMP:` payload, §5.4). These are genuine
-dual-identities: one content commitment, multiple readers — the ord envelope
+cross-protocol identities: one content commitment, multiple readers — the counterparty/ord envelope
 *is* the Counterparty taproot envelope, and a `STAMP:` payload *is* the
 description text. (A proto-counter — the first-version `COUNT`-envelope
 protocol — is **not** in this class: it reads a *separate* `COUNT` envelope
@@ -335,9 +335,35 @@ These tags are **determined by the server at serve time, not indexed** — pure
 functions of data the server can re-derive (the content blob for stamps; the
 reveal transaction's witness for `envelope`), so they never live in the
 consensus store and a rules change needs no reindex. `envelope` is classified
-exactly as counterparty-rs does (third tapscript push == `"ord"`, fourth ==
-`0x07`). Because it costs a bitcoind fetch, it is filled only on the
+exactly as counterparty-rs's `is_ord` does (third tapscript push == `"ord"`, fourth ==
+`0x07`). Note that the *value* of the metaprotocol tag is never compared:
+counterparty-rs requires tag `0x07` to be present but never reads what follows
+it, so `xcp` is a convention of Core's composer, not a parser requirement.
+Because it costs a bitcoind fetch, `envelope` is filled only on the
 single-counter endpoint (null in list responses — unknown, not "no").
+
+### 10.2 `metadata_shape` (`counterparty/ord` only)
+
+Core's counterparty/ord envelope admits two payload shapes under tag `0x05`, and they are
+**not** two envelope styles — consensus reassembles both to the identical
+`[type_id][cbor]` byte string, so `envelope` stays a faithful mirror of
+counterparty-rs's `is_ord` and this is recorded separately:
+
+| value | shape | available from |
+| --- | --- | --- |
+| `array` | bare CBOR array — the message fields, in order | v11.0.0, block 902,000 |
+| `map` | CBOR map whose `"xcp"` key holds that array; other keys are ordinals provenance metadata, ignored by the consensus parser | v11.1.0 `ordinals_metadata_support`, block 952,800 |
+
+Unlike the metaprotocol tag, the literal `"xcp"` **is** load-bearing here — it
+is the map key counterparty-rs looks up (`bitcoin_client.rs`), and a map
+without it is a parse error rather than a fallback.
+
+Every counterparty/ord counter to date is `array` (47 of 47); no `map`-form counter exists
+yet. The distinction is worth recording because the map can carry arbitrary
+provenance keys that ordinals indexers render and Counterparty discards — a
+fact about the artifact that `envelope: counterparty/ord` alone cannot express — and
+because tooling emitting the map form is already deployed. `null` for
+`counterparty`, which has no metadata section at all.
 
 ---
 

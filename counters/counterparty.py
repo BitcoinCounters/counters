@@ -249,10 +249,10 @@ class CounterpartyClient:
         `mime_type` labels the description content; binary content is passed
         as hex per Core's content encoding (§5.1).
 
-        `inscription=True` asks Core for the ordinals-compatible "ord/xcp"
-        envelope instead of its native generic one (build ref v3 §13,
+        `inscription=True` asks Core for the ordinals-compatible "ord"
+        envelope instead of its own counterparty one (build ref v3 §13,
         "Taproot envelope"). Core applies it only to a content-carrying
-        issuance/fairminter/broadcast and SILENTLY falls back to generic
+        issuance/fairminter/broadcast and SILENTLY falls back to counterparty
         otherwise, so callers that care must classify the composed reveal.
         Only sent when True: an older Core rejects unknown parameters.
 

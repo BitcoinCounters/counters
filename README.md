@@ -266,8 +266,8 @@ counters wallet --name mywallet inscribe --file cat.png                     # fr
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
 counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
-# pick the taproot envelope style (default: generic, Counterparty's own)
-counters wallet --name mywallet inscribe --file cat.png --envelope ord   # also an ordinals inscription
+# pick the taproot envelope style (default: counterparty, Counterparty's own)
+counters wallet --name mywallet inscribe --file cat.png --envelope counterparty/ord  # also an ordinals inscription
 # XCP on one address, BTC on another? Counterparty takes the issuance fee from the
 # FIRST INPUT's address, so the source must own its coins — this moves them there first
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from auto
@@ -326,25 +326,35 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > can build the witness two ways, and both count equally as counters (R4): the
 > style is enrichment, never validity or numbering.
 >
-> - **`generic`** (default) — Counterparty's own envelope: `OP_FALSE OP_IF`,
+> - **`counterparty`** (default) — Counterparty's own envelope: `OP_FALSE OP_IF`,
 >   the serialized message in 520-byte chunks, `OP_ENDIF`. Nothing but
 >   Counterparty reads it.
-> - **`ord`** — the ordinals-compatible **ord/xcp** envelope, tagged with the
->   content type (tag 1), the metaprotocol `xcp` (tag 7) and the rest of the
->   issuance as CBOR metadata (tag 5), with the file itself as the body. The
->   reveal is then *simultaneously* a counter and an ordinals inscription —
->   `ord` indexes the same transaction. It costs a flat **+185 WU (~46 vB)**
->   over generic, whatever the file size.
+> - **`counterparty/ord`** — the same Counterparty envelope *plus* the ordinals framing:
+>   tagged with the content type (tag 1), the metaprotocol `xcp` (tag 7) and
+>   the rest of the issuance as CBOR metadata (tag 5), with the file itself as
+>   the body. It is not an alternative to `counterparty` but a superset of it — the
+>   reveal creates **two independently ownable assets**, the Counterparty asset
+>   and an ordinals inscription on its own UTXO that can be sent away from it.
+>   That second asset is why Core adds a dust output here and not for `counterparty`:
+>   the inscription needs a sat to live on. Hence the name, and hence the first
+>   five counters ever minted — XDUALS, DUALNAKA, DUALPEPE. It costs roughly **+150 WU** over
+>   counterparty and does not scale with the file: ~124 WU for the dust output Core
+>   adds for an ordinals envelope (31 vB at the 4x output rate) plus ~26 WU of
+>   tags — `"ord"`, `0x07`, `"xcp"`, `0x01`, the MIME string, and one `0x05`
+>   per metadata chunk. Only the MIME string's length moves the figure.
 >
 > The style is fixed by the tapscript the commit address commits to, so it can
-> never be changed after the fact. Core applies `ord` only to a
-> content-carrying issuance and otherwise falls back to generic *silently* —
+> never be changed after the fact. Core applies `counterparty/ord` only to a
+> content-carrying issuance and otherwise falls back to counterparty *silently* —
 > so the composed reveal is classified before anything is broadcast, and a mint
 > that did not get the style you asked for is refused rather than sent.
 >
 > Historically the choice mattered: of the first 87 counters, 34 were minted
-> ord-style and 8 as Bitcoin Stamps, while the native envelope was used 46
-> times — but 45 of those carried only an off-chain URL.
+> counterparty/ord and 8 as Bitcoin Stamps, while counterparty native was used 53
+> times — but 46 of those carried only a pointer. Across all 164 counters to
+> date the split is 47 counterparty/ord / 117 counterparty native, with 98 of
+> the native ones being pointers and no counterparty/ord counter ever having
+> been one.
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
 > with a destination output (so no `transfer_destination` on an inscription
@@ -407,13 +417,19 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > the replacement at its own size and a competitive rate instead, and prints the
 > signed hex for direct submission, since no ordinary node will relay it.
 
-> **An inscription's reveal cannot be sped up or replaced.** Counterparty signs
-> it with an ephemeral envelope key, so it cannot be re-signed (no RBF), and it
-> spends its whole input to fee, emitting only an `OP_RETURN` — so it has no
-> output to attach a CPFP child to. A child on the *commit* is the reveal's
-> sibling, not its ancestor, and does not lift it; replacing the commit changes
-> its txid and merely invalidates the reveal. A reveal broadcast too cheaply can
-> only be waited out, or abandoned with `cancel` on the commit and re-minted.
+> **A reveal can never be replaced, and only a `counterparty/ord` one can be sped up.**
+> Counterparty signs the reveal with an ephemeral envelope key it discards, so
+> it can never be re-signed: no RBF, in either style. CPFP, however, depends on
+> the envelope. A `counterparty` reveal spends its whole input to fee and emits only
+> an `OP_RETURN`, so there is no output to attach a child to. A `counterparty/ord` reveal
+> additionally carries the dust output Core adds for an ordinals envelope
+> (v11.0.0: "when using an Ordinals envelope script, add a dust output for the
+> source address"); it pays the source address, so it *can* anchor a CPFP child.
+> All 47 counterparty/ord counters to date have it and all 117 native ones do not. A child
+> on the *commit* is the reveal's sibling, not its ancestor, and lifts neither;
+> replacing the commit changes its txid and merely invalidates the reveal. A
+> cheap `counterparty` reveal can only be waited out, or abandoned with `cancel` on
+> the commit and re-minted.
 
 > Counterparty splits what English calls "owning" a counter in two. `send`
 > moves the **tokens** (the asset balance); `transfer-ownership` moves the
