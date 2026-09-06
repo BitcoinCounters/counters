@@ -228,7 +228,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     raw_ct = row["content_type_raw"]
     print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
     if detailed and envelope:
-        print(f"envelope     : {'counterparty + ord — two assets (also an ordinals inscription)' if envelope == 'counterparty/ord' else 'counterparty native — one asset'}")
+        print(f"envelope     : {'counterparty + ord' if envelope == 'counterparty/ord' else 'counterparty native'}")
     if detailed and stamp_mime:
         print(f"stamp        : {stamp_mime} (decodes as a stamp image)")
     print(f"size         : {row['content_length']} bytes")
