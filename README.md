@@ -350,10 +350,10 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > that did not get the style you asked for is refused rather than sent.
 >
 > Historically the choice mattered: of the first 87 counters, 34 were minted
-> counterparty/ord and 8 as Bitcoin Stamps, while counterparty native was used 53
+> counterparty + ord and 8 as Bitcoin Stamps, while counterparty native was used 53
 > times — but 46 of those carried only a pointer. Across all 164 counters to
-> date the split is 47 counterparty/ord / 117 counterparty native, with 98 of
-> the native ones being pointers and no counterparty/ord counter ever having
+> date the split is 47 counterparty + ord to 117 counterparty native, with 98 of
+> the native ones being pointers and no counterparty + ord counter ever having
 > been one.
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
@@ -425,7 +425,7 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > additionally carries the dust output Core adds for an ordinals envelope
 > (v11.0.0: "when using an Ordinals envelope script, add a dust output for the
 > source address"); it pays the source address, so it *can* anchor a CPFP child.
-> All 47 counterparty/ord counters to date have it and all 117 native ones do not. A child
+> All 47 counterparty + ord counters to date have it and all 117 native ones do not. A child
 > on the *commit* is the reveal's sibling, not its ancestor, and lifts neither;
 > replacing the commit changes its txid and merely invalidates the reveal. A
 > cheap `counterparty` reveal can only be waited out, or abandoned with `cancel` on
