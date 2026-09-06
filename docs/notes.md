@@ -49,7 +49,7 @@ reveal transaction
 └─ output: OP_RETURN "CNTRPRTY"     # literal, unencrypted marker
 ```
 
-The file travels as data pushes inside the tapscript's never-executed `OP_FALSE OP_IF … OP_ENDIF` block. Two envelope styles exist — the size-optimised **counterparty native** envelope and the **counterparty/ord** style (`inscription=true`), which is that same envelope plus the ordinals framing — and both count equally.
+The file travels as data pushes inside the tapscript's never-executed `OP_FALSE OP_IF … OP_ENDIF` block. Two envelope styles exist — the size-optimised **counterparty native** envelope and the **counterparty + ord** style (`inscription=true`), which is that same envelope plus the ordinals framing — and both count equally.
 
 The indexer never parses envelope contents. It checks only the carrier — the literal `CNTRPRTY` `OP_RETURN` plus the three-item input-0 witness — and reads the content from Counterparty's parsed state. Counterparty is the oracle; the indexer is a numbering lens over it.
 
@@ -99,7 +99,7 @@ non-empty.
   counters — which is also why counter numbering never collides with output-side
   schemes like classic Bitcoin Stamps.
 - **Convergent identity.** Because the carrier *is* the ordinals envelope, an
-  counterparty/ord counter is simultaneously an ordinals inscription, and a `STAMP:`
+  counterparty + ord counter is simultaneously an ordinals inscription, and a `STAMP:`
   payload minted this way is also a (cursed) Bitcoin Stamp. Same witness bytes,
   three lenses.
 - **No new on-chain format for us.** Counterparty already supplied identity,
