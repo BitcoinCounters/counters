@@ -303,11 +303,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
                              "reinscription (new counter, same asset)")
-    p_insc.add_argument("--envelope", choices=["generic", "ord"], default="generic",
-                        help="taproot envelope style: 'generic' (default) is "
-                             "Counterparty's own; 'ord' is the ordinals-compatible "
-                             "ord/xcp envelope, which makes the reveal an ordinals "
-                             "inscription as well. Both count equally as counters")
+    p_insc.add_argument("--envelope", choices=["counterparty", "counterparty/ord", "ord", "generic"],
+                        default="counterparty",
+                        help="taproot envelope style: 'counterparty' (default, read as "
+                             "'counterparty native') is "
+                             "Counterparty's own envelope, read by nothing else; "
+                             "'counterparty/ord' is the ordinals-compatible one — still a "
+                             "Counterparty envelope, but ALSO an ordinals "
+                             "inscription, which is why the first counters were "
+                             "named XDUALS/DUALNAKA/DUALPEPE. Both count equally "
+                             "as counters. ('generic'->'counterparty' and 'ord'->'counterparty/ord' "
+                             "are deprecated aliases.)")
     p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
@@ -700,7 +706,8 @@ def main(argv: list[str] | None = None) -> int:
                     fund_from=args.fund_from, no_fund=args.no_fund,
                     slipstream=args.slipstream,
                     slipstream_all=args.slipstream_all,
-                    envelope=args.envelope,
+                    # Pre-rename names: "generic" -> counterparty, "ord" -> counterparty/ord.
+                    envelope={"generic": "counterparty", "ord": "counterparty/ord"}.get(args.envelope, args.envelope),
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(

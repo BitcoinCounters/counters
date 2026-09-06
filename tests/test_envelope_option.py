@@ -1,14 +1,14 @@
-"""`counters wallet inscribe --envelope generic|ord` — the taproot envelope choice.
+"""`counters wallet inscribe --envelope counterparty|ord` — the taproot envelope choice.
 
 Two styles exist and both count equally (build ref v3 §13): Counterparty's
-native **generic** envelope, and the ordinals-compatible **ord/xcp** one Core
+**counterparty** envelope, and the ordinals-compatible **ord** one Core
 emits for `inscription=true`. Three things are worth pinning:
 
-  1. the flag reaches cmd_inscribe, defaulting to generic (today's behaviour);
+  1. the flag reaches cmd_inscribe, defaulting to counterparty (today's behaviour);
   2. `inscription` is sent to Core ONLY for ord — an older Core rejects
-     parameters it does not know, so generic must stay a bare compose;
+     parameters it does not know, so counterparty must stay a bare compose;
   3. `ord` is refused, not accepted, when compose ignores it — Core silently
-     falls back to generic for message types it cannot inscribe, and the style
+     falls back to counterparty for message types it cannot inscribe, and the style
      is committed to by the commit address, so a fallback is unfixable later.
 
 Nothing here touches bitcoind or Counterparty Core.
@@ -33,7 +33,7 @@ _ORD_SCRIPT = (
     "0063" + "036f7264" + "0107" + "03786370" + "0107" + "0a696d6167652f6a706567"
     + "00" + "0401020304" + "68" + "20" + "22" * 32 + "ac"
 )
-# generic: OP_FALSE OP_IF <cbor message chunks> OP_ENDIF <pk> OP_CHECKSIG
+# counterparty: OP_FALSE OP_IF <cbor message chunks> OP_ENDIF <pk> OP_CHECKSIG
 _GENERIC_SCRIPT = "0063" + "0401020304" + "68" + "20" + "22" * 32 + "ac"
 
 
@@ -62,24 +62,24 @@ def _stub_inscribe():
 
 # --- 1. the flag reaches the command ----------------------------------------
 
-def test_envelope_defaults_to_generic():
+def test_envelope_defaults_to_native():
     calls, restore = _stub_inscribe()
     try:
         assert M.main(["wallet", "--name", "counts", "inscribe",
                        "--file", "cat.png"]) == 0
     finally:
         restore()
-    assert calls[0][1]["envelope"] == "generic"
+    assert calls[0][1]["envelope"] == "counterparty"
 
 
 def test_envelope_ord_is_passed_through():
     calls, restore = _stub_inscribe()
     try:
         assert M.main(["wallet", "--name", "counts", "inscribe",
-                       "--file", "cat.png", "--envelope", "ord"]) == 0
+                       "--file", "cat.png", "--envelope", "counterparty/ord"]) == 0
     finally:
         restore()
-    assert calls[0][1]["envelope"] == "ord"
+    assert calls[0][1]["envelope"] == "counterparty/ord"
 
 
 def test_unknown_envelope_is_a_usage_error():
@@ -116,7 +116,7 @@ def _compose(**kw):
     return cp.params
 
 
-def test_generic_sends_no_inscription_param():
+def test_native_sends_no_inscription_param():
     # An older Core errors on parameters it does not know: absent, not false.
     assert "inscription" not in _compose()
     assert "inscription" not in _compose(inscription=False)
@@ -129,14 +129,14 @@ def test_ord_sends_inscription_true():
 # --- 3. the composed reveal is classified before anything is broadcast ------
 
 def test_classifier_agrees_with_each_composed_style():
-    assert envelope_style(_reveal(_ORD_SCRIPT)) == "ord"
-    assert envelope_style(_reveal(_GENERIC_SCRIPT)) == "generic"
+    assert envelope_style(_reveal(_ORD_SCRIPT)) == "counterparty/ord"
+    assert envelope_style(_reveal(_GENERIC_SCRIPT)) == "counterparty"
 
 
 def test_silent_fallback_is_detectable():
-    # Core answering an --envelope ord request with a generic envelope is the
+    # Core answering an --envelope ord request with a counterparty envelope is the
     # case the command must catch: the styles differ, so the mismatch is visible.
-    requested = "ord"
+    requested = "counterparty/ord"
     assert envelope_style(_reveal(_GENERIC_SCRIPT)) != requested
 
 

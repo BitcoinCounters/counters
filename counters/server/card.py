@@ -232,7 +232,7 @@ def _badges(row: dict) -> list[tuple[str, tuple[int, int, int]]]:
         out.append(("REINSCRIBE", COPPER2))
     if row.get("is_pointer_like"):
         out.append(("POINTER", COPPER2))
-    if row.get("envelope") == "ord":
+    if row.get("envelope") == "counterparty/ord":
         out.append(("ORDINAL", COPPER2))
     return out
 

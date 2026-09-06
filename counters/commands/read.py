@@ -205,7 +205,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             tx = None
         if tx is not None:
             commit = commit_txid(tx)
-            envelope = envelope_style(tx)  # 'ord' | 'generic'
+            envelope = envelope_style(tx)  # 'counterparty/ord' | 'counterparty'
         # Stamp tag mirrors the explorer: a textual counter whose payload
         # decodes as a STAMP: image (display metadata only, §5.4).
         ct_class = classify_mime_type(row["content_type"] or "text/plain",
@@ -228,7 +228,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     raw_ct = row["content_type_raw"]
     print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
     if detailed and envelope:
-        print(f"envelope     : {'ord/xcp — also an ordinals inscription' if envelope == 'ord' else 'generic taproot'}")
+        print(f"envelope     : {'counterparty + ord — two assets (also an ordinals inscription)' if envelope == 'counterparty/ord' else 'counterparty native — one asset'}")
     if detailed and stamp_mime:
         print(f"stamp        : {stamp_mime} (decodes as a stamp image)")
     print(f"size         : {row['content_length']} bytes")
