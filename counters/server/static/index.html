@@ -579,6 +579,9 @@ async function renderDetail(id){
   const mp=`https://explore.block.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
   const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
+  // The reveal is the inscription: ord ids are <reveal txid>i<envelope index>,
+  // and Core writes exactly one envelope, so a counterparty/ord counter is always i0.
+  const ordUrl=`https://ordinals.com/inscription/${c.txid}i0`;
   el('detail').innerHTML=`
     <div class="stage">
       <div class="frame">
@@ -601,7 +604,7 @@ async function renderDetail(id){
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
-        ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? 'counterparty + ord' : 'counterparty native') : ''}
+        ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? `counterparty + <a href="${ordUrl}" target="_blank" rel="noopener" class="out">ord ↗</a>` : 'counterparty native') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}
