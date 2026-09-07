@@ -20,8 +20,9 @@ from .config import Config
 class CounterpartyError(Exception):
     """A Counterparty API call failed. `kind` classifies why so callers can
     report a specific reason: 'unreachable' (nothing listening on the port),
-    'timeout' (reachable but slow/busy), 'http' (non-200 response), or the
-    default 'error' (anything else)."""
+    'timeout' (reachable but slow/busy), 'not_ready' (503 while Core is
+    catching up), 'http' (any other non-200 response), 'unparsed' (the ledger
+    db has not finished the block asked for), or the default 'error'."""
 
     def __init__(self, message: str, kind: str = "error"):
         super().__init__(message)
@@ -78,8 +79,13 @@ class CounterpartyClient:
         if resp.status_code == 404:
             return None
         if resp.status_code != 200:
+            # Core answers 503 "Counterparty not ready" to every ledger
+            # question while it trails bitcoind by more than a block (only
+            # /v2/ itself still answers). Its own kind, so the indexer can
+            # switch to reading the ledger db instead of merely retrying.
+            kind = "not_ready" if resp.status_code == 503 and "not ready" in resp.text else "http"
             raise CounterpartyError(
-                f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}", kind="http"
+                f"Counterparty API HTTP {resp.status_code}: {resp.text[:200]}", kind=kind
             )
         return resp.json()
 
@@ -199,8 +205,11 @@ class CounterpartyClient:
         return data.get("result", []), data.get("result_count", 0)
 
     def get_asset_dispensers(self, asset: str, limit: int = 10) -> tuple[list[dict], int]:
+        """Open dispensers, CHEAPEST first: `price` is Core's sats per whole
+        unit of the asset (satoshirate / give_quantity, normalized), so lots
+        of different sizes rank correctly against each other."""
         return self._page(f"/v2/assets/{asset}/dispensers",
-                          {"status": "open", "limit": limit})
+                          {"status": "open", "limit": limit, "sort": "price:asc"})
 
     def get_asset_orders(self, asset: str, limit: int = 50) -> tuple[list[dict], int]:
         return self._page(f"/v2/assets/{asset}/orders",
@@ -227,6 +236,7 @@ class CounterpartyClient:
         encoding: str = "opreturn",
         mime_type: str | None = None,
         sat_per_vbyte: float | int | None = None,
+        inscription: bool = False,
     ) -> dict:
         """Compose an issuance and return Core's result dict.
 
@@ -238,6 +248,13 @@ class CounterpartyClient:
         signs itself with the ephemeral envelope key (build ref v3 §11).
         `mime_type` labels the description content; binary content is passed
         as hex per Core's content encoding (§5.1).
+
+        `inscription=True` asks Core for the ordinals-compatible "ord"
+        envelope instead of its own counterparty one (build ref v3 §13,
+        "Taproot envelope"). Core applies it only to a content-carrying
+        issuance/fairminter/broadcast and SILENTLY falls back to counterparty
+        otherwise, so callers that care must classify the composed reveal.
+        Only sent when True: an older Core rejects unknown parameters.
 
         `description=None` keeps the asset's current description on a
         reissue/lock — passing "" would WIPE it. `lock=True` locks the supply.
@@ -252,6 +269,8 @@ class CounterpartyClient:
             "allow_unconfirmed_inputs": "true",
             "verbose": "true",
         }
+        if inscription:
+            params["inscription"] = "true"
         if inputs_set is not None:
             params["inputs_set"] = inputs_set
         if description is not None:

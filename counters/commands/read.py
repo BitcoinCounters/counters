@@ -17,6 +17,7 @@ from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..content import classify_mime_type, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..ledger import CounterpartyLedger
 from ..reveal import commit_txid, envelope_style
 from ..store import Store
 
@@ -56,6 +57,18 @@ def cmd_status(config: Config) -> int:
         cp_h = st.get("counterparty_height")
         print(f"counterparty height : {cp_h if cp_h is not None else '?'}")
         print(f"counterparty state  : {st.get('ledger_state', '?')}")
+        if st and st.get("server_ready") is False:
+            # Core refuses ledger questions until caught up; say whether the
+            # indexer can read the ledger db directly in the meantime.
+            ledger = CounterpartyLedger.open(config)
+            if ledger is not None:
+                print(f"ledger db           : {ledger.path} (API not ready — "
+                      f"indexer reads the ledger directly, parsed to "
+                      f"{ledger.counterparty_height()})")
+                ledger.close()
+            else:
+                print(f"ledger db           : none at {config.cp_db_path} — the index "
+                      f"waits for the API (set CP_DB_PATH to follow meanwhile)")
 
         index_h = store.get_last_height(config.start_height)
         print(f"index height        : {index_h}")
@@ -110,6 +123,20 @@ def _ensure_fee(config: Config, store: Store, row: sqlite3.Row) -> tuple[int | N
     return fee, tx_size
 
 
+def _dispenser_unit_price(d: dict, divisible: bool) -> str:
+    """Sats per whole unit of the dispensed asset, formatted. Core reports
+    it as `price`; derive it from satoshirate / give_quantity if absent."""
+    price = d.get("price")
+    if price is None:
+        per_lot = d["satoshirate"]
+        lot = d["give_quantity"] / (10**8 if divisible else 1)
+        price = per_lot / lot
+    price = float(price)
+    if price == int(price):
+        return f"{int(price):,}"
+    return f"{price:,.8f}".rstrip("0").rstrip(".")
+
+
 def _fmt_qty(qty: int, divisible: bool) -> str:
     if not divisible:
         return f"{int(qty):,}"
@@ -139,7 +166,7 @@ def _asset_live(config: Config, name: str, last: sqlite3.Row):
 
 
 def _counter_info(config: Config, store: Store, row: sqlite3.Row,
-                  as_json: bool, full: bool) -> int:
+                  as_json: bool, detailed: bool) -> int:
     """One counter: the inscription event. Asset-level facts stay in the asset
     view — except supply and burned, useful enough to repeat here."""
     fee, tx_size = _ensure_fee(config, store, row)
@@ -161,7 +188,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     commit = envelope = block_time = stamp_mime = None
     burned = row["burned"]
     asset_numbers: list[int] = []
-    if full:
+    if detailed:
         cp = CounterpartyClient(config)
         try:
             burned = cp.get_asset_destroyed(row["asset"])
@@ -178,7 +205,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             tx = None
         if tx is not None:
             commit = commit_txid(tx)
-            envelope = envelope_style(tx)  # 'ord' | 'generic'
+            envelope = envelope_style(tx)  # 'counterparty/ord' | 'counterparty'
         # Stamp tag mirrors the explorer: a textual counter whose payload
         # decodes as a STAMP: image (display metadata only, §5.4).
         ct_class = classify_mime_type(row["content_type"] or "text/plain",
@@ -191,7 +218,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
 
     print(f"number       : {row['number']}")
     print(f"asset        : {_display_name(row)}")
-    if full:
+    if detailed:
         print(f"kind         : {row['kind']}")
     if supply is not None:
         fire = f" · 🔥 {_fmt_qty(burned, divisible)}" if burned else ""
@@ -200,12 +227,12 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     ct = row["content_type"] or "(none)"
     raw_ct = row["content_type_raw"]
     print(f"content_type : {ct}{f'  (raw: {raw_ct})' if raw_ct else ''}")
-    if full and envelope:
-        print(f"envelope     : {'ord/xcp — also an ordinals inscription' if envelope == 'ord' else 'generic taproot'}")
-    if full and stamp_mime:
+    if detailed and envelope:
+        print(f"envelope     : {'counterparty + ord' if envelope == 'counterparty/ord' else 'counterparty native'}")
+    if detailed and stamp_mime:
         print(f"stamp        : {stamp_mime} (decodes as a stamp image)")
     print(f"size         : {row['content_length']} bytes")
-    if full:
+    if detailed:
         if row["is_pointer_like"]:
             print("pointer-like : yes (content is a URI; metadata only)")
         print(f"block        : {row['block_index']} (cp tx_index {row['cp_tx_index']})")
@@ -213,7 +240,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             created = datetime.fromtimestamp(block_time, tz=timezone.utc)
             print(f"created      : {created:%Y-%m-%d %H:%M} UTC")
     if fee is not None:
-        if full:
+        if detailed:
             # Mirrors the explorer card: "fee paid" and "fee/B" as separate facts.
             print(f"fee          : {fee:,} sats")
             if tx_size:
@@ -221,9 +248,9 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         else:
             rate = f" ({fee / tx_size:.1f} sats/B)" if tx_size else ""
             print(f"fee          : {fee:,} sats{rate}")
-    if full and row["xcp_burned"] is not None:
+    if detailed and row["xcp_burned"] is not None:
         print(f"xcp_burned   : {row['xcp_burned'] / 1e8:g} XCP")
-    if full and asset_numbers:
+    if detailed and asset_numbers:
         others = [n for n in asset_numbers if n != row["number"]]
         original = min(asset_numbers)
         if not others:
@@ -234,7 +261,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             print(f"reinscribed  : yes — {shown}{more}")
         else:
             print(f"reinscribed  : yes — original #{original}")
-    if full:
+    if detailed:
         # Addresses, txids, and hashes last — long opaque strings that bury
         # the readable facts when interleaved above.
         print(f"source       : {row['source']}")
@@ -249,7 +276,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
 
 
 def _asset_info(config: Config, store: Store, name: str,
-                rows: list[sqlite3.Row], as_json: bool, full: bool) -> int:
+                rows: list[sqlite3.Row], as_json: bool, detailed: bool) -> int:
     """One asset: its counters and asset-level facts, with per-event detail
     left to the counter view. `rows` is every counter on the asset, oldest
     first (the original is rows[0]) — and may be empty: any Counterparty
@@ -325,7 +352,7 @@ def _asset_info(config: Config, store: Store, name: str,
         print(f"supply       : {_fmt_qty(supply, divisible)}{fire}")
     if holders is not None:
         print(f"holders      : {holders}")
-    if full and divisible is not None:
+    if detailed and divisible is not None:
         print(f"divisible    : {'yes' if divisible else 'no'}")
     if locked is not None:
         print(f"locked       : {'yes' if locked else 'no'}")
@@ -334,9 +361,9 @@ def _asset_info(config: Config, store: Store, name: str,
         xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
         unknown = f" ({unknown_fees} unknown)" if unknown_fees else ""
         print(f"total fees   : {total_fee:,} sats{xcp}{unknown}")
-        if full and total_tx_size:
+        if detailed and total_tx_size:
             print(f"fee/B        : {total_fee / total_tx_size:.1f} sats/B")
-    if full:
+    if detailed:
         print(f"asset_id     : {asset_id}")
         print(f"owner        : {owner}")
         _market_sections(config, asset, bool(divisible))
@@ -382,7 +409,7 @@ def _trading_info(config: Config, name: str) -> int:
 
 def _market_sections(config: Config, asset: str, divisible: bool) -> None:
     """The four market sections (orders, matches, dispensers, dispenses) —
-    shared by --trading and the tail of --full."""
+    shared by --trading and the tail of --detailed."""
     cp = CounterpartyClient(config)
     unit = lambda q: _fmt_qty(q, divisible)
     pad = " " * 15
@@ -429,12 +456,19 @@ def _market_sections(config: Config, asset: str, divisible: bool) -> None:
         print(f"{pad}{unit(qty)} @ {price} each — block {m['block_index']:,}{status}")
 
     dispensers, n_disp = cp.get_asset_dispensers(asset)
-    print(f"dispensers   : {n_disp} open")
+    cheapest = " — cheapest first" if n_disp > 1 else ""
+    print(f"dispensers   : {n_disp} open{cheapest}")
     for d in dispensers[:10]:
         try:
-            print(f"{pad}{unit(d['give_quantity'])} for {d['satoshirate']:,} sats "
+            # Lead with the price PER UNIT, which is what makes dispensers
+            # comparable: a 10-XCP lot at 98,000 sats is 9,800 each, not the
+            # cheap one. The lot size only matters when it is not one unit.
+            per_unit = _dispenser_unit_price(d, divisible)
+            lot = d["give_quantity"]
+            lot_note = "" if lot == (10**8 if divisible else 1) else f" (lots of {unit(lot)})"
+            print(f"{pad}{per_unit} sats each{lot_note} "
                   f"— {unit(d['give_remaining'])} left @ {d['source']}")
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, ZeroDivisionError):
             continue
 
     dispenses, n_dispenses = cp.get_asset_dispenses(asset)
@@ -453,7 +487,7 @@ def cmd_info(
     as_json: bool = False,
     raw: bool = False,
     save: str | None = None,
-    full: bool = False,
+    detailed: bool = False,
     trading: bool = False,
 ) -> int:
     store = Store(config)
@@ -471,7 +505,7 @@ def cmd_info(
             if trading:
                 print(f"number       : {row['number']}")
                 return _trading_info(config, row["asset"])
-            return _counter_info(config, store, row, as_json, full)
+            return _counter_info(config, store, row, as_json, detailed)
 
         rows = store.get_counters_by_asset(identifier)
         if raw or save:
@@ -481,7 +515,7 @@ def cmd_info(
             return _emit_content(store, rows[0], save)
         if trading:
             return _trading_info(config, rows[-1]["asset"] if rows else identifier)
-        return _asset_info(config, store, identifier, rows, as_json, full)
+        return _asset_info(config, store, identifier, rows, as_json, detailed)
     finally:
         store.close()
 

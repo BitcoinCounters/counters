@@ -49,6 +49,36 @@ with fresh taproot-carried content). Reorgs roll back log-structured (the fork p
 stored block hashes; numbering re-derives identically), and the index never
 advances past Counterparty's parsed height.
 
+**Following Counterparty while it catches up.** Core answers every ledger
+question with `503 Counterparty not ready` whenever it trails bitcoind by more
+than a block (restart, reparse, downtime) — only `/v2/` keeps replying. An
+indexer that knows only the API would sit still until Core is completely done
+and then start on the whole backlog. So when `/v2/` reports
+`server_ready: false` and Core's ledger database is readable locally
+(`CP_DB_PATH`), the indexer reads that file directly — read-only, one
+snapshot per block, only blocks Core has fully committed — and follows the
+ledger block by block as Core parses. Rows are decoded to exactly the API's
+shape (hex hashes, asset names, address strings), so the rules, numbering
+and rolling hash see the same events through either door; the API takes
+over again the moment Core is ready. The status line says
+`counterparty - 964131/964249 · catching up · indexing from ledger db` while
+this is happening, and both backends are re-polled once a second *during* a
+pass, so that line and the bar's target (`y` in `x/y`) tick with Core while
+`x` is the block the index has actually reached. With a remote Core there is no file to read: the index
+waits, as before (or run Core with `--force`, which disables the not-ready
+gate — Core marks that option as not for production).
+
+One difference is deliberate. The API serves fairminters from Core's derived
+state db, which keeps a single row per deploy and **moves its `block_index`
+to the block of the latest status change** (pending → open → closed): a
+deploy shows up under `/v2/blocks/{h}/fairminters` at its deploy block only
+while it is still pending, and later under the block it opened or closed in.
+The ledger logs one row per change and the deploy row keeps the deploy
+block, so the ledger reader returns only deploy rows (joined to
+`transactions`). Through the ledger a deploy is therefore always numbered at
+its deploy block — which is also what the API path yields when the index is
+following live, but not when a stretch of blocks is indexed after the fact.
+
 ## Requirements
 
 - Python 3.10+
@@ -115,6 +145,7 @@ Core running on the host.
 | `BTC_COOKIE_FILE` | `~/.bitcoin/.cookie` | bitcoind cookie (preferred auth) |
 | `BTC_RPC_USER` / `BTC_RPC_PASSWORD` | — | fallback if no cookie |
 | `CP_API_URL` | `http://127.0.0.1:4000` | Counterparty Core v2 API |
+| `CP_DB_PATH` | `~/.local/share/counterparty/counterparty.db` | Core's ledger db, read directly (read-only) while Core is catching up and its API is closed; ignored if the file does not exist |
 | `SLIPSTREAM_API_URL` | `https://slipstream.mara.com` | MARA Slipstream endpoint (`--slipstream`) |
 | `SLIPSTREAM_API_KEY` | — | optional; only applies a fee discount, never required to submit |
 | `COUNTER_DATA_DIR` | `data/` (`data-regtest/` on regtest) | SQLite + blobs location |
@@ -205,7 +236,7 @@ counters list --recent 50
 counters list --source bc1q...                    # by mint-time source address
 counters list --block 902000-902100               # by block range
 counters info 0                                   # one counter: the inscription event
-counters info 0 --full                            # every event field (block, txids, hashes, ...)
+counters info 0 --detailed                        # every event field (block, txids, hashes, ...)
 counters info XDUALS                              # the ASSET: supply, holders, its counters, totals
 counters info XDUALS --trading                    # market state: DEX orders & matches, dispensers & dispenses
 counters info 0 --json                            # metadata as JSON (asset name gives asset JSON)
@@ -297,6 +328,8 @@ counters wallet --name mywallet inscribe --file cat.png                     # fr
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
 counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
+# pick the taproot envelope style (default: counterparty, Counterparty's own)
+counters wallet --name mywallet inscribe --file cat.png --envelope counterparty/ord  # also an ordinals inscription
 # XCP on one address, BTC on another? Counterparty takes the issuance fee from the
 # FIRST INPUT's address, so the source must own its coins — this moves them there first
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund-from auto
@@ -315,7 +348,27 @@ counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the suppl
 counters wallet --name mywallet lock-description MYCOUNTER    # freeze the content reference forever
 counters wallet --name mywallet issue MYCOUNTER 100           # mint more supply (no new counter — no new content)
 counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand over the issuance rights (ASSET ADDRESS)
+
+# --- the traditional description (OP_RETURN text, NOT a counter) ---
+# What Counterparty assets carried before taproot: a tagline, or a URL to the
+# metadata — ZOMBIEPEPES reads "BURN THEM ALL", HONDACIVIC reads
+# "https://xcp.fun/HONDACIVIC.json". It is a zero-quantity issuance whose text
+# rides in the OP_RETURN, so nothing is numbered: `inscribe --asset` is what
+# commits content and mints a counter.
+counters wallet --name mywallet describe MYASSET "https://xcp.fun/MYASSET.json"
+counters wallet --name mywallet describe MYASSET --file description.txt   # UTF-8 text; one trailing newline dropped
+counters wallet --name mywallet describe MYASSET --clear                  # empty the description
+counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" --dry-run
 ```
+
+> **How much text fits.** The whole Counterparty message must fit a single
+> 80-byte `OP_RETURN`: after the `CNTRPRTY` prefix and the CBOR-framed issuance
+> fields (asset id, quantity, flags, mime type), that leaves **54-58 bytes** of
+> description — 58 for a small asset id, 54 for the largest, and fewer still if
+> the issuance carries a quantity. This is why the tradition is to point at the metadata
+> rather than to embed it. Anything larger needs the taproot envelope
+> (`inscribe --asset MYASSET --file ...`), which mints a NEW counter.
+> `describe` never falls back to it silently.
 
 > The 12-word seed is the only backup and is shown once at create time. The
 > keys are imported into a Bitcoin Core descriptor wallet, which holds them and
@@ -330,6 +383,40 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > coin has to be the largest — so funding a poor XCP address from a rich one
 > does not work directly. `--fund-from` moves the shortfall to the source first
 > and then inscribes.
+
+> **`--envelope` — which taproot envelope carries the file.** Counterparty v11
+> can build the witness two ways, and both count equally as counters (R4): the
+> style is enrichment, never validity or numbering.
+>
+> - **`counterparty`** (default) — Counterparty's own envelope: `OP_FALSE OP_IF`,
+>   the serialized message in 520-byte chunks, `OP_ENDIF`. Nothing but
+>   Counterparty reads it.
+> - **`counterparty/ord`** — the same Counterparty envelope *plus* the ordinals framing:
+>   tagged with the content type (tag 1), the metaprotocol `xcp` (tag 7) and
+>   the rest of the issuance as CBOR metadata (tag 5), with the file itself as
+>   the body. It is not an alternative to `counterparty` but a superset of it — the
+>   reveal creates **two independently ownable assets**, the Counterparty asset
+>   and an ordinals inscription on its own UTXO that can be sent away from it.
+>   That second asset is why Core adds a dust output here and not for `counterparty`:
+>   the inscription needs a sat to live on. Hence the name, and hence the first
+>   five counters ever minted — XDUALS, DUALNAKA, DUALPEPE. It costs roughly **+150 WU** over
+>   counterparty and does not scale with the file: ~124 WU for the dust output Core
+>   adds for an ordinals envelope (31 vB at the 4x output rate) plus ~26 WU of
+>   tags — `"ord"`, `0x07`, `"xcp"`, `0x01`, the MIME string, and one `0x05`
+>   per metadata chunk. Only the MIME string's length moves the figure.
+>
+> The style is fixed by the tapscript the commit address commits to, so it can
+> never be changed after the fact. Core applies `counterparty/ord` only to a
+> content-carrying issuance and otherwise falls back to counterparty *silently* —
+> so the composed reveal is classified before anything is broadcast, and a mint
+> that did not get the style you asked for is refused rather than sent.
+>
+> Historically the choice mattered: of the first 87 counters, 34 were minted
+> counterparty + ord and 8 as Bitcoin Stamps, while counterparty native was used 53
+> times — but 46 of those carried only a pointer. Across all 164 counters to
+> date the split is 47 counterparty + ord to 117 counterparty native, with 98 of
+> the native ones being pointers and no counterparty + ord counter ever having
+> been one.
 
 > Constraints inherited from Counterparty: taproot encoding cannot be combined
 > with a destination output (so no `transfer_destination` on an inscription
@@ -392,13 +479,19 @@ counters wallet --name mywallet transfer-ownership MYCOUNTER bc1p...   # hand ov
 > the replacement at its own size and a competitive rate instead, and prints the
 > signed hex for direct submission, since no ordinary node will relay it.
 
-> **An inscription's reveal cannot be sped up or replaced.** Counterparty signs
-> it with an ephemeral envelope key, so it cannot be re-signed (no RBF), and it
-> spends its whole input to fee, emitting only an `OP_RETURN` — so it has no
-> output to attach a CPFP child to. A child on the *commit* is the reveal's
-> sibling, not its ancestor, and does not lift it; replacing the commit changes
-> its txid and merely invalidates the reveal. A reveal broadcast too cheaply can
-> only be waited out, or abandoned with `cancel` on the commit and re-minted.
+> **A reveal can never be replaced, and only a `counterparty/ord` one can be sped up.**
+> Counterparty signs the reveal with an ephemeral envelope key it discards, so
+> it can never be re-signed: no RBF, in either style. CPFP, however, depends on
+> the envelope. A `counterparty` reveal spends its whole input to fee and emits only
+> an `OP_RETURN`, so there is no output to attach a child to. A `counterparty/ord` reveal
+> additionally carries the dust output Core adds for an ordinals envelope
+> (v11.0.0: "when using an Ordinals envelope script, add a dust output for the
+> source address"); it pays the source address, so it *can* anchor a CPFP child.
+> All 47 counterparty + ord counters to date have it and all 117 native ones do not. A child
+> on the *commit* is the reveal's sibling, not its ancestor, and lifts neither;
+> replacing the commit changes its txid and merely invalidates the reveal. A
+> cheap `counterparty` reveal can only be waited out, or abandoned with `cancel` on
+> the commit and re-minted.
 
 > Counterparty splits what English calls "owning" a counter in two. `send`
 > moves the **tokens** (the asset balance); `transfer-ownership` moves the
@@ -490,6 +583,7 @@ counters/
   content.py        deterministic content derivation + MIME normalization — §5
   bitcoind.py       JSON-RPC client (cookie auth, raw tx / fee lookups)
   counterparty.py   Core v2 client (the oracle): block issuances/fairminters, compose
+  ledger.py         the same oracle questions answered from Core's ledger db, read-only (API closed while catching up)
   store.py          SQLite schema + blob store + rolling hash + reorg rollback
   tap.py            BIP340/341 primitives (address encoding for the wallet)
   bip32.py          BIP32/BIP86 derivation (pure-Python RIPEMD160 + ecdsa)
@@ -505,7 +599,7 @@ counters/
     read.py         status / info / list
     wallet.py       create / restore / receive / balance / inscriptions
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
-    issue.py        lock-supply / lock-description / issue (owner-sourced)
+    issue.py        lock-supply / lock-description / describe / issue (owner-sourced)
     send.py         transfer a counter (Counterparty send) or plain BTC
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child

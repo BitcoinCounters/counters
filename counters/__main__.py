@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     p_info = sub.add_parser("info", parents=[common], help="show a counter by number or asset")
     p_info.add_argument("identifier", help="counter number, asset name, or longname")
     g_info = p_info.add_mutually_exclusive_group()
-    g_info.add_argument("--full", action="store_true",
+    g_info.add_argument("--detailed", action="store_true",
                         help="every field (owner, source, hashes, mint tx, block, ...)")
     g_info.add_argument("--trading", action="store_true",
                         help="market state: open orders & matches (DEX), "
@@ -305,6 +305,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
                              "reinscription (new counter, same asset)")
+    p_insc.add_argument("--envelope", choices=["counterparty", "counterparty/ord", "ord", "generic"],
+                        default="counterparty",
+                        help="taproot envelope style: 'counterparty' (default, read as "
+                             "'counterparty native') is "
+                             "Counterparty's own envelope, read by nothing else; "
+                             "'counterparty/ord' is the ordinals-compatible one — still a "
+                             "Counterparty envelope, but ALSO an ordinals "
+                             "inscription, which is why the first counters were "
+                             "named XDUALS/DUALNAKA/DUALPEPE. Both count equally "
+                             "as counters. ('generic'->'counterparty' and 'ord'->'counterparty/ord' "
+                             "are deprecated aliases.)")
     p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
@@ -379,6 +390,29 @@ def main(argv: list[str] | None = None) -> int:
                              help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_lock_desc.add_argument("--dry-run", action="store_true",
                              help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_describe = wsub.add_parser(
+        "describe", parents=[common, wname, fundargs],
+        help="set an asset's description to text (the traditional OP_RETURN one)",
+        usage="counters wallet [--name NAME] describe <ASSET> [TEXT] "
+              "[--file PATH | --clear]",
+    )
+    _add_dual(p_describe, "asset", "asset",
+              help="asset name or longname whose issuance rights you hold")
+    _add_dual(p_describe, "text", "text",
+              help="the new description, e.g. a tagline or a URL to the metadata")
+    g_describe = p_describe.add_mutually_exclusive_group()
+    g_describe.add_argument("--file", dest="file_path", metavar="PATH",
+                            help="read the description from a UTF-8 text file "
+                                 "(one trailing newline is dropped)")
+    g_describe.add_argument("--clear", action="store_true",
+                            help="set the description to nothing")
+    p_describe.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                            help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_describe.add_argument("--yes", action="store_true",
+                            help="skip the confirmation prompt")
+    p_describe.add_argument("--dry-run", action="store_true",
+                            help="compose + sign + validate but do not broadcast; print raw hex")
 
     p_issue = wsub.add_parser(
         "issue", parents=[common, wname, fundargs],
@@ -643,7 +677,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "info":
         return read.cmd_info(
             config, args.identifier, as_json=args.json, raw=args.raw,
-            save=args.save, full=args.full, trading=args.trading,
+            save=args.save, detailed=args.detailed, trading=args.trading,
         )
 
     if args.command == "list":
@@ -674,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
                     fund_from=args.fund_from, no_fund=args.no_fund,
                     slipstream=args.slipstream,
                     slipstream_all=args.slipstream_all,
+                    # Pre-rename names: "generic" -> counterparty, "ord" -> counterparty/ord.
+                    envelope={"generic": "counterparty", "ord": "counterparty/ord"}.get(args.envelope, args.envelope),
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(
@@ -694,6 +730,15 @@ def main(argv: list[str] | None = None) -> int:
                 return issue.cmd_lock_description(
                     config, args.name, _dual_value(p_lock_desc, args, "asset"),
                     fee_rate=args.fee_rate, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
+                )
+            if args.wallet_command == "describe":
+                return issue.cmd_describe(
+                    config, args.name,
+                    _dual_value(p_describe, args, "asset"),
+                    text=_dual_value(p_describe, args, "text", required=False),
+                    file_path=args.file_path, clear=args.clear,
+                    fee_rate=args.fee_rate, assume_yes=args.yes, dry_run=args.dry_run,
                     fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "issue":

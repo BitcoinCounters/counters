@@ -1,4 +1,4 @@
-"""envelope_style() — ord vs generic carrier detection (enrichment only).
+"""envelope_style() — ord vs counterparty carrier detection (enrichment only).
 
 The fixtures mirror counterparty-rs's classifier: ord-style iff the
 tapscript's third instruction pushes b"ord" and the fourth pushes 0x07.
@@ -13,7 +13,7 @@ _ORD = (
     "0063" + "036f7264" + "0107" + "03786370" + "00" + "0401020304"
     + "68" + "20" + "22" * 32 + "ac"
 )
-# OP_FALSE OP_IF <data> OP_ENDIF <pubkey> OP_CHECKSIG (Counterparty generic)
+# OP_FALSE OP_IF <data> OP_ENDIF <pubkey> OP_CHECKSIG (Counterparty counterparty)
 _GENERIC = "0063" + "0401020304" + "68" + "20" + "22" * 32 + "ac"
 
 
@@ -24,12 +24,12 @@ def _tx(tapscript_hex: str) -> dict:
     }
 
 
-def test_ord_envelope_detected():
-    assert envelope_style(_tx(_ORD)) == "ord"
+def test_dual_envelope_detected():
+    assert envelope_style(_tx(_ORD)) == "counterparty/ord"
 
 
-def test_generic_envelope_detected():
-    assert envelope_style(_tx(_GENERIC)) == "generic"
+def test_native_envelope_detected():
+    assert envelope_style(_tx(_GENERIC)) == "counterparty"
 
 
 def test_non_reveal_returns_none():
@@ -44,5 +44,5 @@ def test_two_item_witness_returns_none():
     assert envelope_style(tx) is None
 
 
-def test_unparseable_tapscript_falls_back_to_generic():
-    assert envelope_style(_tx("4c")) == "generic"  # truncated OP_PUSHDATA1
+def test_unparseable_tapscript_falls_back_to_native():
+    assert envelope_style(_tx("4c")) == "counterparty"  # truncated OP_PUSHDATA1

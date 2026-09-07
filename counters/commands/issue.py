@@ -11,6 +11,7 @@ fee.
 
   lock-supply       ASSET  -> freeze the supply (no future issuance changes it)
   lock-description  ASSET  -> freeze the description (the image/metadata ref)
+  describe ASSET TEXT      -> set the description to text (or to a file's text)
   issue ASSET QUANTITY     -> mint additional supply of an existing asset
                              (--lock to lock the supply in the same transaction)
   transfer-ownership ASSET ADDRESS
@@ -35,9 +36,16 @@ import sys
 
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config, RESERVED_ASSETS
+from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
 from .funding import compose_retrying, ensure_funded
-from .send import _fmt_raw, _is_valid_address, _sign_and_broadcast, _to_raw_quantity
+from .send import (
+    _confirm_prompt,
+    _fmt_raw,
+    _is_valid_address,
+    _sign_and_broadcast,
+    _to_raw_quantity,
+)
 from .wallet import _wallet_addresses
 
 _ORDER_HINT = "note: the argument order is  transfer-ownership <ASSET> <ADDRESS>"
@@ -71,9 +79,15 @@ def _resolve_owned_asset(btc, cp, wallet: str, asset: str):
 
 def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
              lock: bool, description, transfer_destination: str | None = None,
-             fee_rate: float | None = None, funded: bool = False) -> str | None:
+             fee_rate: float | None = None, funded: bool = False,
+             oversize_hint: str | None = None) -> str | None:
     """Compose the issuance from the owner address; return its unsigned raw tx,
-    or None after printing the failure (with a funding hint when relevant)."""
+    or None after printing the failure (with a funding hint when relevant).
+
+    `oversize_hint` is printed when Counterparty refuses the message for not
+    fitting its single OP_RETURN — only `describe` can hit that, since it is the
+    one command here that puts a payload of the caller's choosing on the wire.
+    """
     try:
         composed = compose_retrying(lambda: cp.compose_issuance(
             source=owner, asset=asset, quantity=quantity, divisible=divisible,
@@ -84,6 +98,8 @@ def _compose(cp, owner: str, asset: str, quantity: int, divisible: bool,
     except CounterpartyError as e:
         msg = str(e)
         print(f"compose failed: {msg}", file=sys.stderr)
+        if oversize_hint and "OP_RETURN" in msg:
+            print(oversize_hint, file=sys.stderr)
         if "No UTXOs" in msg or "inputs_set" in msg or "Insufficient funds" in msg:
             print(f"hint: {owner} owns {asset} but has no spendable BTC. The issuance is "
                   f"sourced from the owner address, so it pays its own fee. Drop "
@@ -166,6 +182,173 @@ def cmd_lock_description(config: Config, wallet: str, asset: str,
     print(f"  freezing  : {info.get('description') or '(empty description)'}")
     if fee_rate is not None:
         print(f"  fee rate  : {fee_rate} sat/vB")
+    return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
+
+
+# Counterparty reads two literal descriptions as commands rather than as text
+# (issuance.py, parse): they keep the CURRENT description and set a flag instead.
+# The comparison there is on `description.lower()`, so match it exactly — a
+# padded " lock " really is stored as text.
+_LOCK_LITERALS = {
+    "lock": ("lock-supply", "locks the SUPPLY instead, keeping the current description"),
+    "lock_description": ("lock-description",
+                         "locks the DESCRIPTION instead, keeping the current one"),
+}
+
+
+def _new_description(text: str | None, file_path: str | None,
+                     clear: bool) -> tuple[str | None, int]:
+    """The description to set, from exactly one of --text/--file/--clear.
+
+    Returns (description, exit_code); the code is non-zero once the reason has
+    been printed. A file must be UTF-8 text: a traditional description is a
+    string in Counterparty's message, and file BYTES need a taproot envelope
+    (`inscribe`), which is a different transaction and mints a counter. One
+    trailing newline is dropped, since text files carry one and descriptions
+    do not.
+    """
+    given = [name for name, on in (("<text>/--text", text is not None),
+                                   ("--file", file_path is not None),
+                                   ("--clear", clear)) if on]
+    if len(given) != 1:
+        print(f"give exactly one of <text>/--text, --file or --clear"
+              f"{' (got ' + ', '.join(given) + ')' if given else ''}", file=sys.stderr)
+        return None, 1
+
+    if clear:
+        return "", 0
+    if text is not None:
+        return text, 0
+
+    try:
+        with open(file_path, "rb") as fh:
+            raw = fh.read()
+    except OSError as e:
+        print(f"cannot read {file_path}: {e}", file=sys.stderr)
+        return None, 1
+    try:
+        description = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        print(f"{file_path} is not UTF-8 text ({len(raw):,} bytes)", file=sys.stderr)
+        print(f"hint: a description carries text. To commit file bytes, inscribe them "
+              f"in a taproot envelope instead — that mints a NEW counter:\n"
+              f"  counters wallet inscribe --file {file_path} --asset <ASSET>",
+              file=sys.stderr)
+        return None, 1
+    if description.endswith("\r\n"):
+        description = description[:-2]
+    elif description.endswith("\n"):
+        description = description[:-1]
+    return description, 0
+
+
+def _render_description(description: str, mime_type: str | None,
+                        block_index: int) -> str:
+    """One line naming a description for the confirmation summary."""
+    if not description:
+        return "(empty)"
+    mime = mime_type or "text/plain"
+    if classify_mime_type(mime, block_index) == "binary":
+        # Binary content comes back from Counterparty hex-encoded (§5.1).
+        return f"{len(description) // 2:,} bytes of {mime} (file content)"
+    size = len(description.encode("utf-8"))
+    shown = description if len(description) <= 60 else description[:57] + "..."
+    return f"{shown!r} ({size:,} B, {mime})"
+
+
+def cmd_describe(config: Config, wallet: str, asset: str,
+                 text: str | None = None, file_path: str | None = None,
+                 clear: bool = False, fee_rate: float | None = None,
+                 assume_yes: bool = False, dry_run: bool = False,
+                 fund_from: str | None = None, no_fund: bool = False) -> int:
+    """Set an asset's description the traditional way: a zero-quantity issuance
+    whose text rides in the OP_RETURN.
+
+    This is the pre-taproot description — a tagline or, more usefully, a URL to
+    the metadata (ZOMBIEPEPES reads "BURN THEM ALL"; HONDACIVIC reads
+    "https://xcp.fun/HONDACIVIC.json"). The carrier is an OP_RETURN, so under
+    v3 the event is NOT a counter (R4 wants a taproot reveal) and nothing is
+    numbered — `inscribe --asset` is the command that commits content and mints.
+
+    The whole Counterparty message must fit one 80-byte OP_RETURN. After the
+    CNTRPRTY prefix and the CBOR-framed issuance fields (asset id, quantity,
+    flags, mime type) that leaves 54-58 bytes of text — 58 for a small asset
+    id, 54 for the largest, measured against Core. Core enforces it; the hint
+    on failure says so.
+    """
+    description, code = _new_description(text, file_path, clear)
+    if code:
+        return code
+
+    btc = BitcoindClient(config)
+    cp = CounterpartyClient(config)
+
+    resolved = _resolve_owned_asset(btc, cp, wallet, asset)
+    if resolved is None:
+        return 1
+    asset, info, owner = resolved
+
+    if info.get("description_locked"):
+        print(f"{asset} has a locked description; Counterparty rejects any change "
+              f"to it (\"Cannot update a locked description\")", file=sys.stderr)
+        return 1
+
+    literal = _LOCK_LITERALS.get(description.lower())
+    if literal:
+        command, effect = literal
+        print(f"refusing: Counterparty reads the description {description!r} as a "
+              f"command, not as text — it {effect}.", file=sys.stderr)
+        print(f"hint: run `counters wallet --name {wallet} {command} {asset}` if that "
+              f"is what you meant.", file=sys.stderr)
+        return 1
+
+    current = info.get("description") or ""
+    if description == current:
+        print(f"{asset} already reads exactly that; no transaction needed",
+              file=sys.stderr)
+        return 1
+
+    # The height of the issuance that set the CURRENT description: how
+    # Counterparty classified its mime type is a function of that block.
+    last_block = int(info.get("last_issuance_block_index") or 0)
+    was_binary = bool(current) and classify_mime_type(
+        info.get("mime_type") or "text/plain", last_block) == "binary"
+
+    print(f"describe {asset}")
+    print(f"  owner     : {owner}")
+    print(f"  now       : {_render_description(current, info.get('mime_type'), last_block)}")
+    print(f"  new       : {_render_description(description, 'text/plain', last_block)}")
+    print(f"  carrier   : OP_RETURN issuance, quantity 0 — mints no counter")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
+    if was_binary:
+        print(f"  WARNING   : {asset} currently carries file content; this replaces it "
+              f"with text. Counters already numbered keep their content — the index "
+              f"stores it — but explorers reading the asset will show the text.")
+
+    if not (dry_run or assume_yes or _confirm_prompt(
+            f"\nset the {asset} description?")):
+        print("aborted", file=sys.stderr)
+        return 1
+
+    fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
+
+    size = len(description.encode("utf-8"))
+    hint = (f"hint: the message must fit one 80-byte OP_RETURN — 54 to 58 bytes of "
+            f"text, depending on the asset id, and this description is {size:,} B. "
+            f"Shorten it (the traditional "
+            f"trick is a URL to the metadata, as HONDACIVIC does), or carry the "
+            f"content in a taproot envelope with `inscribe --asset {asset} --file ...`, "
+            f"which mints a NEW counter.")
+    rawtx = _compose(cp, owner, asset, quantity=0, divisible=bool(info.get("divisible")),
+                     lock=False, description=description, fee_rate=fee_rate,
+                     funded=fund.funded, oversize_hint=hint)
+    if rawtx is None:
+        return 1
+
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 

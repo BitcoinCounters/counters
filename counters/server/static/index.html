@@ -524,7 +524,7 @@ const fmtSupply=c=>fmtQty(c.supply,c);
 
 function card(c){
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.stamp_mime?'stamp':c.envelope==='counterparty/ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
     <div class="cfoot">
       <span class="num">${meterDigits(c.number)}</span>
       <span class="asset">${esc(c.asset)}</span>
@@ -576,9 +576,12 @@ async function renderDetail(id){
   showView('detail');
   document.title = c ? `Counter #${c.number} · ${c.asset} — Bitcoin Counters` : 'Bitcoin Counters — Explorer';
   if(!c){el('detail').innerHTML=`<div class="empty"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
-  const mp=`https://mempool.space/tx/${c.txid}`;
+  const mp=`https://explore.block.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
   const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
+  // The reveal is the inscription: ord ids are <reveal txid>i<envelope index>,
+  // and Core writes exactly one envelope, so a counterparty/ord counter is always i0.
+  const ordUrl=`https://ordinals.com/inscription/${c.txid}i0`;
   el('detail').innerHTML=`
     <div class="stage">
       <div class="frame">
@@ -593,7 +596,7 @@ async function renderDetail(id){
       ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reinscribe</span>` : ''}
       ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
       ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
-      ${c.envelope==='ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
+      ${c.envelope==='counterparty/ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
       ${c.size>WHOLE_BLOCK_BYTES ? `<span class="vbadge fb" title="over 3.5 MB — the inscription fills an entire Bitcoin block"><span class="dot"></span>whole block</span>`
         : c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
       <div class="facts">
@@ -601,7 +604,7 @@ async function renderDetail(id){
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
-        ${c.envelope ? fact('envelope', c.envelope==='ord' ? 'ord/xcp — also an ordinals inscription' : 'generic taproot') : ''}
+        ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? `counterparty + <a href="${ordUrl}" target="_blank" rel="noopener" class="out">ord ↗</a>` : 'counterparty native') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
         ${fact('block', `<a class="blocklink" onclick="go('#/b/${c.block}')">${c.block.toLocaleString()}</a>${c.msg_index ? ` · msg ${c.msg_index}` : ''}`)}

@@ -37,6 +37,7 @@ from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..reveal import envelope_style
 from ..slipstream import (
     MAX_WEIGHT,
     STANDARD_MAX_WEIGHT,
@@ -50,7 +51,7 @@ from .funding import (
     ensure_funded,
     spendable_by_address as _spendable_addresses,
 )
-from .wallet import _derived_addresses, _wallet_addresses
+from .wallet import _wallet_addresses
 
 NUMERIC_MIN = 26 ** 12 + 1     # Counterparty numeric-asset range
 NUMERIC_MAX = 2 ** 64 - 1
@@ -444,6 +445,7 @@ def cmd_inscribe(
     no_fund: bool = False,
     slipstream: bool = False,
     slipstream_all: bool = False,
+    envelope: str = "counterparty",
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -513,14 +515,10 @@ def cmd_inscribe(
         if slipstream_all:
             no_mempool_check = True
 
-    # Union the on-chain view with descriptor-derived addresses: Core omits
-    # CHANGE addresses from listreceivedbyaddress, and XCP parked on one whose
-    # coins are spent would otherwise look like "no XCP anywhere".
+    # On-chain view plus the derived window (see _wallet_addresses): XCP
+    # parked on a change address, or on one that only ever received assets,
+    # would otherwise look like "no XCP anywhere".
     wallet_addrs = set(_wallet_addresses(btc, wallet))
-    try:
-        wallet_addrs.update(_derived_addresses(btc, wallet, 20))
-    except BitcoindError:
-        pass
     try:
         spendable = _spendable_addresses(btc, wallet)
     except BitcoindError as e:
@@ -619,6 +617,7 @@ def cmd_inscribe(
             source=source, asset=asset, quantity=quantity, divisible=divisible,
             description=description, lock=lock, encoding="taproot",
             mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
+            inscription=(envelope == "counterparty/ord"),
         ), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
@@ -656,6 +655,23 @@ def cmd_inscribe(
         return 1
     reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
     reveal_txid = reveal_dec["txid"]
+
+    # Confirm the envelope Core actually built is the one asked for. Core
+    # applies `inscription` only to a content-carrying issuance and otherwise
+    # drops back to the counterparty-only envelope without saying so — and a Core too old
+    # to know the parameter ignores it entirely. The style is baked into the
+    # tapscript the commit address commits to, so it cannot be corrected later:
+    # check it here, while nothing has been broadcast.
+    built = envelope_style(reveal_dec)
+    if built != envelope:
+        print(f"compose returned a {built or 'unrecognized'} envelope, not the "
+              f"{envelope} one requested — the style is committed to by the "
+              f"commit address and cannot be changed afterwards, so nothing was "
+              f"broadcast.", file=sys.stderr)
+        if envelope == "counterparty/ord":
+            print("hint: the counterparty/ord envelope needs Counterparty Core v11+ "
+                  "(the `inscription` compose parameter).", file=sys.stderr)
+        return 1
 
     # Validate BOTH transactions as a package without broadcasting — unless the
     # caller opts out. An oversized inscription is a VALID transaction that
@@ -701,6 +717,8 @@ def cmd_inscribe(
         kind = " (numeric, free)"
     print(f"asset            : {asset}{kind}")
     print(f"content_type     : {mime_type}  ({len(body)} bytes)")
+    print("envelope         : "
+          + ("counterparty + ord" if envelope == "counterparty/ord" else "counterparty native"))
     if not reinscribe:
         print(f"supply           : {supply}{' divisible' if divisible else ''}"
               f"{' (LOCKED)' if lock else ''}")

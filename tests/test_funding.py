@@ -14,9 +14,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from counters.bitcoind import BitcoindError  # noqa: E402
 from counters.commands.funding import (  # noqa: E402
     DUST_SAT,
     Funding,
+    _fund_source,
+    _wallet_fee_floor,
+    unsafe_sats,
     compose_retrying,
     dispense_floor,
     ensure_funded,
@@ -194,3 +198,137 @@ def test_unrelated_compose_errors_are_not_retried():
     except CounterpartyError:
         pass
     assert len(calls) == 1
+
+
+# --- the wallet's own fee floor ---------------------------------------------
+# bitcoind's WALLET will not build a transaction under max(-mintxfee,
+# -minrelaytxfee); -mintxfee defaults to 1 sat/vB. That is wallet policy, not a
+# relay rule, and it must not veto a sub-1 sat/vB mint — only the top-up is
+# built by the wallet, so only the top-up pays the floor.
+
+_FLOOR_ERROR = ("bitcoind RPC error for send: Fee rate (0.400 sat/vB) is lower "
+                "than the minimum fee rate setting (1.000 sat/vB)")
+
+
+def test_wallet_fee_floor_is_read_off_the_error():
+    assert _wallet_fee_floor(_FLOOR_ERROR) == 1.0
+    assert _wallet_fee_floor("Insufficient funds") is None
+
+
+class _FloorBtc:
+    """Refuses any `send` below `floor` sat/vB, the way bitcoind's wallet does."""
+
+    def __init__(self, floor: float = 1.0):
+        self.floor = floor
+        self.attempts = []
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return []
+        assert method == "send"
+        rate = params[3]
+        self.attempts.append(rate)
+        if rate is not None and rate < self.floor:
+            raise BitcoindError(
+                f"bitcoind RPC error for send: Fee rate ({rate:.3f} sat/vB) is lower "
+                f"than the minimum fee rate setting ({self.floor:.3f} sat/vB)")
+        return {"txid": "fundtxid"}
+
+
+def test_funding_retries_at_the_floor_when_the_wallet_refuses_the_rate(capsys):
+    btc = _FloorBtc()
+    txid = _fund_source(btc, "w", SRC, 22993, None, 0.4)
+    assert txid == "fundtxid"
+    assert btc.attempts == [0.4, 1.0]        # asked for 0.4, funded at the floor
+    out = capsys.readouterr().out
+    assert "-mintxfee" in out and "still goes at 0.4 sat/vB" in out
+
+
+def test_funding_at_or_above_the_floor_is_not_retried():
+    btc = _FloorBtc()
+    assert _fund_source(btc, "w", SRC, 5000, None, 3.0) == "fundtxid"
+    assert btc.attempts == [3.0]
+
+
+def test_other_funding_failures_are_not_retried(capsys):
+    class _Broke(_FloorBtc):
+        def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+            if method == "listdescriptors":
+                return {"descriptors": []}
+            if method == "listunspent":
+                return []                      # genuinely empty: nothing to unlock
+            self.attempts.append(params[3])
+            raise BitcoindError("Insufficient funds")
+
+    btc = _Broke()
+    assert _fund_source(btc, "w", SRC, 5000, None, 0.4) is None
+    assert btc.attempts == [0.4]
+    assert "funding the source failed" in capsys.readouterr().err
+
+
+# --- coins Bitcoin Core will not select on its own --------------------------
+# An unconfirmed output the wallet did not originate is `safe: false`: spendable
+# and listed, but skipped by coin selection and filed under untrusted_pending.
+# Counterparty composes with allow_unconfirmed_inputs and has no such rule, so
+# a wallet can look funded and still fail at the wallet-built top-up.
+
+class _UntrustedBtc:
+    """Holds one unconfirmed, unsafe coin; refuses `send` until told to include it."""
+
+    def __init__(self, sats: int = 99389):
+        self.sats = sats
+        self.sends = []
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return [{"address": SRC, "amount": self.sats / 1e8,
+                     "spendable": True, "safe": False, "confirmations": 0}]
+        assert method == "send"
+        options = params[4]
+        self.sends.append(dict(options))
+        if not options.get("include_unsafe"):
+            raise BitcoindError("insufficient BTC in wallet w to cover the amount "
+                                "plus the transaction fee — fund a wallet address and retry.")
+        return {"txid": "fundtxid"}
+
+
+def test_unsafe_sats_counts_only_untrusted_coins():
+    btc = _UntrustedBtc(99389)
+    assert unsafe_sats(btc, "w") == 99389
+
+
+def test_funding_spends_untrusted_coins_after_core_refuses(capsys):
+    btc = _UntrustedBtc()
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) == "fundtxid"
+    assert [s.get("include_unsafe") for s in btc.sends] == [None, True]
+    out = capsys.readouterr().out
+    assert "UNCONFIRMED" in out and "safe: false" in out
+
+
+def test_untrusted_coins_that_do_not_cover_it_are_not_spent(capsys):
+    btc = _UntrustedBtc(500)                     # less than the 862 sat needed
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) is None
+    assert [s.get("include_unsafe") for s in btc.sends] == [None]
+    assert "funding the source failed" in capsys.readouterr().err
+
+
+def test_a_wallet_that_is_actually_empty_still_fails(capsys):
+    btc = _UntrustedBtc(0)
+    btc.sats = 0
+
+    def listunspent_empty(wallet, method, params=None, timeout=-1.0):
+        if method == "listdescriptors":
+            return {"descriptors": []}
+        if method == "listunspent":
+            return []
+        btc.sends.append(dict(params[4]))
+        raise BitcoindError("Insufficient funds")
+
+    btc.wallet_call = listunspent_empty
+    assert _fund_source(btc, "w", SRC, 862, None, 3.0) is None
+    assert len(btc.sends) == 1
+    assert "funding the source failed" in capsys.readouterr().err

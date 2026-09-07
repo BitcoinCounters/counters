@@ -93,11 +93,27 @@ def _import_electrum2(btc: BitcoindClient, name: str, keys: list[dict],
                  for k in keys], rescan)
 
 
+# Gap limit for the descriptor-derived window `_wallet_addresses` adds to
+# Core's on-chain view: addresses [0, N) of every ranged descriptor chain.
+DERIVED_WINDOW = 20
+
+
 def _wallet_addresses(btc: BitcoindClient, name: str) -> list[str]:
-    """Addresses the wallet controls that may hold Counterparty balances:
-    every address that has received funds (include_empty) plus current UTXOs.
-    This reflects what Bitcoin Core has SEEN on-chain, so it only returns
-    addresses if the wallet has been rescanned."""
+    """Addresses the wallet controls that may hold Counterparty balances.
+
+    Two views, unioned. (1) What Bitcoin Core has SEEN on-chain: every
+    address that has received funds (include_empty) plus current UTXOs —
+    only populated once the wallet has been rescanned. (2) The first
+    DERIVED_WINDOW addresses of each descriptor chain, by pure key math.
+
+    (2) is not an optimisation: Core's view is structurally blind to an
+    address that holds ONLY Counterparty assets. A Counterparty send puts
+    the destination inside the OP_RETURN data and pays it no bitcoin output,
+    so an address that received 3,000 XCP and never a satoshi has no
+    transaction Core can attribute to it — `listreceivedbyaddress` omits it,
+    `listunspent` has nothing, yet it is ours and Core can sign for it. The
+    same goes for change addresses whose coins are all spent. Any command
+    that asks "which of my addresses holds asset X" must look here."""
     addrs: set[str] = set()
     received = btc.wallet_call(name, "listreceivedbyaddress", [0, True, True])
     for r in received:
@@ -106,6 +122,10 @@ def _wallet_addresses(btc: BitcoindClient, name: str) -> list[str]:
     for u in btc.wallet_call(name, "listunspent", [0, 9999999]):
         if u.get("address"):
             addrs.add(u["address"])
+    try:
+        addrs.update(_derived_addresses(btc, name, DERIVED_WINDOW))
+    except BitcoindError:
+        pass  # non-descriptor (legacy) wallet: the on-chain view is all there is
     return sorted(addrs)
 
 
@@ -657,14 +677,14 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
     print(f"BTC confirmed : {_fmt_btc(confirmed)}")
     if pending:
         print(f"BTC pending   : {_fmt_btc(pending)}")
-    # Union the on-chain view with descriptor-derived addresses: Bitcoin Core
-    # omits CHANGE addresses from listreceivedbyaddress, so an asset sitting on
-    # one whose coins are all spent would otherwise be invisible.
+    # _wallet_addresses already unions the on-chain view with the default
+    # derived window; --addresses can widen that window further.
     addrs = set(_wallet_addresses(btc, name))
-    try:
-        addrs.update(_derived_addresses(btc, name, addresses))
-    except BitcoindError:
-        pass                                   # on-chain view alone still works
+    if addresses > DERIVED_WINDOW:
+        try:
+            addrs.update(_derived_addresses(btc, name, addresses))
+        except BitcoindError:
+            pass                               # on-chain view alone still works
     if detailed:
         btc_by_addr: dict[str, Decimal] = {}
         for u in btc.wallet_call(name, "listunspent", [0, 9999999]):
