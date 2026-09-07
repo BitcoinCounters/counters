@@ -34,17 +34,45 @@ CNTRPRTY_MARKER = b"CNTRPRTY"
 # The exact reveal OP_RETURN script: OP_RETURN PUSH8 "CNTRPRTY".
 REVEAL_OP_RETURN_SCRIPT = bytes.fromhex("6a08434e545250525459")
 
-# Counterparty `taproot_support` activation on mainnet (v11.0.0). No
-# qualifying event can exist before it (N3); the scan floor and the protocol
-# genesis. Counter #0 = XDUALS at block 902,005.
-GENESIS_HEIGHT = 902000
+# The Bitcoin network this process talks to. Counterparty Core's own
+# activation table (protocol_changes.json) has no per-feature regtest height:
+# every protocol change, taproot_support and extended_mime_types_support
+# included, is active from block 0 on regtest (confirmed against a live
+# regtest node: counterpartycore.lib.parser.protocol.enabled() short-circuits
+# `if config.REGTEST: return True`). So unlike testnet3/testnet4, regtest
+# needs no activation height of its own — genesis is simply 0.
+NETWORK = _env("COUNTER_NETWORK", "mainnet")
+if NETWORK not in ("mainnet", "regtest"):
+    raise ValueError(f"unsupported COUNTER_NETWORK {NETWORK!r} (expected 'mainnet' or 'regtest')")
 
-# Counterparty `extended_mime_types_support` activation on mainnet (v11.1.0).
-# Gates the MIME classifier used to derive content bytes (build ref v3 §5.1).
-EXTENDED_MIME_GATE = 952800
+# Counterparty `taproot_support` activation (v11.0.0). No qualifying event can
+# exist before it (N3); the scan floor and the protocol genesis. On mainnet,
+# counter #0 = XDUALS at block 902,005; on regtest, every change is active
+# from genesis, so the floor is 0.
+_GENESIS_HEIGHTS = {"mainnet": 902000, "regtest": 0}
+GENESIS_HEIGHT = _GENESIS_HEIGHTS[NETWORK]
 
-# Seed of the rolling consensus-hash chain (build ref v3 §7).
-ROLLING_HASH_GENESIS_TAG = b"counters:v3:bitcoin-mainnet:902000"
+# Counterparty `extended_mime_types_support` activation (v11.1.0). Gates the
+# MIME classifier used to derive content bytes (build ref v3 §5.1).
+_EXTENDED_MIME_GATES = {"mainnet": 952800, "regtest": 0}
+EXTENDED_MIME_GATE = _EXTENDED_MIME_GATES[NETWORK]
+
+# Seed of the rolling consensus-hash chain (build ref v3 §7). Network-tagged
+# so a regtest index's hash chain can never collide with / be mistaken for a
+# mainnet one.
+ROLLING_HASH_GENESIS_TAG = f"counters:v3:bitcoin-{NETWORK}:{GENESIS_HEIGHT}".encode()
+
+# Default local endpoints per network. bitcoind's regtest RPC port (18443)
+# and Counterparty Core's regtest API port (24000) both differ from mainnet's
+# — verified against a live `counterparty/counterparty` regtest container.
+_DEFAULT_BTC_RPC_URLS = {
+    "mainnet": "http://127.0.0.1:8332",
+    "regtest": "http://127.0.0.1:18443",
+}
+_DEFAULT_CP_API_URLS = {
+    "mainnet": "http://127.0.0.1:4000",
+    "regtest": "http://127.0.0.1:24000",
+}
 
 # Assets the wallet refuses to operate on (they cannot be issued anyway).
 RESERVED_ASSETS = frozenset({"BTC", "XCP"})
@@ -52,8 +80,16 @@ RESERVED_ASSETS = frozenset({"BTC", "XCP"})
 
 @dataclass
 class Config:
+    # Bitcoin network: 'mainnet' or 'regtest'. Governs the protocol genesis /
+    # MIME gate heights and the default local RPC endpoints below; see NETWORK
+    # at module level. Stored per-instance too, since the wallet's address
+    # encoding (bech32 HRP, WIF/xprv version bytes) needs it at call time.
+    network: str = field(default_factory=lambda: NETWORK)
+
     # bitcoind JSON-RPC
-    btc_rpc_url: str = field(default_factory=lambda: _env("BTC_RPC_URL", "http://127.0.0.1:8332"))
+    btc_rpc_url: str = field(
+        default_factory=lambda: _env("BTC_RPC_URL", _DEFAULT_BTC_RPC_URLS[NETWORK])
+    )
     btc_cookie_file: str = field(
         default_factory=lambda: _env("BTC_COOKIE_FILE", str(Path.home() / ".bitcoin" / ".cookie"))
     )
@@ -61,11 +97,16 @@ class Config:
     btc_rpc_password: str = field(default_factory=lambda: _env("BTC_RPC_PASSWORD", ""))
 
     # Counterparty Core v2 API
-    cp_api_url: str = field(default_factory=lambda: _env("CP_API_URL", "http://127.0.0.1:4000"))
+    cp_api_url: str = field(
+        default_factory=lambda: _env("CP_API_URL", _DEFAULT_CP_API_URLS[NETWORK])
+    )
     # Counterparty Core's ledger database, read directly (read-only) while
     # Core is catching up and its API answers "not ready" (see ledger.py).
     # Default: Core's own mainnet location. Used only if the file exists, so a
-    # remote Core (docker, another host) simply never has one.
+    # remote Core (docker, another host) simply never has one. Not
+    # network-scoped like the RPC/API defaults above: a regtest Core's ledger
+    # lives wherever its container/data-dir puts it, so there's no equally
+    # standard default to guess — CP_DB_PATH is the way to point at it.
     cp_db_path: str = field(
         default_factory=lambda: _env(
             "CP_DB_PATH", str(Path.home() / ".local" / "share" / "counterparty" / "counterparty.db")
@@ -80,11 +121,17 @@ class Config:
     )
     slipstream_api_key: str = field(default_factory=lambda: _env("SLIPSTREAM_API_KEY", ""))
 
-    # Storage
+    # Storage. Network-scoped by default (data/, data-regtest/) so a stray
+    # COUNTER_NETWORK switch can never read or write another network's DB —
+    # the two use incompatible genesis heights and hash chains and would
+    # silently corrupt each other's index if they shared one file.
     data_dir: str = field(
         default_factory=lambda: _env(
             "COUNTER_DATA_DIR",
-            str(Path(__file__).resolve().parent.parent / "data"),
+            str(
+                Path(__file__).resolve().parent.parent
+                / ("data" if NETWORK == "mainnet" else f"data-{NETWORK}")
+            ),
         )
     )
 

@@ -462,11 +462,14 @@ class Indexer:
         if start > GENESIS_HEIGHT and self.store.count() == 0:
             # Consensus warning: an empty index starting above genesis will
             # number its first event #0 even though earlier events exist.
+            genesis_note = (
+                " (counter #0 is at block 902005)" if self.config.network == "mainnet" else ""
+            )
             self._notify(
                 f"WARNING: fresh index starting at block {start} > genesis "
                 f"{GENESIS_HEIGHT}: numbering will NOT match spec-conformant "
-                f"indexers (counter #0 is at block 902005). Unset "
-                f"COUNTER_START_HEIGHT unless you know what you are doing."
+                f"indexers{genesis_note}. Unset COUNTER_START_HEIGHT unless you "
+                f"know what you are doing."
             )
         tip = self._target_tip()
         if stop_at is not None:
