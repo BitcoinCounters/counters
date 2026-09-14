@@ -834,7 +834,7 @@ class Handler(BaseHTTPRequestHandler):
             page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
             row = store.find(ident)
             if row is not None:
-                host = self.headers.get("Host") or "www.bitcoincounters.com"
+                host = self.headers.get("Host") or "counters.gallery"
                 proto = self.headers.get("X-Forwarded-Proto") or "https"
                 base = f"{proto}://{host}"
                 n = row["number"]
