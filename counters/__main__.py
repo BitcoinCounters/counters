@@ -414,14 +414,19 @@ def main(argv: list[str] | None = None) -> int:
 
     p_issue = wsub.add_parser(
         "issue", parents=[common, wname, fundargs],
-        help="issue additional supply of an existing asset you own",
+        help="issue more of an asset you own, or create a new one with no inscription",
     )
     _add_dual(p_issue, "asset", "asset",
-              help="asset name or longname whose issuance rights you hold")
+              help="asset name or longname whose issuance rights you hold, or a new "
+                   "one to create (named costs 0.5 XCP)")
     _add_dual(p_issue, "amount", "amount",
-              help="additional quantity to issue (e.g. 100, or 0.5 if divisible)")
+              help="quantity to issue (e.g. 100, or 0.5 if divisible)")
     p_issue.add_argument("--lock", action="store_true",
                          help="also lock the supply in the same transaction")
+    p_issue.add_argument("--divisible", action="store_true",
+                         help="new asset only: make it divisible (fixed forever)")
+    p_issue.add_argument("--source", default=None, metavar="ADDRESS",
+                         help="new asset only: issuing address (default: an XCP holder)")
     p_issue.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                          help="fee rate in sat/vB (default: Counterparty estimates one)")
     p_issue.add_argument("--dry-run", action="store_true",
@@ -746,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
                     _dual_value(p_issue, args, "amount"),
                     lock=args.lock, fee_rate=args.fee_rate, dry_run=args.dry_run,
                     fund_from=args.fund_from, no_fund=args.no_fund,
+                    divisible=args.divisible, source=args.source,
                 )
             if args.wallet_command == "burn":
                 return burn.cmd_burn(

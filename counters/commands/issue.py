@@ -12,7 +12,9 @@ fee.
   lock-supply       ASSET  -> freeze the supply (no future issuance changes it)
   lock-description  ASSET  -> freeze the description (the image/metadata ref)
   describe ASSET TEXT      -> set the description to text (or to a file's text)
-  issue ASSET QUANTITY     -> mint additional supply of an existing asset
+  issue ASSET QUANTITY     -> mint additional supply of an existing asset, or
+                             create the asset if it doesn't exist yet (plain
+                             OP_RETURN, no inscription; --divisible, --source)
                              (--lock to lock the supply in the same transaction)
   transfer-ownership ASSET ADDRESS
                            -> hand the issuance rights to another address
@@ -39,6 +41,8 @@ from ..config import Config, RESERVED_ASSETS
 from ..content import classify_mime_type
 from ..counterparty import CounterpartyClient, CounterpartyError
 from .funding import compose_retrying, ensure_funded
+from .funding import spendable_by_address as _spendable_addresses
+from .inscribe import _pick_source, _subasset_parent_owner
 from .send import (
     _confirm_prompt,
     _fmt_raw,
@@ -410,12 +414,83 @@ def cmd_transfer_ownership(config: Config, wallet: str, asset: str, destination:
     return _sign_and_broadcast(btc, wallet, owner, rawtx, dry_run)
 
 
+def _create_asset(btc, cp, wallet: str, asset: str, amount: str, divisible: bool,
+                  lock: bool, source: str | None, fee_rate: float | None,
+                  dry_run: bool, fund_from: str | None, no_fund: bool) -> int:
+    """Register a NEW asset with a plain OP_RETURN issuance — no envelope, no
+    file, so no counter is minted (R4 wants a taproot reveal). A named asset
+    burns 0.5 XCP from the source; a PARENT.CHILD subasset must come from the
+    parent's owner; a numeric A... asset is free."""
+    wallet_addrs = set(_wallet_addresses(btc, wallet))
+    if "." in asset:
+        # Fixed by Counterparty to the parent's owner, and free — see
+        # _subasset_parent_owner.
+        owner, err = _subasset_parent_owner(cp, asset, wallet_addrs)
+        if owner is None:
+            print(err, file=sys.stderr)
+            return 1
+        if source is not None and source != owner:
+            print(f"--source {source} cannot create {asset}: Counterparty requires "
+                  f"the parent's owner, {owner}.", file=sys.stderr)
+            return 1
+        source = owner
+    elif source is None:
+        try:
+            spendable = _spendable_addresses(btc, wallet)
+        except BitcoindError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        source, err = _pick_source(cp, wallet_addrs, spendable,
+                                   named=not asset.startswith("A"), inputs_set=None,
+                                   funding=not no_fund)
+        if source is None:
+            print(err, file=sys.stderr)
+            return 1
+    elif source not in wallet_addrs:
+        print(f"--source {source} is not an address of wallet {wallet!r}", file=sys.stderr)
+        return 1
+
+    try:
+        raw = _to_raw_quantity(amount, divisible)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
+    rawtx = _compose(cp, source, asset, quantity=raw, divisible=divisible,
+                     lock=lock, description=None, fee_rate=fee_rate,
+                     funded=fund.funded)
+    if rawtx is None:
+        return 1
+
+    print(f"create {asset}: {_fmt_raw(raw, divisible)} "
+          f"{'divisible' if divisible else 'indivisible'}{' (and LOCK)' if lock else ''}")
+    print(f"  source    : {source}")
+    print(f"  carrier   : OP_RETURN issuance — no inscription, mints no counter")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
+    return _sign_and_broadcast(btc, wallet, source, rawtx, dry_run)
+
+
 def cmd_issue(config: Config, wallet: str, asset: str, amount: str,
               lock: bool = False, fee_rate: float | None = None,
               dry_run: bool = False,
-              fund_from: str | None = None, no_fund: bool = False) -> int:
+              fund_from: str | None = None, no_fund: bool = False,
+              divisible: bool = False, source: str | None = None) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
+
+    name = asset if "." in asset else asset.upper()
+    if name not in RESERVED_ASSETS and not (cp.get_asset(asset) or cp.get_asset(name)):
+        return _create_asset(btc, cp, wallet, name, amount, divisible, lock, source,
+                             fee_rate, dry_run, fund_from, no_fund)
+    if divisible or source is not None:
+        print("--divisible/--source only apply when creating a new asset; "
+              f"{name} already exists", file=sys.stderr)
+        return 1
 
     resolved = _resolve_owned_asset(btc, cp, wallet, asset)
     if resolved is None:

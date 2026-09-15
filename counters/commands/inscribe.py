@@ -109,6 +109,33 @@ def _estimate_source_need(content_len: int, fee_rate: float) -> int:
     return int((reveal_vb + commit_vb) * fee_rate * 1.15) + DUST_SAT
 
 
+def _subasset_parent_owner(cp: CounterpartyClient, asset: str,
+                           wallet_addrs: set[str]) -> tuple[str | None, str | None]:
+    """The one address allowed to create PARENT.CHILD, or an error explaining why
+    this wallet cannot.
+
+    A subasset has no source to choose: counterparty-core validates a new one
+    against the parent's CURRENT owner and rejects every other source with
+    "parent asset owned by another address" (issuance.py, validate). Subassets
+    are also FREE since block 866,000 (`free_subassets`), so the 0.5 XCP rule
+    that steers a named asset toward an XCP holder must not apply here — doing
+    so picks an address that cannot issue and, worse, funds it first.
+    Returns (owner, error): exactly one is set.
+    """
+    parent_name = asset.split(".", 1)[0]
+    parent = cp.get_asset(parent_name)
+    if not parent:
+        return None, (f"unknown parent asset {parent_name} — a subasset can only be "
+                      f"created under an asset that already exists.")
+    owner = parent.get("owner") or parent.get("issuer")
+    if not owner:
+        return None, f"could not determine the issuance-rights owner of {parent_name}"
+    if owner not in wallet_addrs:
+        return None, (f"{parent_name} is owned by {owner}, which is not an address of "
+                      f"this wallet; only the parent's owner can create {asset}.")
+    return owner, None
+
+
 def _pick_source(cp: CounterpartyClient, wallet_addrs: set[str],
                  spendable: dict[str, int], *, named: bool,
                  inputs_set: str | None,
@@ -534,6 +561,7 @@ def cmd_inscribe(
         return 1
     reinscribe = False
     named = False
+    subasset = False
     quantity = supply * COIN if divisible else supply
     if asset is not None:
         asset = asset if "." in asset else asset.upper()
@@ -558,6 +586,19 @@ def cmd_inscribe(
             divisible = bool(info.get("divisible"))
             quantity = 0  # keep the supply; the event is the description change
             source = source or owner
+        elif "." in asset:
+            # Subasset: the issuing address is fixed to the parent's owner, and
+            # it costs no XCP, so neither auto-selection nor --source may wander.
+            subasset = True
+            owner, err = _subasset_parent_owner(cp, asset, wallet_addrs)
+            if owner is None:
+                print(err, file=sys.stderr)
+                return 1
+            if source is not None and source != owner:
+                print(f"--source {source} cannot create {asset}: Counterparty requires "
+                      f"the parent's owner, {owner}.", file=sys.stderr)
+                return 1
+            source = owner
         else:
             named = True
     else:
@@ -711,6 +752,8 @@ def cmd_inscribe(
     # report
     if reinscribe:
         kind = " (reinscription — new content on your existing asset)"
+    elif subasset:
+        kind = " (subasset, free — issued by its parent's owner)"
     elif named:
         kind = " (named)"
     else:

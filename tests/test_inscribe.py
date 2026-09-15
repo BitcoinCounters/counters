@@ -20,6 +20,7 @@ from counters.commands.inscribe import (  # noqa: E402
     _is_segwit_address,
     _pick_source,
     _reveal_fee_sat,
+    _subasset_parent_owner,
 )
 
 XCP = NAMED_ISSUANCE_FEE_XCP        # 0.5 XCP in sats
@@ -103,6 +104,47 @@ def test_numeric_no_segwit_btc_errors():
     src, err = _pick_source(cp, {LEGACY}, {LEGACY: 1_000_000},
                             named=False, inputs_set=None)
     assert src is None and "segwit" in err
+
+
+# --- subassets --------------------------------------------------------------
+#
+# A subasset is not a source CHOICE: counterparty-core rejects any source but
+# the parent's owner ("parent asset owned by another address"), and subassets
+# have been free since block 866,000. Picking an XCP holder — the named-asset
+# rule — funds an address that then cannot issue at all.
+
+class _ParentCp(_DuckCp):
+    def __init__(self, assets, xcp=None):
+        super().__init__(xcp or {})
+        self._assets = assets
+
+    def get_asset(self, asset):
+        return self._assets.get(asset.upper())
+
+
+def test_subasset_source_is_the_parents_owner_not_the_xcp_holder():
+    cp = _ParentCp({"DEGENT": {"asset": "DEGENT", "owner": TAPROOT, "issuer": LEGACY}},
+                   xcp={TAPROOT2: 100_000_000})   # the XCP lives elsewhere
+    owner, err = _subasset_parent_owner(cp, "DEGENT.0", {TAPROOT, TAPROOT2})
+    assert owner == TAPROOT and err is None
+
+
+def test_subasset_owner_falls_back_to_issuer_when_never_transferred():
+    cp = _ParentCp({"DEGENT": {"asset": "DEGENT", "issuer": TAPROOT}})
+    owner, err = _subasset_parent_owner(cp, "DEGENT.0", {TAPROOT})
+    assert owner == TAPROOT and err is None
+
+
+def test_subasset_parent_outside_the_wallet_is_rejected():
+    cp = _ParentCp({"DEGENT": {"asset": "DEGENT", "owner": TAPROOT2}})
+    owner, err = _subasset_parent_owner(cp, "DEGENT.0", {TAPROOT})
+    assert owner is None and TAPROOT2 in err
+
+
+def test_subasset_unknown_parent_is_rejected():
+    cp = _ParentCp({})
+    owner, err = _subasset_parent_owner(cp, "NOSUCH.0", {TAPROOT})
+    assert owner is None and "unknown parent asset" in err
 
 
 # --- reveal fee ------------------------------------------------------------

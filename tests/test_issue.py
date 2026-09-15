@@ -231,6 +231,64 @@ def test_issue_on_locked_asset_is_rejected():
         _restore(orig)
 
 
+def _patch_create(info=None):
+    """Like _patch, plus the source picker, for creating an asset that doesn't exist."""
+    fake_btc, fake_cp, orig = _patch(info, [OWNER])
+    extra = (I._pick_source, I._spendable_addresses)
+    I._spendable_addresses = lambda btc, wallet: {OWNER: 100_000}
+    I._pick_source = lambda cp, addrs, spendable, **kw: (OWNER, None) if kw["named"] \
+        else ("bc1pNumericSource", None)
+    return fake_btc, fake_cp, (orig, extra)
+
+
+def _restore_create(saved):
+    orig, (I._pick_source, I._spendable_addresses) = saved
+    _restore(orig)
+
+
+def test_issue_creates_a_missing_asset_without_inscription():
+    fake_btc, fake_cp, saved = _patch_create()
+    try:
+        rc = I.cmd_issue(Config(), "me", "degent", "1", lock=True, dry_run=True)
+        assert rc == 0
+        k = fake_cp.compose_kwargs
+        assert k["asset"] == "DEGENT" and k["source"] == OWNER
+        assert k["quantity"] == 1 and k["divisible"] is False and k["lock"] is True
+        assert k["description"] is None
+        assert k.get("encoding", "opreturn") == "opreturn"   # no envelope
+        assert fake_btc.sent is None
+    finally:
+        _restore_create(saved)
+
+
+def test_issue_create_divisible_scales_quantity():
+    fake_btc, fake_cp, saved = _patch_create()
+    try:
+        assert I.cmd_issue(Config(), "me", "DEGENT", "2", divisible=True) == 0
+        assert fake_cp.compose_kwargs["quantity"] == 200_000_000
+        assert fake_btc.sent == "signed00"
+    finally:
+        _restore_create(saved)
+
+
+def test_issue_create_rejects_a_source_outside_the_wallet():
+    fake_btc, fake_cp, saved = _patch_create()
+    try:
+        rc = I.cmd_issue(Config(), "me", "DEGENT", "1", source="bc1pSomeoneElse")
+        assert rc == 1 and fake_cp.compose_kwargs is None
+    finally:
+        _restore_create(saved)
+
+
+def test_issue_divisible_flag_on_existing_asset_is_rejected():
+    fake_btc, fake_cp, saved = _patch_create(_asset())
+    try:
+        rc = I.cmd_issue(Config(), "me", "MYASSET", "1", divisible=True)
+        assert rc == 1 and fake_cp.compose_kwargs is None
+    finally:
+        _restore_create(saved)
+
+
 # --- transfer-ownership -----------------------------------------------------
 
 NEW_OWNER = "bc1pNewOwnerxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
