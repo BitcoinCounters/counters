@@ -146,3 +146,14 @@ if __name__ == "__main__":
             fn()
             print(f"ok  {name}")
     print("all envelope-option tests passed")
+
+
+def test_commit_fee_rate_is_passed_through():
+    calls, restore = _stub_inscribe()
+    try:
+        assert M.main(["wallet", "--name", "counts", "inscribe", "--file", "cat.png",
+                       "--fee-rate", "1", "--commit-fee-rate", "3"]) == 0
+    finally:
+        restore()
+    assert calls[0][1]["commit_fee_rate"] == 3.0
+    assert calls[0][1]["fee_rate"] == 1.0

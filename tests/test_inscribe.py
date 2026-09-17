@@ -239,3 +239,70 @@ def test_pick_source_accepts_an_unfunded_xcp_holder_when_funding():
     src2, err2 = _pick_source(cp, {"bc1pXcp", "bc1pRich"}, {"bc1pRich": 100000},
                               named=True, inputs_set=None)
     assert src2 is None and "single-source" in err2
+
+
+# --- --commit-fee-rate: a CPFP child lifts the commit, the reveal keeps its rate --
+
+from counters.commands.inscribe import _commit_child  # noqa: E402
+
+_SRC = "bc1pSource"
+
+
+def _commit_dec(change_sat=100_000, change_addr=_SRC, vsize=154):
+    vout = [{"n": 0, "value": 0.0005,
+             "scriptPubKey": {"address": "bc1pEnvelope", "hex": "5120aa"}}]
+    if change_sat is not None:
+        vout.append({"n": 1, "value": change_sat / 1e8,
+                     "scriptPubKey": {"address": change_addr, "hex": "5120bb"}})
+    return {"txid": "c0" * 32, "vsize": vsize, "vout": vout}
+
+
+class _ChildBtc:
+    def __init__(self, child_vsize=111):
+        self.child_vsize = child_vsize
+        self.signed = []
+
+    def _call(self, method, params=None):
+        if method == "createrawtransaction":
+            return {"inputs": params[0], "outputs": params[1]}
+        if method == "decoderawtransaction":
+            return {"vsize": self.child_vsize}
+        raise AssertionError(method)
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        assert method == "signrawtransactionwithwallet"
+        raw, prevtxs = params
+        self.signed.append((raw, prevtxs))
+        return {"complete": True, "hex": f"child{len(self.signed)}"}
+
+
+def test_commit_child_brings_the_commit_package_to_the_rate():
+    btc = _ChildBtc(child_vsize=111)
+    # Composed at 1 sat/vB: 154 sat over 154 vB. Target 3 over 154+111 vB = 795.
+    hex_, vsize, fee, err = _commit_child(btc, "w", _commit_dec(), 154, _SRC, 3)
+    assert err is None and hex_ == "child2" and vsize == 111
+    assert fee == 795 - 154
+    raw, prevtxs = btc.signed[-1]
+    assert raw["inputs"] == [{"txid": "c0" * 32, "vout": 1, "sequence": 0xFFFFFFFD}]
+    assert raw["outputs"] == {_SRC: f"{(100_000 - fee) / 1e8:.8f}"}
+    # The commit is unbroadcast, so its output must be handed to the signer.
+    assert prevtxs == [{"txid": "c0" * 32, "vout": 1, "scriptPubKey": "5120bb",
+                        "amount": 0.001}]
+
+
+def test_commit_child_not_needed_when_the_commit_already_pays():
+    btc = _ChildBtc()
+    assert _commit_child(btc, "w", _commit_dec(), 462, _SRC, 3) == (None, 0, 0, None)
+    assert not btc.signed
+
+
+def test_commit_child_needs_a_change_output_to_the_source():
+    for dec in (_commit_dec(change_sat=None), _commit_dec(change_addr="bc1pElse")):
+        hex_, _v, _f, err = _commit_child(_ChildBtc(), "w", dec, 154, _SRC, 3)
+        assert hex_ is None and "no change output" in err
+
+
+def test_commit_child_refuses_when_change_cannot_pay():
+    hex_, _v, _f, err = _commit_child(_ChildBtc(), "w", _commit_dec(change_sat=900),
+                                      154, _SRC, 3)
+    assert hex_ is None and "cannot pay" in err
