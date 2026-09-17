@@ -324,6 +324,13 @@ def main(argv: list[str] | None = None) -> int:
                              "are deprecated aliases.)")
     p_insc.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
                         help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_insc.add_argument("--commit-fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="make the COMMIT confirm at this rate while the reveal "
+                             "keeps --fee-rate. Core composes both at one rate, and the "
+                             "commit cannot be re-signed (the pre-signed reveal spends "
+                             "its txid), so a CPFP child on the commit's change output "
+                             "pays the difference. Useful with --slipstream, which waits "
+                             "for the commit to confirm before submitting the reveal")
     p_insc.add_argument("--supply", type=int, default=1, help="issued quantity (default 1)")
     p_insc.add_argument("--divisible", action="store_true", help="make the asset divisible")
     p_insc.add_argument("--locked", action="store_true",
@@ -813,6 +820,7 @@ def main(argv: list[str] | None = None) -> int:
                     slipstream_all=args.slipstream_all,
                     # Pre-rename names: "generic" -> counterparty, "ord" -> counterparty/ord.
                     envelope={"generic": "counterparty", "ord": "counterparty/ord"}.get(args.envelope, args.envelope),
+                    commit_fee_rate=args.commit_fee_rate,
                 )
             if args.wallet_command == "send":
                 return send.cmd_send(

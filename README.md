@@ -332,6 +332,11 @@ counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER --fund
 counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream
 counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream --dry-run
 counters wallet inscribe --slipstream-status <TXID>   # the only way to watch it
+# The split route waits for the commit to confirm before it submits the reveal.
+# Core composes both at ONE rate, so to hurry the commit alone a CPFP child on its
+# change lifts it to --commit-fee-rate while the reveal keeps --fee-rate:
+counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream --fee-rate 1 --commit-fee-rate 3
+
 
 # --- asset management (owner-sourced Counterparty issuances) ---
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply

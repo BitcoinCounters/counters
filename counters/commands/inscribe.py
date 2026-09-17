@@ -49,6 +49,7 @@ from ..slipstream import (
     SubmitVerdict,
     describe_status,
 )
+from .bump import _child_fee
 from .funding import (
     _fund_source,
     compose_retrying,
@@ -234,6 +235,62 @@ def _reveal_fee_sat(commit_dec: dict, reveal_dec: dict) -> int | None:
     return round((total_in - total_out) * COIN)
 
 
+def _commit_child(btc: BitcoindClient, wallet: str, commit_dec: dict,
+                  commit_fee: int, source: str, rate: float):
+    """A CPFP child that lifts the commit to `rate` sat/vB without touching the reveal.
+
+    Core prices commit and reveal from ONE `sat_per_vbyte` (the reveal's fee is
+    pre-paid into the commit's envelope output at that same rate), and the commit
+    cannot be re-signed at a higher fee afterwards: its txid is what the
+    pre-signed reveal spends. So a commit that has to confirm faster than the
+    reveal pays gets a child on its change output, which returns to the source.
+    The child is a sibling of the reveal, not its ancestor, so it moves the commit
+    alone — exactly what a Slipstream split waits on.
+
+    Returns (child_hex, child_vsize, child_fee, error): exactly one of child_hex
+    and error is set, or neither when the commit already pays `rate`.
+    """
+    commit_vsize = commit_dec["vsize"]
+    if commit_fee >= rate * commit_vsize:
+        return None, 0, 0, None
+    change = next((o for o in commit_dec["vout"]
+                   if o["n"] != 0
+                   and o.get("scriptPubKey", {}).get("address") == source), None)
+    if change is None:
+        return None, 0, 0, (
+            f"the commit has no change output back to {source}, so there is nothing "
+            f"to attach a CPFP child to. Fund the source with more than the "
+            f"inscription needs (a change output appears once there is some left), "
+            f"or drop --commit-fee-rate.")
+    value = round(change["value"] * COIN)
+    inputs = [{"txid": commit_dec["txid"], "vout": change["n"], "sequence": 0xFFFFFFFD}]
+    # The commit is not in the mempool yet, so the wallet cannot look its output up.
+    prevtxs = [{"txid": commit_dec["txid"], "vout": change["n"],
+                "scriptPubKey": change["scriptPubKey"]["hex"],
+                "amount": change["value"]}]
+
+    def sign(out_sat: int):
+        raw = btc._call("createrawtransaction",
+                        [inputs, {source: f"{Decimal(out_sat) / COIN:.8f}"}])
+        return btc.wallet_call(wallet, "signrawtransactionwithwallet", [raw, prevtxs])
+
+    # Measure by signing a placeholder: the amount does not change the size.
+    probe = sign(value // 2)
+    if not probe.get("complete"):
+        return None, 0, 0, f"cannot sign a CPFP child on the commit: {probe.get('errors')}"
+    child_vsize = btc._call("decoderawtransaction", [probe["hex"]])["vsize"]
+    fee = _child_fee(rate, commit_vsize, commit_fee, child_vsize)
+    if value - fee < DUST_SAT:
+        return None, 0, 0, (
+            f"the commit's change ({value} sat) cannot pay the {fee} sat CPFP child "
+            f"needed to reach {rate:g} sat/vB. Fund the source further, or lower "
+            f"--commit-fee-rate.")
+    signed = sign(value - fee)
+    if not signed.get("complete"):
+        return None, 0, 0, f"signing the CPFP child failed: {signed.get('errors')}"
+    return signed["hex"], child_vsize, fee, None
+
+
 def _stash_hex(commit_hex: str, reveal_hex: str, reveal_txid: str) -> str:
     """Write both raw transactions to disk BEFORE anything is broadcast.
 
@@ -303,6 +360,7 @@ def _submit_split(
     commit_txid: str,
     reveal_txid: str,
     reveal_weight: int | None,
+    child_hex: str | None = None,
 ) -> int:
     """Commit over public relay, reveal over Slipstream.
 
@@ -337,6 +395,16 @@ def _submit_split(
               file=sys.stderr)
         return 1
     print(f"  accepted by the network: {ctxid}")
+    if child_hex:
+        # Not fatal if it fails: the commit is out and still confirms, just at its
+        # own rate — and the child can be rebuilt with `counters wallet bump`.
+        try:
+            child_txid = btc._call("sendrawtransaction", [child_hex])
+            print(f"  CPFP child accepted: {child_txid}")
+        except BitcoindError as e:
+            print(f"  CPFP child broadcast FAILED: {e} — the commit confirms at its "
+                  f"own rate; `counters wallet bump` can attach another child",
+                  file=sys.stderr)
 
     # Slipstream resolves a transaction's inputs from its own submissions and
     # from the chain — NOT from the public mempool. A reveal whose parent is
@@ -524,6 +592,7 @@ def cmd_inscribe(
     slipstream: bool = False,
     slipstream_all: bool = False,
     envelope: str = "counterparty",
+    commit_fee_rate: float | None = None,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
@@ -592,6 +661,23 @@ def cmd_inscribe(
         # under --slipstream-all that neither leg touches the local node.
         if slipstream_all:
             no_mempool_check = True
+
+    if commit_fee_rate is not None:
+        if commit_fee_rate <= 0:
+            print("--commit-fee-rate must be positive", file=sys.stderr)
+            return 1
+        if slipstream_all:
+            print("--commit-fee-rate lifts the commit with a CPFP child over public "
+                  "relay; under --slipstream-all the commit never touches public "
+                  "relay and MARA mines the pair together, so drop one of them.",
+                  file=sys.stderr)
+            return 1
+        if fee_rate is not None and commit_fee_rate < fee_rate:
+            print(f"--commit-fee-rate {commit_fee_rate:g} is below --fee-rate "
+                  f"{fee_rate:g}: Core composes the commit at --fee-rate, and a paid "
+                  f"fee cannot be taken back. Lower --fee-rate instead.",
+                  file=sys.stderr)
+            return 1
 
     # On-chain view plus the derived window (see _wallet_addresses): XCP
     # parked on a change address, or on one that only ever received assets,
@@ -685,6 +771,9 @@ def cmd_inscribe(
     # that carries the asset is the normal case, not the exception.
     # --fund-from pins who pays; --no-fund leaves the source untouched.
     need = _estimate_source_need(len(body), fee_rate or 1.0)
+    if commit_fee_rate is not None:
+        # The CPFP child is paid from the commit's change: commit + child, generously.
+        need += int((200 + 150) * commit_fee_rate) + DUST_SAT
     fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
                          fund_from=fund_from, no_fund=no_fund or inputs_set is not None,
                          dry_run=dry_run, need=need)
@@ -748,6 +837,20 @@ def cmd_inscribe(
     reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
     reveal_txid = reveal_dec["txid"]
 
+    commit_fee = composed.get("btc_fee")
+    child_hex, child_vsize, child_fee = None, 0, 0
+    if commit_fee_rate is not None:
+        if commit_fee is None:
+            print("compose reported no commit fee, so the CPFP child for "
+                  "--commit-fee-rate cannot be sized. Nothing was broadcast.",
+                  file=sys.stderr)
+            return 1
+        child_hex, child_vsize, child_fee, err = _commit_child(
+            btc, wallet, commit_dec, commit_fee, source, commit_fee_rate)
+        if err:
+            print(f"{err} Nothing was broadcast.", file=sys.stderr)
+            return 1
+
     # Confirm the envelope Core actually built is the one asked for. Core
     # applies `inscription` only to a content-carrying issuance and otherwise
     # drops back to the counterparty-only envelope without saying so — and a Core too old
@@ -780,6 +883,8 @@ def cmd_inscribe(
         # would fail the whole package on `tx-size` by design. Slipstream judges
         # the reveal.
         batch = [commit_hex] if split else [commit_hex, reveal_hex]
+        if child_hex:
+            batch.append(child_hex)
         try:
             checks = btc._call("testmempoolaccept", [batch])
         except BitcoindError as e:
@@ -819,14 +924,22 @@ def cmd_inscribe(
     print(f"source           : {source}")
     print(f"commit txid      : {unsigned_txid}")
     print(f"reveal txid      : {reveal_txid}")
-    commit_fee = composed.get("btc_fee")
     reveal_fee = _reveal_fee_sat(commit_dec, reveal_dec)
     if commit_fee is not None:
-        print(f"commit fee       : {commit_fee} sat")
+        print(f"commit fee       : {commit_fee} sat "
+              f"({commit_fee / commit_dec['vsize']:.2f} sat/vB)")
+    if child_hex:
+        pkg_fee, pkg_vsize = commit_fee + child_fee, commit_dec["vsize"] + child_vsize
+        print(f"commit CPFP child: {child_fee} sat over {child_vsize} vB — commit "
+              f"package {pkg_fee / pkg_vsize:.2f} sat/vB (--commit-fee-rate "
+              f"{commit_fee_rate:g})")
+    elif commit_fee_rate is not None:
+        print(f"commit CPFP child: none needed — the commit already pays "
+              f"--commit-fee-rate {commit_fee_rate:g}")
     if reveal_fee is not None:
         print(f"reveal fee       : {reveal_fee} sat")
     if commit_fee is not None and reveal_fee is not None:
-        print(f"total fee        : {commit_fee + reveal_fee} sat")
+        print(f"total fee        : {commit_fee + child_fee + reveal_fee} sat")
     if named:
         print("XCP cost         : 0.5 XCP (named-asset issuance burn)")
 
@@ -863,6 +976,8 @@ def cmd_inscribe(
         print("\n--- DRY RUN (nothing broadcast) ---")
         print(f"commit_raw: {commit_hex}")
         print(f"reveal_raw: {reveal_hex}")
+        if child_hex:
+            print(f"child_raw: {child_hex}")
         return 0 if all_ok else 1
 
     if split:
@@ -874,7 +989,8 @@ def cmd_inscribe(
             print(f"commit_raw: {commit_hex}\nreveal_raw: {reveal_hex}", file=sys.stderr)
             return 1
         return _submit_split(
-            btc, slip, commit_hex, reveal_hex, unsigned_txid, reveal_txid, reveal_weight
+            btc, slip, commit_hex, reveal_hex, unsigned_txid, reveal_txid, reveal_weight,
+            child_hex=child_hex,
         )
 
     if slip is not None:
@@ -896,6 +1012,12 @@ def cmd_inscribe(
         print(f"commit_raw: {commit_hex}\nreveal_raw: {reveal_hex}", file=sys.stderr)
         return 1
     print(f"\nbroadcast OK\n  commit: {ctxid}\n  reveal: {rtxid}")
+    if child_hex:
+        try:
+            print(f"  child : {btc._call('sendrawtransaction', [child_hex])}  (CPFP)")
+        except BitcoindError as e:
+            print(f"  CPFP child broadcast FAILED: {e} — `counters wallet bump` can "
+                  f"attach another", file=sys.stderr)
     print("the counter is numbered once the reveal confirms and Counterparty "
           "parses the issuance.")
     return 0
