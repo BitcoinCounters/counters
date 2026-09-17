@@ -23,7 +23,7 @@ SOURCE = "bc1pSourcexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 def _dispenser(asset="XCP", rate=2780, give=100_000_000, remaining=2_800_000_000,
                status=0, divisible=True):
     return {"asset": asset, "satoshirate": rate, "give_quantity": give,
-            "give_remaining": remaining, "status": status,
+            "give_remaining": remaining, "status": status, "source": DISP,
             "asset_info": {"divisible": divisible, "asset_longname": None}}
 
 
@@ -53,6 +53,9 @@ class FakeCp:
 
     def get_address_dispensers(self, address):
         return list(self.dispensers)
+
+    def get_asset(self, asset):
+        return {"asset": asset.upper()} if asset.upper() in {"XCP", "PEPE"} else None
 
     def compose_dispense(self, source, dispenser, quantity, sat_per_vbyte=None):
         self.compose_kwargs = dict(source=source, dispenser=dispenser,
@@ -241,3 +244,157 @@ if __name__ == "__main__":
                 print(f"FAIL {name}: {e}")
     print(f"\n{'OK' if failures == 0 else f'{failures} FAILED'}")
     raise SystemExit(1 if failures else 0)
+
+
+# --- browsing: the command called with nothing to buy -----------------------
+
+def test_price_sorts_on_the_number_not_its_rendering():
+    # 12,000 sorts before 9,800 as text, and a lot of ten at 98,000 sats is
+    # 9,800 each rather than the cheapest thing on the shelf.
+    cheap = _dispenser(asset="CHEAP", rate=12_000, give=100_000_000)          # 12,000/unit
+    lots = _dispenser(asset="LOTS", rate=98_000, give=1_000_000_000)          # 9,800/unit
+    assert [d["asset"] for d in D._by_price([cheap, lots])] == ["LOTS", "CHEAP"]
+
+
+def test_an_oracle_dispensers_rate_is_fiat_and_never_the_price():
+    # `satoshirate` 888 on an oracle dispenser is $8.88; the satoshis it wants
+    # are what Core resolved from the feed. Sorting on the rate would put this
+    # at the top of a cheapest-first list at a fourteenth of its price, and
+    # paying it would underpay: "not enough BTC to trigger dispenser".
+    oracle = _dispenser(rate=888, give=100_000_000)
+    oracle["oracle_address"] = "1BTCUSDupRmeaNferCFoxmF6bYV5cAR2X2"
+    oracle["satoshi_price"] = 12_846
+    assert D._sats_per_lot(oracle) == 12_846
+    assert D._unit_price(oracle, True) == 12_846.0
+    assert "oracle-priced" in D._terms(oracle)
+
+    plain = _dispenser(rate=5_000, give=100_000_000)
+    assert D._sats_per_lot(plain) == 5_000          # no oracle, no difference
+    assert D._unit_price(plain, True) == 5_000.0
+
+
+def test_an_oracle_dispenser_does_not_undercut_a_cheaper_plain_one():
+    oracle = _dispenser(asset="ORACLE", rate=888, give=100_000_000)
+    oracle["oracle_address"] = "1BTCUSDupRmeaNferCFoxmF6bYV5cAR2X2"
+    oracle["satoshi_price"] = 12_846
+    plain = _dispenser(asset="PLAIN", rate=5_200, give=100_000_000)
+    assert [d["asset"] for d in D._by_price([oracle, plain])] == ["PLAIN", "ORACLE"]
+
+
+def test_indivisible_lots_price_per_whole_unit():
+    d = _dispenser(asset="PEPE", rate=50_000, give=10, remaining=100, divisible=False)
+    assert D._unit_price(d, False) == 5_000.0
+    assert D._terms(d) == "5,000 sats each (lots of 10) — 100 left"
+
+
+def test_terms_omit_the_lot_note_for_single_unit_lots():
+    assert D._terms(_dispenser()) == "2,780 sats each — 28 left"
+
+
+def test_browsing_one_asset_lists_cheapest_first(capsys):
+    class Cp(FakeCp):
+        def get_asset_dispensers(self, asset, limit=10):
+            return [_dispenser(asset=asset, rate=9_000),
+                    _dispenser(asset=asset, rate=2_780)], 2
+
+    orig = _patch(FakeBtc(), Cp([]), {})
+    try:
+        assert D.cmd_browse_dispensers(Config(), asset="xcp") == 0
+    finally:
+        _restore(orig)
+    lines = [l for l in capsys.readouterr().out.splitlines() if "sats each" in l]
+    assert lines[0].startswith("  2,780 sats each")
+    assert lines[1].startswith("  9,000 sats each")
+
+
+def test_browsing_an_address_is_a_listing_not_an_error(capsys):
+    cp = FakeCp([_dispenser(asset="PEPE", rate=9_000, divisible=False, give=1, remaining=5),
+                 _dispenser(asset="XCP", rate=2_780)])
+    orig = _patch(FakeBtc(), cp, {})
+    try:
+        assert D.cmd_browse_address_dispensers(Config(), DISP) == 0
+    finally:
+        _restore(orig)
+    out = capsys.readouterr().out
+    assert "2 open dispensers, cheapest first" in out
+    # Cheapest per unit first: XCP at 2,780 before PEPE at 9,000.
+    assert out.index("--asset XCP") < out.index("--asset PEPE")
+
+
+def test_browsing_an_address_with_nothing_open_still_succeeds(capsys):
+    orig = _patch(FakeBtc(), FakeCp([]), {})
+    try:
+        assert D.cmd_browse_address_dispensers(Config(), DISP) == 0
+    finally:
+        _restore(orig)
+    assert "no open dispenser at" in capsys.readouterr().out
+
+
+# --- the first word: an address, or an asset --------------------------------
+
+def test_a_token_that_is_an_address_resolves_as_one():
+    orig = _patch(FakeBtc(), FakeCp([]), {})
+    try:
+        assert D.resolve_target(Config(), DISP) == ("address", DISP)
+    finally:
+        _restore(orig)
+
+
+def test_an_asset_name_where_an_address_goes_resolves_as_an_asset():
+    # `buy-from-dispenser xcp` is the obvious thing to type; answering it with
+    # "not a valid Bitcoin address" is a refusal to read.
+    orig = _patch(FakeBtc(), FakeCp([]), {})
+    try:
+        assert D.resolve_target(Config(), "xcp") == ("asset", "XCP")
+    finally:
+        _restore(orig)
+
+
+def test_a_token_that_is_neither_resolves_to_nothing():
+    orig = _patch(FakeBtc(), FakeCp([]), {})
+    try:
+        assert D.resolve_target(Config(), "notathing") is None
+        # Numeric assets are 'A' + digits; a bare number names neither.
+        assert D.resolve_target(Config(), "12345") is None
+    finally:
+        _restore(orig)
+
+
+def test_buying_by_asset_takes_the_cheapest_that_can_fill_it():
+    class Cp(FakeCp):
+        def get_asset_dispensers(self, asset, limit=10):
+            rows = [
+                {**_dispenser(asset="XCP", rate=2_000), "source": "bc1qCheapButEmpty",
+                 "give_remaining": 0},
+                {**_dispenser(asset="XCP", rate=5_200), "source": "bc1qCheapEnough"},
+                {**_dispenser(asset="XCP", rate=9_000), "source": "bc1qDearer"},
+            ]
+            return rows[:limit], len(rows)
+
+        def get_address_dispensers(self, address):
+            return [_dispenser(asset="XCP", rate=5_200)]
+
+    btc, cp = FakeBtc(), Cp([])
+    orig = _patch(btc, cp, {SOURCE: 100_000})
+    try:
+        # The 2,000-sat one is cheapest and has nothing left; the 5,200 wins.
+        assert D.cmd_buy_from_dispenser(
+            Config(), "me", None, "1", asset="xcp", dry_run=True) == 0
+        assert cp.compose_kwargs["dispenser"] == "bc1qCheapEnough"
+        assert cp.compose_kwargs["quantity"] == 5_200
+    finally:
+        _restore(orig)
+
+
+def test_buying_by_asset_says_when_no_dispenser_can_fill_it(capsys):
+    class Cp(FakeCp):
+        def get_asset_dispensers(self, asset, limit=10):
+            return [_dispenser(asset="XCP", rate=5_200, remaining=50_000_000)], 1
+
+    orig = _patch(FakeBtc(), Cp([]), {SOURCE: 100_000})
+    try:
+        assert D.cmd_buy_from_dispenser(
+            Config(), "me", None, "1", asset="xcp", dry_run=True) == 1
+    finally:
+        _restore(orig)
+    assert "the largest holds 0.5" in capsys.readouterr().err

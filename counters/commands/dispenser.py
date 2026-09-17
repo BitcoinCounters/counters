@@ -9,7 +9,10 @@ the operator's address and nothing is dispensed — a silent, unrecoverable loss
 
 A purchase is therefore its own message: the same payment output, plus an
 OP_RETURN carrying a `dispense` instruction. That is what `buy-from-dispenser`
-composes. You say how much of the ASSET you want; the satoshi price comes from
+composes. Called with nothing to buy it lists what there is instead — every
+open dispenser on a counter, or one asset's, or one address's — ordered by
+price PER UNIT, because that is the only figure that compares two dispensers:
+a lot of ten at 98,000 sats is 9,800 each, not the expensive one. You say how much of the ASSET you want; the satoshi price comes from
 the dispenser, so there is no amount to mistype and no way to underpay. A
 dispenser sells in fixed lots, so the request must be a whole number of them —
 asking for a part-lot would have the dispenser keep the remainder, so we refuse
@@ -40,6 +43,7 @@ from ..bitcoind import COIN, BitcoindClient
 from ..config import Config
 from ..counterparty import CounterpartyClient, CounterpartyError
 from .inscribe import _spendable_addresses
+from .read import _dispenser_unit_price, _fmt_qty
 from .send import (
     _confirm_prompt,
     _find_source,
@@ -50,6 +54,7 @@ from .send import (
 )
 from .funding import compose_retrying, ensure_funded
 from .wallet import _wallet_addresses
+from ..store import Store
 
 # counterparty-core lib/messages/dispenser.py
 STATUS_OPEN = 0
@@ -71,11 +76,16 @@ def _open_dispensers(cp, address: str, asset: str | None) -> list[dict]:
 
 
 def _describe(d: dict) -> str:
-    """`1 XCP for 2780 sat, 28 remaining` — a dispenser's terms in one line."""
+    """`1 XCP for 2780 sat, 28 remaining` — a dispenser's terms in one line.
+
+    The satoshis are the ones payable now: an oracle dispenser's `satoshirate`
+    is a fiat price, and quoting it would name a number nobody can pay with.
+    """
     divisible = bool((d.get("asset_info") or {}).get("divisible"))
     give = _fmt_raw(int(d["give_quantity"]), divisible)
     left = _fmt_raw(int(d["give_remaining"]), divisible)
-    return (f"{give} {d['asset']} for {int(d['satoshirate'])} sat "
+    oracle = " at today's oracle price" if d.get("oracle_address") else ""
+    return (f"{give} {d['asset']} for {_sats_per_lot(d)} sat{oracle} "
             f"({left} {d['asset']} remaining)")
 
 
@@ -90,10 +100,214 @@ def _pick_source(btc, wallet: str, need_sat: int) -> tuple[str | None, int]:
     return (best if spendable[best] >= need_sat else None), spendable[best]
 
 
+def _sats_per_lot(d: dict) -> int:
+    """What one lot costs in satoshis, right now.
+
+    Not `satoshirate`, which for an ORACLE dispenser is a fiat figure — the
+    888 on `1F6zw…`'s XCP dispenser is $8.88, and the satoshis it actually
+    wants are 12,846. Core resolves the feed for us and reports the result as
+    `satoshi_price`, which equals `satoshirate` when there is no oracle. Using
+    the wrong one sorts an oracle dispenser to the top of a cheapest-first list
+    at a fourteenth of its price, and then underpays it: Counterparty refuses
+    the dispense with "not enough BTC to trigger dispenser".
+    """
+    price = d.get("satoshi_price")
+    return int(price if price is not None else d["satoshirate"])
+
+
+def _unit_price(d: dict, divisible: bool) -> float:
+    """Sats per whole unit — what makes dispensers comparable, and what they
+    are sorted by. A lot of ten at 98,000 sats is 9,800 each, not the cheap
+    one."""
+    lot = int(d["give_quantity"]) / (10**8 if divisible else 1)
+    return _sats_per_lot(d) / lot if lot else float("inf")
+
+
+def _divisible(d: dict) -> bool:
+    return bool((d.get("asset_info") or {}).get("divisible"))
+
+
+def _by_price(rows: list[dict]) -> list[dict]:
+    """Cheapest per unit first. Sorted on the number, never on its rendering:
+    '12,000' sorts before '9,800' as text."""
+    return sorted(rows, key=lambda d: _unit_price(d, _divisible(d)))
+
+
+def _terms(d: dict) -> str:
+    """`5,500 sats each (lots of 10) — 1,000 left`, in `info --trading`'s idiom.
+
+    An oracle dispenser says so, because its price is only today's: the feed
+    moves and the satoshis move with it.
+    """
+    divisible = _divisible(d)
+    lot = int(d["give_quantity"])
+    per_unit = _unit_price(d, divisible)
+    shown = f"{int(per_unit):,}" if per_unit == int(per_unit) else f"{per_unit:,.8f}".rstrip("0").rstrip(".")
+    notes = []
+    if lot != (10**8 if divisible else 1):
+        notes.append(f"lots of {_fmt_qty(lot, divisible)}")
+    if d.get("oracle_address"):
+        notes.append("oracle-priced")
+    note = f" ({', '.join(notes)})" if notes else ""
+    return (f"{shown} sats each{note} "
+            f"— {_fmt_qty(int(d['give_remaining']), divisible)} left")
+
+
+def _looks_like_asset(token: str) -> bool:
+    """Asset names are upper-case letters and digits, a dot for a subasset, and
+    never begin with a digit — so a token can be told from an address without
+    asking anything."""
+    name = token.upper()
+    return bool(name) and not name[0].isdigit() and all(
+        c.isalnum() or c in ".-_@!" for c in name)
+
+
+def resolve_target(config: Config, token: str) -> tuple[str, str] | None:
+    """Is this an address or an asset? Returns ('address'|'asset', value).
+
+    `buy-from-dispenser xcp` is the obvious thing to type when you want XCP,
+    and answering it with "not a valid Bitcoin address" is a refusal to read.
+    An address is checked first because bitcoind can settle it outright; only
+    then is Counterparty asked whether the token names an asset it knows.
+    """
+    btc = BitcoindClient(config)
+    if _is_valid_address(btc, token):
+        return "address", token
+    if not _looks_like_asset(token):
+        return None
+    try:
+        info = CounterpartyClient(config).get_asset(token.upper())
+    except CounterpartyError:
+        return None
+    if not info:
+        return None
+    return "asset", (info.get("asset") or token.upper())
+
+
+def _cheapest_for(cp, asset: str, payout: int) -> tuple[dict | None, str]:
+    """The cheapest open dispenser that can actually fill `payout` of `asset`.
+
+    "Cheapest" is per unit, and "can fill" is two things: it holds enough, and
+    the request is a whole number of its lots — a part-lot payment is kept by
+    the dispenser rather than refunded. Returns (dispenser, reason_if_none).
+    """
+    rows, _ = cp.get_asset_dispensers(asset, limit=50)
+    if not rows:
+        return None, f"no open dispenser sells {asset}"
+    usable = [d for d in _by_price(rows)
+              if int(d["give_remaining"]) >= payout and payout % int(d["give_quantity"]) == 0]
+    if usable:
+        return usable[0], ""
+
+    divisible = _divisible(rows[0])
+    best = _by_price(rows)[0]
+    stock = max(int(d["give_remaining"]) for d in rows)
+    if stock < payout:
+        return None, (f"no dispenser has {_fmt_raw(payout, divisible)} {asset} left — "
+                      f"the largest holds {_fmt_raw(stock, divisible)}")
+    lot = int(best["give_quantity"])
+    return None, (f"{asset} is dispensed in lots of {_fmt_raw(lot, divisible)} — ask for a "
+                  f"multiple of that, not {_fmt_raw(payout, divisible)}")
+
+
+def cmd_browse_dispensers(config: Config, asset: str | None = None, limit: int = 25) -> int:
+    """What there is to buy, cheapest first — the command called by itself.
+
+    Named for the buyer's side: `cmd_list_dispensers` below is the operator's
+    `wallet dispensers`, which lists the ones this wallet runs.
+
+    Without an asset this is every open dispenser selling a counter, which is
+    the shelf this tool is about: the index already knows every counter's
+    asset, so the question is asked once per asset and answered locally.
+    `--asset` widens it to any Counterparty asset, counter or not.
+    """
+    cp = CounterpartyClient(config)
+
+    if asset:
+        try:
+            rows, total = cp.get_asset_dispensers(asset.upper(), limit=limit)
+        except CounterpartyError as e:
+            print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+            return 1
+        if not rows:
+            print(f"no open dispensers selling {asset.upper()}")
+            return 0
+        more = f" (showing the {len(rows)} cheapest)" if total > len(rows) else ""
+        print(f"{asset.upper()} — {total} open dispenser{'s' if total != 1 else ''}, "
+              f"cheapest first{more}")
+        for d in _by_price(rows):
+            print(f"  {_terms(d)} @ {d.get('source') or '?'}")
+        print()
+        print(f"  counters wallet buy-from-dispenser <ADDRESS> <AMOUNT> --asset {asset.upper()}")
+        return 0
+
+    store = Store(config)
+    try:
+        assets = [r["asset"] for r in store.db.execute(
+            "SELECT DISTINCT asset FROM counters ORDER BY number DESC")]
+    finally:
+        store.close()
+
+    found: list[tuple[float, dict, str]] = []
+    for name in assets:
+        try:
+            rows, _ = cp.get_asset_dispensers(name, limit=5)
+        except CounterpartyError as e:
+            print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+            return 1
+        for d in rows:
+            found.append((_unit_price(d, _divisible(d)), d, name))
+
+    if not found:
+        print("no open dispensers on any counter")
+        print()
+        print("  counters wallet buy-from-dispenser <ADDRESS> <AMOUNT>   buys from any dispenser")
+        print("  counters wallet buy-from-dispenser --asset XCP          lists one asset's")
+        return 0
+
+    found.sort(key=lambda t: t[0])
+    shown = found[:limit]
+    more = f" (showing the {limit} cheapest)" if len(found) > limit else ""
+    print(f"{len(found)} open dispenser{'s' if len(found) != 1 else ''} selling counters, "
+          f"cheapest first{more}")
+    print()
+    for _, d, name in shown:
+        print(f"  {name:<20} {_terms(d)} @ {d.get('source') or '?'}")
+    print()
+    print("  counters wallet buy-from-dispenser <ADDRESS> <AMOUNT> [--asset ASSET]")
+    return 0
+
+
+def cmd_browse_address_dispensers(config: Config, address: str, asset: str | None = None) -> int:
+    """One address's shelf, cheapest first — `buy-from-dispenser ADDRESS` with
+    no amount. A listing, not a mistake, so it succeeds."""
+    btc = BitcoindClient(config)
+    cp = CounterpartyClient(config)
+    if not _is_valid_address(btc, address):
+        print(f"{address!r} is not a valid Bitcoin address", file=sys.stderr)
+        return 1
+    try:
+        rows = _open_dispensers(cp, address, asset)
+    except CounterpartyError as e:
+        print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+        return 1
+    if not rows:
+        which = f" for {asset.upper()}" if asset else ""
+        print(f"no open dispenser{which} at {address}")
+        return 0
+    print(f"{address} — {len(rows)} open dispenser{'s' if len(rows) != 1 else ''}, "
+          f"cheapest first")
+    for d in _by_price(rows):
+        print(f"  --asset {d['asset']:<16} {_terms(d)}")
+    print()
+    print(f"  counters wallet buy-from-dispenser {address} <AMOUNT> [--asset ASSET]")
+    return 0
+
+
 def cmd_buy_from_dispenser(
     config: Config,
     wallet: str,
-    address: str,
+    address: str | None,
     amount: str,
     asset: str | None = None,
     source: str | None = None,
@@ -103,6 +317,35 @@ def cmd_buy_from_dispenser(
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
+
+    # Naming the asset instead of an address buys from the cheapest dispenser
+    # selling it. The confirmation names which one, so the choice is reviewed
+    # before it costs anything rather than taken on trust.
+    chosen_note = ""
+    if address is None:
+        if not asset:
+            print("say which dispenser to buy from — an address, or an asset "
+                  "to take the cheapest", file=sys.stderr)
+            return 1
+        try:
+            rows, _ = cp.get_asset_dispensers(asset.upper(), limit=1)
+        except CounterpartyError as e:
+            print(f"cannot reach Counterparty: {e}", file=sys.stderr)
+            return 1
+        if not rows:
+            print(f"no open dispenser sells {asset.upper()}", file=sys.stderr)
+            return 1
+        try:
+            payout = _to_raw_quantity(amount, _divisible(rows[0]))
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        pick, why = _cheapest_for(cp, asset.upper(), payout)
+        if pick is None:
+            print(why, file=sys.stderr)
+            return 1
+        address = pick["source"]
+        chosen_note = f"cheapest of the open {asset.upper()} dispensers"
 
     if not _is_valid_address(btc, address):
         print(f"{address!r} is not a valid Bitcoin address", file=sys.stderr)
@@ -116,7 +359,7 @@ def cmd_buy_from_dispenser(
     if len(dispensers) > 1:
         print(f"{address} runs {len(dispensers)} open dispensers — pick one with "
               f"--asset:", file=sys.stderr)
-        for d in dispensers:
+        for d in _by_price(dispensers):
             print(f"  --asset {d['asset']:<16} {_describe(d)}", file=sys.stderr)
         return 1
 
@@ -139,7 +382,7 @@ def cmd_buy_from_dispenser(
               f"not {_fmt_raw(payout, divisible)}", file=sys.stderr)
         return 1
     lots = payout // lot
-    pay = int(d["satoshirate"]) * lots
+    pay = _sats_per_lot(d) * lots
     if payout > remaining:
         print(f"dispenser only has {_fmt_raw(remaining, divisible)} {d['asset']} left, "
               f"less than the {_fmt_raw(payout, divisible)} asked for", file=sys.stderr)
@@ -170,7 +413,7 @@ def cmd_buy_from_dispenser(
     what = f"{_fmt_raw(payout, divisible)} {d['asset']}"
 
     print(f"buy {what}")
-    print(f"  dispenser : {address}")
+    print(f"  dispenser : {address}{f' ({chosen_note})' if chosen_note else ''}")
     print(f"  terms     : {_describe(d)}")
     print(f"  receiving : {what}")
     print(f"  price     : {pay} sat ({_fmt_btc_sat(pay)} BTC)"
