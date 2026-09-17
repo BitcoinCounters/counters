@@ -14,8 +14,8 @@ from pathlib import Path
 
 from . import CP_SERIES, __version__
 from .commands import (
-    bump, burn, cancel, dispenser, inscribe, issue, order, pool, read, send, serve,
-    wallet,
+    bump, burn, burn_ordinal, cancel, dispenser, inscribe, issue, order, pool, read,
+    send, serve, wallet,
 )
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
@@ -462,6 +462,22 @@ def main(argv: list[str] | None = None) -> int:
     p_xfer.add_argument("--dry-run", action="store_true",
                         help="compose + sign + validate but do not broadcast; print raw hex")
 
+    p_ordburn = wsub.add_parser(
+        "burn-ordinal-sat", parents=[common, wname],
+        help="burn the ordinals inscription of a counterparty + ord counter "
+             "(the Counterparty asset is untouched)",
+        usage="counters wallet [--name NAME] burn-ordinal-sat [COUNTER|ASSET|INSCRIPTION_ID]",
+    )
+    p_ordburn.add_argument("target", nargs="?", default=None,
+                           help="which one: counter number, asset, or inscription id; "
+                                "omit to pick from a list of the wallet's inscriptions")
+    p_ordburn.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                           help="fee rate in sat/vB (default: the node's next-block "
+                                "estimate; the postage usually more than covers it)")
+    p_ordburn.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_ordburn.add_argument("--dry-run", action="store_true",
+                           help="sign + validate but do not broadcast; print raw hex")
+
     p_burn = wsub.add_parser(
         "burn", parents=[common, wname, fundargs],
         help="permanently destroy a quantity of an asset (Counterparty destroy)",
@@ -860,6 +876,11 @@ def main(argv: list[str] | None = None) -> int:
                     lock=args.lock, fee_rate=args.fee_rate, dry_run=args.dry_run,
                     fund_from=args.fund_from, no_fund=args.no_fund,
                     divisible=args.divisible, source=args.source,
+                )
+            if args.wallet_command == "burn-ordinal-sat":
+                return burn_ordinal.cmd_burn_ordinal_sat(
+                    config, args.name, args.target, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
                 )
             if args.wallet_command == "burn":
                 return burn.cmd_burn(

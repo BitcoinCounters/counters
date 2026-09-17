@@ -337,6 +337,13 @@ counters wallet inscribe --slipstream-status <TXID>   # the only way to watch it
 # change lifts it to --commit-fee-rate while the reveal keeps --fee-rate:
 counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstream --fee-rate 1 --commit-fee-rate 3
 
+# --- burn the ordinals half of a counterparty + ord counter ---
+# The reveal made two assets; this destroys only the inscription (its sat goes to a
+# 1-sat OP_RETURN, ord's `burned` charm). The Counterparty asset is untouched.
+# With no argument it lists the wallet's inscriptions, each with its asset and
+# counter number, and asks which. Only inscriptions still on their reveal output.
+counters wallet --name mywallet burn-ordinal-sat
+counters wallet --name mywallet burn-ordinal-sat MYCOUNTER --dry-run   # or a counter number / inscription id
 
 # --- asset management (owner-sourced Counterparty issuances) ---
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply

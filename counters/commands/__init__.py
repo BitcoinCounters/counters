@@ -9,6 +9,8 @@ parsing and dispatch live in `counters.__main__`.
 - send.py      transfer a counter (compose Counterparty send + sign + broadcast)
 - issue.py     issue / lock-supply / lock-description / transfer-ownership
 - burn.py      permanently destroy a quantity of an asset (Counterparty destroy)
+- burn_ordinal.py burn-ordinal-sat: burn the ordinals inscription of a
+  counterparty + ord counter (the Counterparty asset is untouched)
 - dispenser.py buy-from-dispenser (and, called bare, what is for sale —
   cheapest per unit first), plus the operator side: open/refill/close/list
 - order.py     DEX: swap / open-order / cancel-order / pay-order / orders

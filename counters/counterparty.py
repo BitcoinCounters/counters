@@ -714,6 +714,11 @@ class CounterpartyClient:
         """All Counterparty (XCP + asset) balances held by an address."""
         return self._paginate(f"/v2/addresses/{address}/balances")
 
+    def get_utxo_balances(self, utxo: str) -> list[dict]:
+        """Counterparty balances ATTACHED to a UTXO (v11 `attach`): spending the
+        UTXO moves them with it."""
+        return self._paginate(f"/v2/utxos/{utxo}/balances")
+
     def get_address_owned_assets(self, address: str) -> list[dict]:
         """Assets whose issuance rights this address currently OWNS — i.e. it can
         reissue, lock, or transfer ownership — even if it holds zero of the token."""
