@@ -163,6 +163,13 @@ class Store:
             is not None
         )
 
+    def get_counter_by_event(self, txid: str, msg_index: int = 0) -> sqlite3.Row | None:
+        """The counter minted by one Counterparty message (tx_hash, msg_index)."""
+        return self.db.execute(
+            "SELECT * FROM counters WHERE mint_txid = ? AND msg_index = ?",
+            (txid, msg_index),
+        ).fetchone()
+
     def last_rolling_hash(self) -> bytes:
         """The chain tip of the rolling hash: the last row's digest, or the
         seed sha256(GENESIS_TAG) when no counter exists yet (§7)."""
