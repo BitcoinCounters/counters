@@ -473,14 +473,17 @@ def main(argv: list[str] | None = None) -> int:
     p_disp = wsub.add_parser(
         "buy-from-dispenser", parents=[common, wname],
         help="buy from a Counterparty dispenser (a plain BTC send does NOT work)",
-        usage="counters wallet [--name NAME] buy-from-dispenser <ADDRESS> <AMOUNT>",
+        usage="counters wallet [--name NAME] buy-from-dispenser [<ADDRESS|ASSET> <AMOUNT>]",
     )
-    _add_dual(p_disp, "address", "address", help="the dispenser's address")
+    _add_dual(p_disp, "address", "address",
+              help="the dispenser's address — or an asset, to take the cheapest "
+                   "dispenser selling it; omit both to list what is for sale")
     _add_dual(p_disp, "amount", "amount",
               help="how much of the ASSET to buy (e.g. 1); the "
                    "satoshi price comes from the dispenser")
     p_disp.add_argument("--asset", help="which asset, when the address runs more than "
-                                        "one open dispenser")
+                                        "one open dispenser; with no address, lists that "
+                                        "asset's dispensers cheapest first")
     p_disp.add_argument("--source", metavar="ADDRESS",
                         help="wallet address to pay from; default: the richest that "
                              "can cover it")
@@ -763,11 +766,32 @@ def main(argv: list[str] | None = None) -> int:
                     fund_from=args.fund_from, no_fund=args.no_fund,
                 )
             if args.wallet_command == "buy-from-dispenser":
+                # Called with nothing to buy, it says what there is to buy:
+                # every open dispenser on a counter, cheapest per unit first.
+                # An address alone narrows that to one shelf. Neither is an
+                # error, so neither exits like one.
+                buy_target = _dual_value(p_disp, args, "address", required=False)
+                buy_amount = _dual_value(p_disp, args, "amount", required=False)
+                buy_asset = args.asset
+                # The first word may be an address or an asset — `xcp` is the
+                # obvious thing to type when you want XCP, and answering it
+                # with "not a valid Bitcoin address" is a refusal to read.
+                if buy_target is not None:
+                    kind = dispenser.resolve_target(config, buy_target)
+                    if kind is None:
+                        print(f"{buy_target!r} is neither a Bitcoin address nor an asset "
+                              f"Counterparty knows", file=sys.stderr)
+                        return 1
+                    if kind[0] == "asset":
+                        buy_asset, buy_target = kind[1], None
+                if buy_target is None and buy_amount is None:
+                    return dispenser.cmd_browse_dispensers(config, asset=buy_asset)
+                if buy_target is not None and buy_amount is None:
+                    return dispenser.cmd_browse_address_dispensers(
+                        config, buy_target, asset=buy_asset)
                 return dispenser.cmd_buy_from_dispenser(
-                    config, args.name,
-                    _dual_value(p_disp, args, "address"),
-                    _dual_value(p_disp, args, "amount"),
-                    asset=args.asset, source=args.source, fee_rate=args.fee_rate,
+                    config, args.name, buy_target, buy_amount,
+                    asset=buy_asset, source=args.source, fee_rate=args.fee_rate,
                     assume_yes=args.yes, dry_run=args.dry_run,
                 )
             if args.wallet_command == "open-dispenser":

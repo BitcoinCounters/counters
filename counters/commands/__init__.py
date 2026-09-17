@@ -9,7 +9,8 @@ parsing and dispatch live in `counters.__main__`.
 - send.py      transfer a counter (compose Counterparty send + sign + broadcast)
 - issue.py     issue / lock-supply / lock-description / transfer-ownership
 - burn.py      permanently destroy a quantity of an asset (Counterparty destroy)
-- dispenser.py buy-from-dispenser, and the operator side: open/refill/close/list
+- dispenser.py buy-from-dispenser (and, called bare, what is for sale —
+  cheapest per unit first), plus the operator side: open/refill/close/list
 - order.py     DEX: open-order / cancel-order / pay-order / orders
 - bump.py      CPFP-accelerate an unconfirmed transaction
 - cancel.py    RBF-abandon an unconfirmed transaction

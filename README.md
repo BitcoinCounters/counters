@@ -226,6 +226,21 @@ counters wallet --name mywallet bump --txid <txid> --fee-rate 5
 # (see disable_vanilla_btc_dispense below) — a purchase needs this message.
 # You say how much of the ASSET to buy; the price comes from the dispenser, and
 # the total cost in BTC is shown for a y/n confirmation before anything is sent.
+# Called with nothing to buy, it says what there is to buy — every open
+# dispenser selling a counter, cheapest per unit first, since a lot of ten at
+# 98,000 sats is 9,800 each and not the cheap one. An address alone narrows
+# that to one shelf.
+counters wallet buy-from-dispenser                                   # the whole shelf
+counters wallet buy-from-dispenser xcp                               # one asset, anywhere
+counters wallet buy-from-dispenser bc1q...                           # one address
+
+# The first word is an address or an asset, whichever it turns out to be — so
+# naming an asset with an amount buys from the cheapest dispenser selling it.
+# The confirmation names which one before anything is sent. An ORACLE
+# dispenser is priced in fiat by its feed, and is ranked and paid by the
+# satoshis it actually wants today, not by the fiat figure it quotes.
+counters wallet --name mywallet buy-from-dispenser xcp 1              # cheapest seller
+
 counters wallet --name mywallet buy-from-dispenser bc1q... 1          # buy 1 XCP
 counters wallet --name mywallet buy-from-dispenser bc1q... 3 --fee-rate 3
 counters wallet --name mywallet buy-from-dispenser bc1q... 1 --yes    # no prompt
