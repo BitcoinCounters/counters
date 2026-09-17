@@ -36,7 +36,9 @@ directly into MARA's own mempool for mining. Four facts shape this client:
 
 from __future__ import annotations
 
-from typing import Any
+import json
+import time
+from typing import Any, NamedTuple
 
 import requests
 
@@ -48,9 +50,62 @@ from .config import Config
 # hard rejection, so we check locally before spending anything.
 MAX_WEIGHT = 3_991_000
 
+# Sent on every request. Not a workaround for anything observed here — an
+# unauthenticated probe with requests' default UA answers 400 normally
+# (checked 2026-09-15) — but MARA's edge has rejected generic clients before,
+# and naming ourselves costs nothing.
+USER_AGENT = "counters/1.0"
+
 # The standard-relay weight cap. At or below it, the public network would take
 # the transaction for free — Slipstream is for what lies beyond.
 STANDARD_MAX_WEIGHT = 400_000
+
+# --- Submitting a multi-megabyte transaction ---------------------------------
+#
+# Slipstream's origin sits behind Cloudflare and flaps. A large upload finishes
+# and then dies with a 5xx while the origin is still validating it, and THAT
+# ANSWER IS AMBIGUOUS: the submission may well have landed. Treating it as a
+# failure is how a reveal that Slipstream actually accepted gets reported as
+# rejected. So a submission is classified, never simply raised on:
+#
+#   accepted   200/201, or 400 "already known" — it has the transaction
+#   rejected   400 for any other reason — a verdict, stop
+#   ambiguous  5xx after the whole body went up — probably accepted; the CHAIN
+#              decides, and a re-upload is cheap only compared to losing it
+#   no-answer  timeout, reset, 408 — the body never arrived; retry freely
+#
+# The probe exists because uploading megabytes into a dead origin wastes the
+# one thing that cannot be repeated cheaply. A throwaway body draws a fast 400
+# ("Failed to deserialize transaction") from the ORIGIN itself — proof it is
+# alive right now — and the real submission follows immediately.
+PROBE_BODY = "00"
+PROBE_ALIVE_SECONDS = 2.0     # a 400 slower than this is Cloudflare, not the origin
+PROBE_INTERVAL = 6            # seconds between probes
+PROBE_STREAK = 2              # consecutive live answers before a real submit
+PROBE_CAP = 1200              # ~2 h of probing before giving up
+SUBMIT_TIMEOUT = 300.0        # a multi-MB upload plus the origin's think time
+AMBIGUOUS_AFTER_SECONDS = 90  # a 5xx later than this means the body DID go up
+
+
+class SubmitVerdict(NamedTuple):
+    """What a submission attempt actually established. `state` is one of
+    'accepted', 'rejected', 'ambiguous', 'no-answer' (see above)."""
+
+    state: str
+    code: int | None
+    message: str
+    seconds: float
+
+    @property
+    def submitted(self) -> bool:
+        """True when Slipstream may hold the transaction — so the next move is
+        to watch the chain, never to assume failure."""
+        return self.state in ("accepted", "ambiguous")
+
+    @property
+    def final(self) -> bool:
+        """True when retrying cannot change the outcome."""
+        return self.state in ("accepted", "rejected")
 
 
 class SlipstreamError(Exception):
@@ -76,7 +131,7 @@ class SlipstreamClient:
     def _request(self, method: str, path: str, params: dict | None = None,
                  body: dict | None = None, timeout: float | None = None) -> Any:
         url = f"{self.base}{path}"
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
         if self.client_code:
             headers["Authorization"] = f"Bearer {self.client_code}"
         try:
@@ -151,6 +206,68 @@ class SlipstreamClient:
         if isinstance(result, dict) and result.get("status") not in (None, "success"):
             raise SlipstreamError(f"Slipstream rejected the transaction: {result}")
         return result if isinstance(result, dict) else {"message": result}
+
+    # -- classified submission ---------------------------------------------
+
+    def _post_unraised(self, body: dict, timeout: float) -> tuple[int | None, str, float]:
+        """POST /api/transactions and report what happened. Never raises: how a
+        submission failed is the whole signal here, so it is data, not an
+        exception. Returns (http_code_or_None, body_text, seconds)."""
+        headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+        if self.client_code:
+            headers["Authorization"] = f"Bearer {self.client_code}"
+        started = time.time()
+        try:
+            resp = self._session.request(
+                "POST", f"{self.base}/api/transactions", params=None, json=body,
+                headers=headers, timeout=timeout,
+            )
+        except Exception as e:                  # timeout, reset, DNS — all "no answer"
+            return None, f"{type(e).__name__}: {e}", time.time() - started
+        return resp.status_code, (resp.text or "")[:600], time.time() - started
+
+    def probe(self, timeout: float = 20.0) -> tuple[bool, str]:
+        """Is the ORIGIN answering right now? A throwaway body should draw a
+        fast 400 "Failed to deserialize transaction" — Cloudflare alone cannot
+        produce that. Returns (alive, one-line detail)."""
+        code, msg, secs = self._post_unraised({"tx_hex": PROBE_BODY}, timeout)
+        alive = (code == 400 and secs < PROBE_ALIVE_SECONDS)
+        return alive, f"http={code} {secs:.2f}s"
+
+    def submit_classified(self, raw_hex: str,
+                          timeout: float | None = None) -> SubmitVerdict:
+        """Submit one transaction and CLASSIFY the answer rather than raising.
+
+        The distinction `submit()` cannot draw: a 5xx arriving after the whole
+        body went up is not a rejection. Every large submission MARA has
+        accepted looked exactly like that — Cloudflare gives up at ~100 s while
+        the origin is still validating — so it is reported as ambiguous and the
+        caller settles it against the chain.
+        """
+        body: dict[str, Any] = {"tx_hex": raw_hex}
+        if self.client_code:
+            body["client_code"] = self.client_code
+        code, msg, secs = self._post_unraised(
+            body, SUBMIT_TIMEOUT if timeout is None else timeout)
+        low = (msg or "").lower()
+
+        if code in (200, 201):
+            # A 200 can still carry {"status": "error"} — the API does that, so
+            # the body is parsed rather than pattern-matched.
+            try:
+                parsed = json.loads(msg)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("status") == "error":
+                return SubmitVerdict("rejected", code, msg, secs)
+            return SubmitVerdict("accepted", code, msg, secs)
+        if code == 400 and ("already" in low or "known" in low):
+            return SubmitVerdict("accepted", code, msg, secs)
+        if code == 400 and "not found" not in low:
+            return SubmitVerdict("rejected", code, msg, secs)
+        if code is not None and code >= 500 and secs > AMBIGUOUS_AFTER_SECONDS:
+            return SubmitVerdict("ambiguous", code, msg, secs)
+        return SubmitVerdict("no-answer", code, msg, secs)
 
     def status(self, txid: str) -> dict:
         """Confirmation state, weight/vsize/fee, and mining odds for a txid.

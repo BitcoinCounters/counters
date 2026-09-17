@@ -40,9 +40,13 @@ from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
 from ..slipstream import (
     MAX_WEIGHT,
+    PROBE_CAP,
+    PROBE_INTERVAL,
+    PROBE_STREAK,
     STANDARD_MAX_WEIGHT,
     SlipstreamClient,
     SlipstreamError,
+    SubmitVerdict,
     describe_status,
 )
 from .funding import (
@@ -252,6 +256,45 @@ def _stash_hex(commit_hex: str, reveal_hex: str, reveal_txid: str) -> str:
     return path
 
 
+def _submit_probing(slip: SlipstreamClient, raw_hex: str, what: str):
+    """Upload `raw_hex` into a window where the origin is provably alive.
+
+    Slipstream's origin flaps, and a multi-megabyte body posted into a dead one
+    is minutes of upload thrown away. So: probe with a throwaway body until a
+    fast 400 proves the origin itself is answering, twice in a row, then submit
+    immediately. A verdict of 'no-answer' (the body never arrived) goes back to
+    probing; 'rejected' is a verdict and stops; 'ambiguous' and 'accepted' both
+    mean Slipstream may hold it, and the caller settles that against the chain.
+    """
+    probes = streak = attempts = 0
+    while True:
+        alive, detail = slip.probe()
+        probes += 1
+        if alive != (streak > 0) or probes % 10 == 1:
+            print(f"  probe {probes}: {detail} "
+                  f"{'— origin alive' if alive else '— no answer from the origin'}")
+        streak = streak + 1 if alive else 0
+
+        if streak >= PROBE_STREAK:
+            attempts += 1
+            print(f"\nsubmitting {what} to Slipstream "
+                  f"({len(raw_hex) / 2 / 1024:,.1f} kB, attempt {attempts})…")
+            verdict = slip.submit_classified(raw_hex)
+            print(f"  http={verdict.code} in {verdict.seconds:.1f}s: "
+                  f"{verdict.message[:160]}")
+            if verdict.state != "no-answer":
+                return verdict
+            print("  the body never arrived — back to probing")
+            streak = 0
+
+        if probes >= PROBE_CAP:
+            return SubmitVerdict(
+                "no-answer", None,
+                f"no healthy window in {probes} probes "
+                f"(~{probes * PROBE_INTERVAL // 60} min)", 0.0)
+        time.sleep(PROBE_INTERVAL)
+
+
 def _submit_split(
     btc: BitcoindClient,
     slip: SlipstreamClient,
@@ -320,21 +363,29 @@ def _submit_split(
             break
         time.sleep(30)
 
-    print(f"\nsubmitting reveal to Slipstream ({len(reveal_hex) / 2 / 1024:,.1f} kB)…")
-    try:
-        result = slip.submit(reveal_hex)
-    except SlipstreamError as e:
-        print(f"\nThe COMMIT IS CONFIRMED ON CHAIN but Slipstream would not take "
-              f"the reveal: {e}", file=sys.stderr)
+    verdict = _submit_probing(slip, reveal_hex, "reveal")
+    if not verdict.submitted:
+        print(f"\nThe COMMIT IS CONFIRMED ON CHAIN but Slipstream did not take "
+              f"the reveal: {verdict.state} — {verdict.message[:200]}", file=sys.stderr)
         print("\nThat reveal is the only transaction that can ever spend the commit "
               "output — it cannot be re-composed, fee-bumped, or replaced. The hex is "
               f"in {stash}; retry submitting it (the commit stays spendable until it "
               "is used), or the commit's funds are lost.", file=sys.stderr)
+        print(f"\n  retry with:  python3 tools/slipstream_submit.py {stash}",
+              file=sys.stderr)
         return 1
 
-    note = result.get("message")
-    extra = f"  ({note})" if note and note != reveal_txid else ""
-    print(f"  accepted: {reveal_txid}{extra}")
+    if verdict.state == "ambiguous":
+        # Not a failure: Cloudflare gave up while the origin was still reading
+        # the body. Every large submission MARA has accepted looked like this.
+        print(f"  http {verdict.code} after the full {verdict.seconds:.0f}s upload — "
+              f"probably accepted, but only the chain can settle it.")
+        print(f"  watch it (and re-upload if it never lands) with:\n"
+              f"    python3 tools/slipstream_submit.py {stash} --watch-only")
+    else:
+        note = verdict.message.strip()
+        extra = f"  ({note[:120]})" if note and reveal_txid not in note else ""
+        print(f"  accepted: {reveal_txid}{extra}")
     print(f"\nsubmitted\n  commit: {ctxid}  (public — visible in explorers now)"
           f"\n  reveal: {reveal_txid}  (Slipstream — invisible until it confirms)")
     if reveal_weight:
