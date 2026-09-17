@@ -1,11 +1,13 @@
 """Tests for the social preview images (`og:image`) served for /c/<id>.
 
-Covers the three layers: the PNG codec, the card renderer, and the server's
-choice of which image a link crawler is pointed at.
+Covers the layers: the PNG encoder, a counter's own picture re-encoded for a
+crawler, the card renderer, and the server's choice of which image a link
+crawler is pointed at.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import random
 import re
@@ -15,23 +17,29 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-import zlib
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PIL import Image  # noqa: E402
+
 from counters.config import Config  # noqa: E402
-from counters.server import app as appmod, card, glyphs, png  # noqa: E402
+from counters.server import app as appmod, card, glyphs, picture, png  # noqa: E402
 from counters.store import CounterRecord, Store  # noqa: E402
 
 
-# --- PNG codec ------------------------------------------------------------
+# --- PNG encoder ----------------------------------------------------------
+
+def _decode(data: bytes) -> tuple[int, int, bytes]:
+    with Image.open(io.BytesIO(data)) as im:
+        return im.width, im.height, im.convert("RGB").tobytes()
+
 
 def test_png_roundtrip():
     rnd = random.Random(7)
     for w, h in [(1, 1), (3, 2), (17, 5), (64, 40)]:
         rgb = bytes(rnd.randrange(256) for _ in range(w * h * 3))
-        assert png.decode(png.encode(w, h, rgb)) == (w, h, rgb)
+        assert _decode(png.encode(w, h, rgb)) == (w, h, rgb)
 
 
 def test_png_encode_rejects_wrong_length():
@@ -42,117 +50,142 @@ def test_png_encode_rejects_wrong_length():
     raise AssertionError("expected ValueError on a short pixel buffer")
 
 
-def test_png_decode_rejects_junk():
-    assert png.decode(b"") is None
-    assert png.decode(b"not a png at all") is None
-    # Right signature, truncated body.
-    assert png.decode(png.SIG + b"\x00" * 12) is None
-    import struct
-    ihdr = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)
-    head = png.SIG + png._chunk(b"IHDR", ihdr)
-    tail = png._chunk(b"IEND", b"")
-    # Well-formed header, but the pixel data is not valid zlib.
-    assert png.decode(head + png._chunk(b"IDAT", b"not zlib") + tail) is None
-    # Valid zlib, but fewer scanlines than the header promises.
-    short = zlib.compress(b"\x00\x01\x02\x03")
-    assert png.decode(head + png._chunk(b"IDAT", short) + tail) is None
-    # An unsupported bit depth is declined rather than mis-decoded.
-    ihdr4 = struct.pack(">IIBBBBB", 2, 2, 4, 2, 0, 0, 0)
-    assert png.decode(png.SIG + png._chunk(b"IHDR", ihdr4)
-                      + png._chunk(b"IDAT", zlib.compress(b"\x00" * 8))
-                      + tail) is None
-
-
-def test_png_decode_greyscale_and_palette():
-    """Colour types the encoder never emits but inscribed content may use."""
-    def build(ctype: str, depth: int, rows: bytes, extra: bytes = b"") -> bytes:
-        import struct
-        ihdr = struct.pack(">IIBBBBB", 2, 2, depth, ctype, 0, 0, 0)
-        return (png.SIG + png._chunk(b"IHDR", ihdr) + extra
-                + png._chunk(b"IDAT", zlib.compress(rows))
-                + png._chunk(b"IEND", b""))
-
-    # 8-bit greyscale, filter 0 per row.
-    grey = build(0, 8, b"\x00\x00\xff" + b"\x00\x80\x40")
-    assert png.decode(grey) == (2, 2, bytes([0, 0, 0, 255, 255, 255,
-                                             128, 128, 128, 64, 64, 64]))
-    # Palette: index 0 red, index 1 green.
-    plte = png._chunk(b"PLTE", bytes([255, 0, 0, 0, 255, 0]))
-    pal = build(3, 8, b"\x00\x00\x01" + b"\x00\x01\x00", plte)
-    assert png.decode(pal) == (2, 2, bytes([255, 0, 0, 0, 255, 0,
-                                            0, 255, 0, 255, 0, 0]))
-
-
-def test_png_decode_honours_the_pixel_cap():
-    data = png.encode(40, 40, b"\x20" * (40 * 40 * 3))
-    assert png.decode(data, max_pixels=1600) is not None
-    assert png.decode(data, max_pixels=1599) is None
-    assert png.decode(data) is not None      # uncapped by default
-
-
-def test_png_decode_skips_interlaced():
-    import struct
-    ihdr = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 1)   # interlace = Adam7
-    data = (png.SIG + png._chunk(b"IHDR", ihdr)
-            + png._chunk(b"IDAT", zlib.compress(b"\x00" * 14))
-            + png._chunk(b"IEND", b""))
-    assert png.decode(data) is None
-
-
-def test_png_shrink_averages_blocks():
-    # Two flat halves: every 2x2 block is uniform, so averaging is exact.
-    rgb = bytes([0, 0, 0] * 2 + [255, 255, 255] * 2) * 4
-    assert png.shrink(4, 4, rgb, 2) == (
-        2, 2, bytes([0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 255, 255]))
-    # Never enlarges, and a factor of 1 is the identity.
-    assert png.fit(4, 4, rgb, 99, 99) == (4, 4, rgb)
-    assert png.factor_for(1254, 1254, 1200, 1200) == 2
-    assert png.factor_for(400, 400, 1200, 1200) == 1
-
-
-def test_png_upscale_is_shrink_inverse():
-    rnd = random.Random(3)
-    rgb = bytes(rnd.randrange(256) for _ in range(5 * 4 * 3))
-    for factor in (2, 3):
-        uw, uh, up = png.upscale(5, 4, rgb, factor)
-        assert (uw, uh) == (5 * factor, 4 * factor)
-        # Every pixel became a uniform factor² block, so box-averaging it
-        # back down is exact.
-        assert png.shrink(uw, uh, up, factor) == (5, 4, rgb)
-    assert png.upscale(5, 4, rgb, 1) == (5, 4, rgb)
-
-
 def test_png_encode_gradient_roundtrips():
     # A horizontal ramp: Sub filters it to near-zero, Up does not — the
     # adaptive choice must still decode to the exact pixels.
     row = bytes(v for x in range(64) for v in (x * 4, x * 4, x * 4))
     rgb = row * 40
-    assert png.decode(png.encode(64, 40, rgb)) == (64, 40, rgb)
+    assert _decode(png.encode(64, 40, rgb)) == (64, 40, rgb)
 
 
-def test_enlarged_reaches_the_large_layout():
-    # Coarse vertical bands stay cheap at any scale, so the pixel-doubled
-    # copy fits the byte budget and crosses the large-layout threshold.
-    row = b"".join(([0, 200][x // 10 % 2].to_bytes(1, "big") * 3)
-                   for x in range(300))
-    big = appmod._enlarged(300, 300, row * 300)
-    assert big is not None and len(big) <= appmod.SOCIAL_MAX_BYTES
-    w, h, rgb = png.decode(big)
-    assert min(w, h) >= appmod.SOCIAL_LARGE_MIN
-    assert (w, h, rgb) == png.upscale(300, 300, row * 300, w // 300)
+# --- a counter's own picture ----------------------------------------------
+
+def _image(fmt: str, w: int, h: int, *, noise: bool = False, **save) -> bytes:
+    rnd = random.Random(w * 7919 + h)
+    if noise:
+        im = Image.frombytes("RGB", (w, h),
+                             rnd.randbytes(w * h * 3))
+    else:
+        im = Image.new("RGB", (w, h))
+        for y in range(h):
+            for x in range(w):
+                im.putpixel((x, y), ((x * 37) % 256, (y * 91) % 256, 120))
+    buf = io.BytesIO()
+    im.save(buf, fmt, **save)
+    return buf.getvalue()
 
 
-def test_enlarged_declines_when_it_cannot_help():
-    rnd = random.Random(5)
-    # Already at the large layout: nothing to do.
-    flat = bytes(600 * 600 * 3)
-    assert appmod._enlarged(600, 600, flat) is None
-    # Noise doubles past the byte budget, so the small copy stands.
-    noise = bytes(rnd.randrange(256) for _ in range(500 * 500 * 3))
-    assert appmod._enlarged(500, 500, noise) is None
-    # Any multiple of the long side would blow SOCIAL_MAX_DIM.
-    tall = bytes(350 * 700 * 3)
-    assert appmod._enlarged(350, 700, tall) is None
+def _animated_gif(w: int, h: int) -> bytes:
+    frames = [Image.new("RGB", (w, h), c) for c in ((255, 0, 0), (0, 0, 255))]
+    buf = io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:],
+                   duration=100, loop=0)
+    return buf.getvalue()
+
+
+SVG_FLAT = (b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 420'>"
+            b"<rect width='300' height='420' fill='#8000ff'/>"
+            b"<rect x='100' width='100' height='420' fill='#ffffff'/></svg>")
+SVG_SCRIPTED = (b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+                b"<script>document.title='x'</script></svg>")
+
+
+def test_tiny_pixel_art_is_enlarged_by_whole_pixels():
+    """#200 is 2x2, #90 24x24: previewed as a thumb unless scaled up."""
+    for w, h in [(2, 2), (24, 24), (48, 30)]:
+        src = _image("PNG", w, h)
+        out = picture.render(src, "image/png")
+        ow, oh, rgb = _decode(out)
+        assert min(ow, oh) >= picture.LARGE_MIN and max(ow, oh) <= picture.MAX_DIM
+        assert ow % w == 0 and ow // w == oh // h
+        # Nearest-neighbour: shrinking back by the same factor is exact.
+        with Image.open(io.BytesIO(out)) as im:
+            back = im.convert("RGB").resize((w, h), Image.NEAREST).tobytes()
+        assert back == _decode(src)[2]
+
+
+def test_extreme_aspect_is_enlarged_as_far_as_the_long_side_allows():
+    """#123 is 218x24: the short side can't reach 600 inside MAX_DIM."""
+    ow, oh, _ = _decode(picture.render(_image("PNG", 218, 24), "image/png"))
+    assert (ow, oh) == (218 * 5, 24 * 5)
+
+
+def test_oversized_photo_fits_the_byte_budget():
+    """#30 (474 KB JPEG) and #135 (3.9 MB GIF) were served raw and too big."""
+    for fmt, ctype in [("JPEG", "image/jpeg"), ("PNG", "image/png"),
+                       ("WEBP", "image/webp")]:
+        src = _image(fmt, 1400, 1000, noise=True, **({"quality": 100}
+                                                    if fmt != "PNG" else {}))
+        assert len(src) > picture.MAX_BYTES          # premise
+        out = picture.render(src, ctype)
+        assert len(out) <= picture.MAX_BYTES
+        w, h, _ = _decode(out)
+        assert max(w, h) <= picture.MAX_DIM and min(w, h) >= picture.MIN_DIM
+        assert picture.mime_of(out) in ("image/png", "image/jpeg")
+
+
+def test_animated_gif_renders_its_first_frame():
+    out = picture.render(_animated_gif(40, 40), "image/gif")
+    w, h, rgb = _decode(out)
+    assert rgb[:3] == bytes((255, 0, 0))
+
+
+def test_serve_as_is():
+    # Big enough, in budget, a format every crawler takes: untouched.
+    assert picture.serve_as_is(_image("JPEG", 700, 700), "image/jpeg")
+    # Small but animated: re-encoding would freeze it.
+    assert picture.serve_as_is(_animated_gif(40, 40), "image/gif")
+    # Small and still: enlarged instead.
+    assert not picture.serve_as_is(_image("PNG", 48, 48), "image/png")
+    # WebP previews unevenly across apps.
+    assert not picture.serve_as_is(_image("WEBP", 700, 700), "image/webp")
+    assert not picture.serve_as_is(b"not an image", "image/png")
+
+
+def test_svg_is_rasterized_at_full_size():
+    out = picture.render(SVG_FLAT, "image/svg+xml")
+    w, h, rgb = _decode(out)
+    assert h == picture.MAX_DIM and abs(w - picture.MAX_DIM * 300 / 420) <= 1
+    assert rgb[:3] == bytes((0x80, 0x00, 0xFF))
+    mid = (h // 2 * w + w // 2) * 3
+    assert rgb[mid:mid + 3] == bytes((255, 255, 255))
+
+
+def test_svg_text_is_drawn():
+    """The MEMETICX SVGs are a word on a fill; without fonts, just the fill."""
+    svg = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">'
+           b'<rect width="256" height="256" fill="#8000ff"/><text x="128" '
+           b'y="145" text-anchor="middle" font-family="monospace" '
+           b'font-size="36" fill="white">MEMETICX</text></svg>')
+    _, _, rgb = _decode(picture.render(svg, "image/svg+xml"))
+    assert bytes((255, 255, 255)) in {rgb[i:i + 3] for i in range(0, len(rgb), 3)}
+
+
+def test_svg_that_is_not_self_contained_is_declined():
+    """#203 scripts its own art; a static render is a blank or a loading
+    screen. And resvg reads non-data hrefs off the local disk."""
+    here = os.path.abspath(__file__).encode()
+    declined = [
+        SVG_SCRIPTED,
+        b"<svg xmlns='http://www.w3.org/2000/svg'><foreignObject/></svg>",
+        b"<svg xmlns='http://www.w3.org/2000/svg'><image href='" + here + b"'/></svg>",
+        b"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+        b"<image xlink:href = \"red.png\"/></svg>",
+        b"<svg xmlns='http://www.w3.org/2000/svg'><image href='file:///etc/x.png'/></svg>",
+        b"<!DOCTYPE svg [<!ENTITY e '/etc/x.png'>]><svg xmlns='http://www.w3.org/2000/svg'/>",
+    ]
+    for svg in declined:
+        assert not picture.svg_renderable(svg), svg
+        assert picture.render(svg, "image/svg+xml") is None
+    inline = (b"<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>"
+              b"<defs><rect id='r' width='10' height='10' fill='red'/></defs>"
+              b"<use href='#r'/><image href='data:image/png;base64,AAAA'/></svg>")
+    assert picture.svg_renderable(inline)
+
+
+def test_undecodable_picture_is_none():
+    assert picture.render(b"GIF89a garbage", "image/gif") is None
+    assert picture.render(b"<svg", "image/svg+xml") is None
 
 
 # --- font + card ----------------------------------------------------------
@@ -180,7 +213,7 @@ def _info(**over) -> dict:
 
 def test_card_renders_a_decodable_png():
     out = card.render(_info())
-    decoded = png.decode(out)
+    decoded = _decode(out)
     assert decoded is not None
     assert decoded[:2] == (card.WIDTH, card.HEIGHT)
     # Deterministic, so the on-disk cache key can be content-derived.
@@ -200,7 +233,7 @@ def test_card_survives_awkward_content():
     ]
     for info in cases:
         out = card.render(info)
-        assert png.decode(out)[:2] == (card.WIDTH, card.HEIGHT)
+        assert _decode(out)[:2] == (card.WIDTH, card.HEIGHT)
 
 
 def test_card_wraps_without_dropping_content():
@@ -222,10 +255,10 @@ def test_card_wraps_without_dropping_content():
 # --- server ---------------------------------------------------------------
 
 def _noise_png(side: int) -> bytes:
-    """An incompressible PNG, so it lands over SOCIAL_MAX_BYTES like #95 does."""
+    """An incompressible PNG, so it lands over MAX_BYTES like #95 does."""
     rnd = random.Random(11)
     return png.encode(side, side,
-                      bytes(rnd.randrange(256) for _ in range(side * side * 3)))
+                      rnd.randbytes(side * side * 3))
 
 
 BIG_PNG = _noise_png(600)
@@ -235,6 +268,9 @@ SMALL_GIF = (
     b"\x01\x00;"
 )
 STAMP_TEXT = b"STAMP:" + __import__("base64").b64encode(SMALL_GIF)
+ANIM_GIF = _animated_gif(40, 40)
+BIG_STAMP = b"STAMP:" + __import__("base64").b64encode(ANIM_GIF)
+FIT_JPEG = _image("JPEG", 700, 700)
 
 
 def _seed(data_dir: str) -> Config:
@@ -247,7 +283,11 @@ def _seed(data_dir: str) -> Config:
         ("SMALLGIF", "image/gif", SMALL_GIF, False),
         ("BIGPNG", "image/png", BIG_PNG, False),
         ("STAMPED", "text/plain", STAMP_TEXT, False),
-        ("SVGONE", "image/svg+xml", b"<svg xmlns='http://www.w3.org/2000/svg'/>", False),
+        ("SVGONE", "image/svg+xml", SVG_FLAT, False),
+        ("SVGSCRIPT", "image/svg+xml", SVG_SCRIPTED, False),
+        ("ANIMGIF", "image/gif", ANIM_GIF, False),
+        ("FITJPEG", "image/jpeg", FIT_JPEG, False),
+        ("ANIMSTAMP", "text/plain", BIG_STAMP, False),
     ]
     for n, (asset, ctype, content, pointer) in enumerate(rows):
         sha = store.store_blob(content)
@@ -308,18 +348,57 @@ def test_og_description_carries_supply_and_burned():
         httpd.server_close()
 
 
+def _path(url: str) -> str:
+    return urllib.parse.urlparse(url).path
+
+
 def test_og_image_points_at_the_counters_own_picture():
     httpd, cfg, base = _run_server()
     try:
-        # A small raster image is handed over untouched, so an animated GIF
-        # still animates in the preview.
-        tags = _og(base, 1)
-        assert urllib.parse.urlparse(tags["og:image"]).path == "/content/1"
-        assert tags["og:image:type"] == "image/gif"
+        # A picture crawlers already show large is handed over untouched...
+        tags = _og(base, 7)
+        assert _path(tags["og:image"]) == "/content/7"
+        assert tags["og:image:type"] == "image/jpeg"
         assert tags["twitter:card"] == "summary_large_image"
-
+        # ...and so is a small animated GIF, which re-encoding would freeze.
+        tags = _og(base, 6)
+        assert _path(tags["og:image"]) == "/content/6"
+        assert tags["og:image:type"] == "image/gif"
         # A stamp previews as its decoded image, not its base64 text.
-        assert urllib.parse.urlparse(_og(base, 3)["og:image"]).path == "/stamp/3"
+        assert _path(_og(base, 8)["og:image"]) == "/stamp/8"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_small_pictures_are_enlarged_for_crawlers():
+    """A 1x1 GIF, raw or as a stamp, would preview as a thumb or not at all."""
+    httpd, cfg, base = _run_server()
+    try:
+        for number in (1, 3):
+            tags = _og(base, number)
+            path = _path(tags["og:image"])
+            assert path == f"/social/{number}.png"
+            # Its size depends on the picture, so none is claimed.
+            assert "og:image:width" not in tags and "og:image:type" not in tags
+            status, ctype, body = _get(base, path)
+            assert status == 200 and ctype == "image/png"
+            w, h, _ = _decode(body)
+            assert (w, h) == (600, 600)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_svg_previews_as_its_picture():
+    httpd, cfg, base = _run_server()
+    try:
+        tags = _og(base, 4)
+        assert _path(tags["og:image"]) == "/social/4.png"
+        status, ctype, body = _get(base, "/social/4.png")
+        assert status == 200 and ctype == "image/png"
+        w, h, rgb = _decode(body)
+        assert h == picture.MAX_DIM and rgb[:3] == bytes((0x80, 0x00, 0xFF))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -328,18 +407,18 @@ def test_og_image_points_at_the_counters_own_picture():
 def test_og_image_renders_a_card_when_there_is_no_picture():
     httpd, cfg, base = _run_server()
     try:
-        for number in (0, 4):        # plain text, and SVG (not a raster image)
-            tags = _og(base, number)
-            path = urllib.parse.urlparse(tags["og:image"]).path
-            assert path == f"/social/{number}.png"
-            assert tags["og:image:width"] == str(card.WIDTH)
-            assert tags["og:image:height"] == str(card.HEIGHT)
-            assert tags["og:image:type"] == "image/png"
-            assert str(number) in tags["og:image:alt"]
-
-            status, ctype, body = _get(base, path)
+        tags = _og(base, 0)             # plain text
+        path = _path(tags["og:image"])
+        assert path == "/social/0.png"
+        assert tags["og:image:width"] == str(card.WIDTH)
+        assert tags["og:image:height"] == str(card.HEIGHT)
+        assert tags["og:image:type"] == "image/png"
+        assert "0" in tags["og:image:alt"]
+        # Plain text, and an SVG that scripts its own art: both get the card.
+        for number in (0, 5):
+            status, ctype, body = _get(base, f"/social/{number}.png")
             assert status == 200 and ctype == "image/png"
-            assert png.decode(body)[:2] == (card.WIDTH, card.HEIGHT)
+            assert _decode(body)[:2] == (card.WIDTH, card.HEIGHT)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -348,16 +427,14 @@ def test_og_image_renders_a_card_when_there_is_no_picture():
 def test_oversized_image_is_downscaled_for_crawlers():
     httpd, cfg, base = _run_server()
     try:
-        assert len(BIG_PNG) > appmod.SOCIAL_MAX_BYTES     # premise of the test
+        assert len(BIG_PNG) > picture.MAX_BYTES     # premise of the test
         tags = _og(base, 2)
-        path = urllib.parse.urlparse(tags["og:image"]).path
+        path = _path(tags["og:image"])
         assert path == "/social/2.png"
 
         status, ctype, body = _get(base, path)
-        assert status == 200 and ctype == "image/png"
-        assert len(body) < len(BIG_PNG)
-        width, height, _ = png.decode(body)
-        assert width < 600 and height < 600
+        assert status == 200 and ctype == picture.mime_of(body)
+        assert len(body) <= picture.MAX_BYTES
         # /content still serves the exact consensus bytes.
         assert _get(base, "/content/2")[2] == BIG_PNG
     finally:
@@ -373,8 +450,8 @@ def test_social_images_are_cached_and_reused():
         assert len(cached) == 1 and cached[0].read_bytes() == first
         # A second request is served from that file, byte for byte.
         assert _get(base, "/social/0.png")[2] == first
-        # The key pins the renderer version, so a redesign invalidates it.
-        assert f"-v{card.VERSION}.png" in cached[0].name
+        # The key pins both renderer versions, so a redesign invalidates it.
+        assert f"-v{card.VERSION}.{picture.VERSION}.png" in cached[0].name
     finally:
         httpd.shutdown()
         httpd.server_close()

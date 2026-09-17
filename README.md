@@ -512,26 +512,31 @@ What `og:image` points at depends on the content:
 
 | counter | `og:image` |
 |---|---|
-| a raster image under 300 KB | `/content/<n>` — the file itself, untouched (animated GIFs keep animating) |
-| a raster image over 300 KB | `/social/<n>.png` — the same picture, box-downsampled until a crawler will fetch it, then pixel-doubled back over 600 px (when the bytes allow) so chat apps keep their full-width preview layout |
-| a stamp (`STAMP:<base64>`) | `/stamp/<n>` — the decoded image |
-| anything else | `/social/<n>.png` — a rendered 1200x630 card |
+| a JPEG, PNG or GIF under 300 KB, and either 600 px or more on its short side or animated | `/content/<n>` (or `/stamp/<n>` for a stamp): the file itself, untouched, so animated GIFs keep animating |
+| any other raster image or stamp: too big, too small, or WebP | `/social/<n>.png`: the same picture, shrunk to fit 1200 px and 300 KB (PNG, or JPEG when a photo needs it), or scaled up by whole pixels past 600 px so chat apps use their full-width layout and pixel art stays sharp |
+| an SVG | `/social/<n>.png`: the SVG rendered with its long side at 1200 px, unless it runs scripts, embeds HTML or points outside itself |
+| anything else, including an SVG that won't render that way | `/social/<n>.png`: a rendered 1200x630 card |
 
 The card carries what the detail page shows: the content itself on the left
 (text, a pointer URI, HTML source, or the format name for audio and binary),
 and the number, asset, badges and facts on the right, in the explorer's own
 palette and odometer style.
 
-The 300 KB threshold is the practical ceiling for the strictest mainstream
-crawler, not a format limit. Oversized **JPEG** and **GIF** are the one gap:
-they are served at full size, because downscaling them would mean shipping a
-JPEG decoder, and Telegram, Twitter and Discord fetch them fine anyway.
+The 300 KB threshold is the practical ceiling for WhatsApp, the strictest
+mainstream crawler, not a format limit. An SVG like #203 that draws its art
+with scripts at load time gets the card: without a browser, a render shows only
+a blank or its loading screen.
 
-Card images are drawn with no imaging or font library — `png.py` is a small
-PNG codec over `zlib`, and `glyphs.py` embeds the public-domain X11
-`misc-fixed` 10x20 bitmap font (~1.9 KB). They are cached under
-`$COUNTER_DATA_DIR/social`, keyed by content hash and renderer version, so a
+`picture.py` does the re-encoding, using Pillow for raster images and resvg for
+SVG. resvg draws text with the system's DejaVu fonts, which the Docker image
+installs. The card itself needs no imaging or font library: `png.py` is a
+small PNG encoder over `zlib`, and `glyphs.py` embeds the public-domain X11
+`misc-fixed` 10x20 bitmap font (~1.9 KB). Both kinds of image are cached under
+`$COUNTER_DATA_DIR/social`, keyed by content hash and renderer versions, so a
 redesign invalidates them and the directory is safe to delete at any time.
+
+Telegram and WhatsApp cache a link's preview on their side too. To refresh one
+in Telegram, send the link to @WebpageBot.
 
 ## PDFs
 

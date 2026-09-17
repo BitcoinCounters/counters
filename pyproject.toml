@@ -12,6 +12,9 @@ dependencies = [
     "requests>=2.31.0",
     "mnemonic>=0.20",
     "ecdsa>=0.18",
+    # Link previews: decode and re-encode counters' pictures, rasterize SVG.
+    "Pillow>=10.0",
+    "resvg-py>=0.5",
 ]
 
 [project.scripts]

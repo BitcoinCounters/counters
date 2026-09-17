@@ -74,8 +74,10 @@ build revision), **never `immutable`**, so a rules change takes effect at once.
 **8 — A shared link previews the counter, never a stand-in.** Link crawlers
 (Telegram, WhatsApp, Twitter, …) run no JavaScript and fetch exactly one image,
 so `/c/<n>` is served with that counter's own Open Graph tags. `og:image` is
-the counter's picture when it has one — the raw file if a crawler will fetch it
-at that size, box-downsampled if not — and otherwise a **rendered card**
+the counter's picture when it has one: the raw file if a crawler will fetch it
+and show it large, otherwise re-encoded (shrunk, enlarged by whole pixels, or
+an SVG rasterized). Otherwise, including for an SVG that scripts its own art,
+it is a **rendered card**
 showing what the detail page shows. The card is drawn from on-chain bytes and
 index rows only: pointers appear as their text (rule 4 — still never fetched),
 HTML and SVG as their source, and formats with nothing to draw as their name.

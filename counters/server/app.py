@@ -18,7 +18,7 @@ A "record" is the index row reshaped to the field names the frontend expects
 position, sha256). Textual content (small text/*, JSON, SVG) is inlined as
 `body`; everything else is fetched lazily from /content/<number>.
 
-The server is intentionally dependency-free (stdlib http.server). Each request
+The server is built on stdlib http.server, with no web framework. Each request
 opens its own SQLite connection because ThreadingHTTPServer handles requests on
 worker threads and SQLite connections are not shareable across threads.
 """
@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import card, png, preview
+from . import card, picture, preview
 from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
@@ -192,28 +192,6 @@ BODY_MAX_BYTES = 256 * 1024
 DERIVED_MAX_AGE = 300
 STATIC_MAX_AGE = 3600      # logos, css: temporary — they change only on deploy
 INLINE_TYPES = ("text/", "application/json", "image/svg+xml")
-
-# Link crawlers fetch og:image on a short budget and several (WhatsApp being
-# the strictest of the mainstream ones) simply give up on a large file, which
-# is why counter #95 — a 1.4 MB PNG — previewed as nothing. Images above this
-# are re-served downscaled from /social/<n>.png.
-SOCIAL_MAX_BYTES = 300 * 1024
-# og:image is displayed at a few hundred pixels wide; past this we are only
-# spending the crawler's bandwidth.
-SOCIAL_MAX_DIM = 1200
-# Stop shrinking here even if still over budget, rather than serving a thumbnail.
-SOCIAL_MIN_DIM = 320
-# Chat apps pick the preview layout from the image's pixel size: below roughly
-# this, Telegram renders a small square thumb and Facebook a side icon; from
-# here up, the image gets the full-width layout. A result that fits the byte
-# budget but lands under this is pixel-doubled back over it (when the bytes
-# still fit) — same picture, bigger layout.
-SOCIAL_LARGE_MIN = 600
-# Decoding is per-byte Python (~1s per megapixel), so anything larger is left
-# alone rather than parked on a worker thread; #95, the biggest counter so far,
-# is 1.6 MP. Nothing is lost when this trips — /content still serves the file.
-SOCIAL_MAX_PIXELS = 4_000_000
-
 
 # The social/meta block in index.html is wrapped in these markers so a counter
 # page can swap in per-counter Open Graph tags without touching anything else.
@@ -402,56 +380,28 @@ def _card_info(store: Store, row: sqlite3.Row) -> dict:
     }
 
 
-def _downscaled(blob: bytes) -> bytes | None:
-    """A PNG of `blob` small enough for a crawler, or None if it can't decode.
-
-    Shrinks by whole box factors until it is under the byte budget — one step
-    at a time, because how much a photo deflates is not predictable from its
-    dimensions.
-    """
-    decoded = png.decode(blob, max_pixels=SOCIAL_MAX_PIXELS)
-    if decoded is None:
+def _picture_source(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
+    """(bytes, type) of the picture a counter is — a raster image, an SVG, or
+    a stamp's decoded image — or None when its content is not a picture."""
+    stamp = _stamp_payload(store, row)
+    if stamp:
+        return stamp
+    ct = _served_type(store, row)
+    if not (_is_raster(ct) or picture.is_svg(ct)):
         return None
-    width, height, rgb = decoded
-    factor = png.factor_for(width, height, SOCIAL_MAX_DIM, SOCIAL_MAX_DIM)
-    while True:
-        ow, oh, small = png.shrink(width, height, rgb, factor)
-        out = png.encode(ow, oh, small)
-        if len(out) <= SOCIAL_MAX_BYTES:
-            return _enlarged(ow, oh, small) or out
-        if min(ow, oh) <= SOCIAL_MIN_DIM:
-            return out
-        factor += 1
-
-
-def _enlarged(ow: int, oh: int, rgb: bytes) -> bytes | None:
-    """A pixel-doubled PNG of a fitting-but-small image, sized so chat apps
-    use their full-width preview layout — or None when the small one is
-    already big enough, or nothing bigger fits the byte budget.
-
-    Larger multiples cost more bytes, so the first fit while counting down is
-    the biggest one available."""
-    if min(ow, oh) >= SOCIAL_LARGE_MIN:
-        return None
-    top = -(-SOCIAL_LARGE_MIN // min(ow, oh))
-    for factor in range(top, 1, -1):
-        if max(ow, oh) * factor > SOCIAL_MAX_DIM:
-            continue
-        big = png.encode(*png.upscale(ow, oh, rgb, factor))
-        if len(big) <= SOCIAL_MAX_BYTES:
-            return big
-    return None
+    blob = store.read_blob(row["content_sha256"])
+    return (blob, ct) if blob is not None else None
 
 
 def render_social(store: Store, row: sqlite3.Row) -> bytes:
-    """The og:image bytes for one counter: its own picture, downscaled to fit a
-    crawler's budget, or the rendered card when it hasn't got one."""
-    if _is_raster(_served_type(store, row)):
-        blob = store.read_blob(row["content_sha256"])
-        if blob is not None:
-            shrunk = _downscaled(blob)
-            if shrunk is not None:
-                return shrunk
+    """The og:image bytes for one counter: its own picture, re-encoded to a
+    size and format crawlers show large, or the rendered card when it hasn't
+    got one that can be drawn (including SVGs that script their own art)."""
+    source = _picture_source(store, row)
+    if source is not None:
+        out = picture.render(*source)
+        if out is not None:
+            return out
     return card.render(_card_info(store, row))
 
 
@@ -727,18 +677,21 @@ class Handler(BaseHTTPRequestHandler):
     def _social(self, number: int) -> None:
         """The og:image for /c/<number> — see `render_social`.
 
-        Rendering costs real CPU (a 1.4 MB PNG has to be inflated, box-filtered
-        and re-deflated), and crawlers refetch, so results are cached on disk
-        under the data dir. The key pins the content hash and the renderer
-        version, so a re-inscription or a change to `card` rebuilds it and a
-        stale card can never be served.
+        Rendering costs real CPU (a 1.4 MB PNG has to be decoded, resized and
+        re-encoded, maybe several times over to fit the byte budget), and
+        crawlers refetch, so results are cached on disk under the data dir. The
+        key pins the content hash and both renderer versions, so a
+        re-inscription or a change to `card` or `picture` rebuilds it and a
+        stale image can never be served. The body may be PNG or JPEG whatever
+        the path says; the Content-Type header is what crawlers go by.
         """
         store = Store(self.config)
         try:
             row = store.get_counter(number)
             if row is None:
                 return self._send(404, "text/plain; charset=utf-8", b"counter not found")
-            name = f"{number}-{row['content_sha256'][:16]}-v{card.VERSION}.png"
+            name = (f"{number}-{row['content_sha256'][:16]}"
+                    f"-v{card.VERSION}.{picture.VERSION}.png")
             path = self.config.social_dir / name
             try:
                 body = path.read_bytes()
@@ -750,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
                     except OSError:
                         body = render_social(store, row)
                         self._cache_social(path, body)
-            self._send(200, "image/png", body, max_age=DERIVED_MAX_AGE,
+            self._send(200, picture.mime_of(body), body, max_age=DERIVED_MAX_AGE,
                        extra_headers=[("X-Content-Type-Options", "nosniff")])
         finally:
             store.close()
@@ -843,25 +796,27 @@ class Handler(BaseHTTPRequestHandler):
                 dims: tuple[int, int] | None = None
                 itype: str | None = None
                 alt = f"Counter #{n} — {name}"
-                # og:image has to be a real raster image, and one the crawler
-                # will actually finish fetching.
-                if _stamp_payload(store, row):
-                    # A stamp's displayable image is its decoded base64, which
-                    # is bounded by BODY_MAX_BYTES and so always small enough.
-                    image = f"{base}/stamp/{n}"
-                elif _is_raster(ct):
-                    if row["content_length"] <= SOCIAL_MAX_BYTES:
-                        image, itype = f"{base}/content/{n}", ct
-                    elif ct == "image/png":
-                        # Oversized, and PNG is the one format we can decode,
-                        # so serve it downscaled. Its final size depends on how
-                        # far it had to shrink, so no dimensions are claimed.
-                        image, itype = f"{base}/social/{n}.png", "image/png"
+                # og:image has to be a raster image the crawler will fetch
+                # and show large. A picture that already is one is linked
+                # as-is (an animated GIF keeps animating); any other picture
+                # goes through /social, which re-encodes it. Its final size
+                # and format depend on the picture, so none are claimed.
+                stamp = _stamp_payload(store, row)
+                if stamp:
+                    if picture.serve_as_is(*stamp):
+                        image, itype = f"{base}/stamp/{n}", stamp[1]
                     else:
-                        # Oversized JPEG/GIF: no decoder for those, so this is
-                        # the best available. Telegram and Twitter cope; the
-                        # strictest crawlers may still skip it.
+                        image = f"{base}/social/{n}.png"
+                elif _is_raster(ct):
+                    blob = (store.read_blob(row["content_sha256"])
+                            if row["content_length"] <= picture.MAX_BYTES else None)
+                    if blob is not None and picture.serve_as_is(blob, ct):
                         image, itype = f"{base}/content/{n}", ct
+                    else:
+                        image = f"{base}/social/{n}.png"
+                elif picture.is_svg(ct):
+                    # Rasterized there, or a card if it scripts its own art.
+                    image = f"{base}/social/{n}.png"
                 else:
                     # Text, pointers, HTML, audio, binary: a rendered card
                     # carrying what the detail page shows.
