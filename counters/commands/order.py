@@ -48,6 +48,9 @@ from .wallet import _wallet_addresses
 MAX_EXPIRATION = 65535          # u16 in the wire format; 0 = never expires
 MIN_BTC_LEG_SAT = 1000          # btc_order_minimum — consensus, not compose
 BTCPAY_WINDOW_BLOCKS = 20       # order matches expire ~20 blocks after matching
+SWAP_EXPIRATION = 1             # a market order fills this block or expires
+DEFAULT_SLIPPAGE = 1.0          # percent below the live quote a swap accepts
+MAX_SLIPPAGE = 100.0
 
 _MATCH_ID_RE = re.compile(r"^[0-9a-f]{64}_[0-9a-f]{64}$")
 
@@ -83,6 +86,43 @@ def _unit_price(give_raw: int, give_div: bool, get_raw: int, get_div: bool) -> s
     get_h = Decimal(_fmt_raw(get_raw, get_div))
     price = (get_h / give_h).quantize(Decimal("0.00000001"))
     return format(price.normalize(), "f")
+
+
+def _market_quote(cp, give_asset: str, get_asset: str, give_raw: int) -> dict | None:
+    """The combined AMM+book estimate for selling `give_raw`, or None. Raises
+    nothing — callers decide whether a missing quote is fatal."""
+    try:
+        return cp.get_pool_quote(give_asset, get_asset, give_raw)
+    except (CounterpartyError, ValueError, TypeError):
+        return None
+
+
+def _print_market(quote: dict, give_asset: str, get_asset: str, get_div: bool,
+                  indent: str = "  ") -> None:
+    """Where a fill would come from right now, and at what cost. The quote
+    splits the output by venue, so the user can see before signing whether the
+    pool, the book, or both would fill this — and what the pool charges."""
+    total = int(quote.get("estimated_output") or 0)
+    pool_out = int(quote.get("pool_output") or 0)
+    book_out = int(quote.get("book_output") or 0)
+    orders = int(quote.get("book_orders_matched") or 0)
+    unfilled = int(quote.get("give_remaining") or 0)
+    print(f"{indent}market    : ~{_fmt_raw(total, get_div)} {get_asset} at current state")
+    venues = []
+    if pool_out:
+        venues.append(f"{_fmt_raw(pool_out, get_div)} from the AMM pool")
+    if book_out:
+        venues.append(f"{_fmt_raw(book_out, get_div)} from {orders} book "
+                      f"order{'s' if orders != 1 else ''}")
+    if venues:
+        print(f"{indent}            {' + '.join(venues)}")
+    if quote.get("price_impact") is not None:
+        print(f"{indent}impact    : {quote['price_impact']}% price impact")
+    if quote.get("fee_bps"):
+        print(f"{indent}pool fee  : {quote['fee_bps']} bps")
+    if unfilled > 0:
+        print(f"{indent}unfilled  : {unfilled} raw {give_asset} would find no "
+              f"liquidity at all")
 
 
 def cmd_open_order(
@@ -174,13 +214,9 @@ def cmd_open_order(
                 return 1
 
     # Best-effort market context: what the live book + AMM pools would pay for
-    # the give side right now. Purely informational — any failure is ignored.
-    market_out = 0
-    try:
-        quote = cp.get_pool_quote(give_asset, get_asset, give_raw)
-        market_out = int((quote or {}).get("estimated_output") or 0)
-    except (CounterpartyError, ValueError, TypeError):
-        pass
+    # the give side right now. Purely informational — a limit order is still
+    # meaningful without it, so any failure is ignored.
+    market = _market_quote(cp, give_asset, get_asset, give_raw)
 
     fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
                          fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
@@ -213,9 +249,8 @@ def cmd_open_order(
     print(f"  get       : {get_h} {get_asset}")
     print(f"  price     : {_unit_price(give_raw, give_div, get_raw, get_div)} "
           f"{get_asset} per {give_asset}")
-    if market_out > 0:
-        print(f"  market    : selling {give_h} {give_asset} into the current "
-              f"book+AMM would yield ~{_fmt_raw(market_out, get_div)} {get_asset}")
+    if market and int(market.get("estimated_output") or 0) > 0:
+        _print_market(market, give_asset, get_asset, get_div)
     if expiration == 0:
         print(f"  expires   : never — it rests until filled or `cancel-order`")
     else:
@@ -237,6 +272,161 @@ def cmd_open_order(
             f"place the order: {give_h} {give_asset} for {get_h} {get_asset}?")):
         print("no order placed")
         return 0
+    return _sign_and_broadcast(btc, wallet, source, rawtx, dry_run)
+
+
+def cmd_swap(
+    config: Config,
+    wallet: str,
+    give_asset: str,
+    give_amount: str,
+    get_asset: str,
+    slippage: float = DEFAULT_SLIPPAGE,
+    expiration: int = SWAP_EXPIRATION,
+    source: str | None = None,
+    fee_rate: float | None = None,
+    assume_yes: bool = False,
+    dry_run: bool = False,
+    fund_from: str | None = None,
+    no_fund: bool = False,
+) -> int:
+    """A market order: sell a fixed amount at whatever the market pays now.
+
+    This composes the SAME `order` message as `open-order` — Counterparty has
+    only one trade message, and `compose/order` has no way to prefer the AMM
+    pool over the book or the other way round. Consensus alone decides where
+    the fill comes from. The difference is entirely in how the order is shaped:
+    the price comes from a live quote rather than from you, and `--expiration`
+    defaults to 1 block, so anything the market cannot fill immediately expires
+    instead of resting on the book. That is what the ecosystem already does —
+    the overwhelming majority of pool-filled orders on chain use expiration 1.
+    """
+    btc = BitcoindClient(config)
+    cp = CounterpartyClient(config)
+
+    if not 0 <= slippage <= MAX_SLIPPAGE:
+        print(f"--slippage must be between 0 and {MAX_SLIPPAGE:g} percent",
+              file=sys.stderr)
+        return 1
+    for leg in (give_asset, get_asset):
+        if leg.upper() == "BTC":
+            print("swap cannot trade BTC: an AMM pool never holds BTC, and a "
+                  "BTC leg on the book is not settled by the order at all — it "
+                  "needs the counterparty to `pay-order` within ~20 blocks. "
+                  "Use `open-order` for BTC.", file=sys.stderr)
+            return 1
+
+    give = _resolve_order_asset(cp, give_asset)
+    if give is None:
+        return 1
+    get = _resolve_order_asset(cp, get_asset)
+    if get is None:
+        return 1
+    give_asset, give_div = give
+    get_asset, get_div = get
+    if give_asset == get_asset:
+        print(f"cannot trade {give_asset} for itself", file=sys.stderr)
+        return 1
+
+    try:
+        give_raw = _to_raw_quantity(give_amount, give_div)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if give_raw <= 0:
+        print(f"{give_amount} is below the smallest unit {give_asset} can "
+              f"represent — it would round to zero", file=sys.stderr)
+        return 1
+    if not 0 <= expiration <= MAX_EXPIRATION:
+        print(f"--expiration must be 0 (never) to {MAX_EXPIRATION} blocks",
+              file=sys.stderr)
+        return 1
+
+    # A market order has no price of its own, so unlike open-order a missing
+    # quote is fatal: there would be nothing to set the limit from.
+    market = _market_quote(cp, give_asset, get_asset, give_raw)
+    estimated = int((market or {}).get("estimated_output") or 0)
+    if not market or estimated <= 0:
+        print(f"no live market for {give_asset} -> {get_asset}: neither an AMM "
+              f"pool nor a resting order would fill this. Use `open-order` to "
+              f"post a limit order and wait.", file=sys.stderr)
+        return 1
+
+    get_raw = (estimated if slippage <= 0 else
+               int(Decimal(estimated) * (Decimal(100) - Decimal(str(slippage))) / 100))
+    if get_raw <= 0:
+        print(f"a {slippage:g}% tolerance on ~{_fmt_raw(estimated, get_div)} "
+              f"{get_asset} floors to zero — lower --slippage or swap more",
+              file=sys.stderr)
+        return 1
+
+    if source is not None:
+        if source not in set(_wallet_addresses(btc, wallet)):
+            print(f"--source {source} is not an address of wallet {wallet!r}",
+                  file=sys.stderr)
+            return 1
+        have = _address_asset_balance(cp, source, give_asset)
+    else:
+        source, have = _find_source(btc, cp, wallet, give_asset, give_raw)
+    if source is None or have <= 0:
+        print(f"wallet {wallet!r} holds no {give_asset}", file=sys.stderr)
+        return 1
+    if have < give_raw:
+        print(f"insufficient balance: swapping {_fmt_raw(give_raw, give_div)} "
+              f"{give_asset}, largest single-address balance is "
+              f"{_fmt_raw(have, give_div)} (the escrow is debited from one "
+              f"address)", file=sys.stderr)
+        return 1
+
+    give_h = _fmt_raw(give_raw, give_div)
+    get_h = _fmt_raw(get_raw, get_div)
+
+    print(f"swap {give_h} {give_asset} for {get_asset}")
+    print(f"  source    : {source}")
+    print(f"  give      : {give_h} {give_asset} (escrowed until filled or expired)")
+    _print_market(market, give_asset, get_asset, get_div)
+    print(f"  limit     : at least {get_h} {get_asset}"
+          f"{f' ({slippage:g}% tolerance)' if slippage > 0 else ' — NO slippage guard'}")
+    print(f"  price     : {_unit_price(give_raw, give_div, get_raw, get_div)} "
+          f"{get_asset} per {give_asset} (worst accepted)")
+    if expiration == 0:
+        print(f"  expires   : NEVER — an unfilled remainder rests on the book "
+              f"until `cancel-order`")
+    else:
+        print(f"  expires   : in {expiration} block{'s' if expiration != 1 else ''} "
+              f"— whatever the market cannot fill expires instead of resting")
+    if fee_rate is not None:
+        print(f"  fee rate  : {fee_rate} sat/vB")
+    impact = market.get("price_impact")
+    if impact is not None and slippage > 0 and float(impact) > slippage:
+        print(f"  WARNING   : the {impact}% price impact of this size already "
+              f"exceeds your {slippage:g}% tolerance, so this order is likely "
+              f"to fill only partly or not at all. Swap less, or raise "
+              f"--slippage deliberately.")
+
+    if not (dry_run or assume_yes or _confirm(
+            f"swap {give_h} {give_asset} for at least {get_h} {get_asset}?")):
+        print("no swap placed")
+        return 0
+
+    fund = ensure_funded(btc, cp, wallet, source, fee_rate=fee_rate,
+                         fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)
+    if fund.code is not None:
+        return fund.code
+    try:
+        composed = compose_retrying(lambda: cp.compose_order(
+            source, give_asset, give_raw, get_asset, get_raw, expiration,
+            sat_per_vbyte=fee_rate,
+        ), fund.funded)
+    except CounterpartyError as e:
+        return _report_compose_failure(e, source, give_asset)
+    rawtx = composed.get("rawtransaction")
+    if not rawtx:
+        print(f"compose returned no rawtransaction: {composed}", file=sys.stderr)
+        return 1
+    miner_fee = int(composed.get("btc_fee") or 0)
+    if miner_fee:
+        print(f"  miner fee : {miner_fee} sat")
     return _sign_and_broadcast(btc, wallet, source, rawtx, dry_run)
 
 

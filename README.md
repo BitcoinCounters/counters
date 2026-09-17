@@ -273,6 +273,43 @@ counters wallet --name mywallet cancel-order <txhash>   # withdraw; escrow retur
 # open BTC-give orders expire with it (the deadbeat penalty).
 counters wallet --name mywallet pay-order               # settle it (auto-picks if one)
 
+# --- swap: the market-order shape of that SAME order message ---
+# Counterparty has exactly one trade message and its compose API has no pool
+# parameters at all — nothing steers a fill to the AMM or to the book, and
+# consensus alone decides. `open-order` is the limit form (you name the price,
+# it rests); `swap` is the market form: the price comes from a live AMM+book
+# quote, and --expiration defaults to 1 block so anything the market cannot
+# fill right now expires instead of resting. Both compose `order`.
+counters wallet --name mywallet swap MYCOUNTER 100 XCP           # sell at the going rate
+counters wallet --name mywallet swap XCP 5 MYCOUNTER --slippage 2
+counters wallet --name mywallet swap MYCOUNTER 100 XCP --dry-run
+# Slippage protection is ON by default (1% below the quote). --slippage 0 sends
+# Counterparty's own default of no guard at all. BTC is refused on either side:
+# a pool never holds BTC, and a BTC leg is settled by `pay-order`, not the order.
+
+# --- AMM liquidity pools ---
+# A pool is a constant-product reserve pair with its own LP token. There is no
+# "create pool" message: the FIRST deposit creates it, and its two amounts set
+# the opening price — nothing checks that against the wider market.
+counters pools                                   # every pool, reserves + price
+counters pools MYCOUNTER XCP                     # one pair, with recent swaps
+# add liquidity. Omit the second amount and it comes from the live pool ratio;
+# quantities are maximums, so only the proportional part is ever debited.
+counters wallet --name mywallet add-liquidity MYCOUNTER 1000 XCP
+counters wallet --name mywallet add-liquidity MYCOUNTER 1000 XCP 0.5   # both sides pinned
+counters wallet --name mywallet add-liquidity NEWTOKEN 1000 XCP 2 --lp-asset NEWLP  # CREATES the pool
+# remove liquidity: burn LP tokens, take both assets back pro rata.
+counters wallet --name mywallet remove-liquidity MYCOUNTER XCP all
+counters wallet --name mywallet remove-liquidity MYCOUNTER XCP 5 --slippage 0.5
+# Both sides of a deposit are debited from ONE address, so the source must hold
+# both assets — a balance split across two of your own addresses will not do.
+# When they are split, add-liquidity offers the single transfer that fixes it
+# (--consolidate accepts without asking; --yes does NOT, so a scripted deposit
+# can never move an asset behind your back). That transfer has to CONFIRM before
+# you re-run: Counterparty credits a balance only when the block is parsed, so
+# unlike a BTC top-up it cannot be chained onto an unconfirmed transaction. Run
+# it again before then and it reports the pending send rather than duplicating it.
+
 # mint a counter from a file. Counterparty Core composes the taproot
 # commit/reveal pair and signs the reveal itself; the wallet signs the commit.
 # --dry-run validates the package via testmempoolaccept WITHOUT broadcasting.

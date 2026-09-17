@@ -48,12 +48,13 @@ class FakeCp:
     """BTC must never trigger an asset lookup — get_asset raises on it."""
 
     def __init__(self, assets=None, orders=None, matches=None, height=960_000,
-                 quote_raises=False):
+                 quote_raises=False, quote=None):
         self.assets = assets or {}
         self.orders = orders or {}
         self.matches = matches or []
         self.height = height
         self.quote_raises = quote_raises
+        self.quote = quote
         self.compose_kwargs = None
         self.cancel_kwargs = None
         self.btcpay_kwargs = None
@@ -65,7 +66,7 @@ class FakeCp:
     def get_pool_quote(self, a1, a2, quantity):
         if self.quote_raises:
             raise CounterpartyError("no pool")
-        return None
+        return self.quote
 
     def compose_order(self, source, give_asset, give_quantity, get_asset,
                       get_quantity, expiration, fee_required=0, sat_per_vbyte=None):
@@ -444,6 +445,127 @@ def test_paginate_carries_status_filters():
     assert params["status"] == "open" and params["limit"] == 1000
     cp.get_order_matches()
     assert cp.get_captured[1]["status"] == "pending"
+
+
+# --- swap (the market-order shape of the same `order` message) --------------
+
+
+_QUOTE = {
+    "estimated_output": 1_000_000, "pool_output": 800_000, "book_output": 200_000,
+    "book_orders_matched": 2, "give_remaining": 0, "effective_price": 0.01,
+    "price_impact": 0.5, "pool_exists": True, "fee_bps": 50,
+    "fee_amount": 5_000_000,
+}
+_BOTH = {"XCP": {"asset": "XCP", "divisible": True},
+         "PEPE": {"asset": "PEPE", "divisible": False}}
+
+
+def test_swap_defaults_to_one_block_expiration():
+    """A market order fills against the pool in its own block; the remainder
+    should expire rather than rest on the book."""
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+    orig = _patch(btc, cp)
+    try:
+        rc = O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", assume_yes=True)
+        assert rc == 0
+        assert cp.compose_kwargs["expiration"] == 1
+        assert cp.compose_kwargs["give_quantity"] == 10        # indivisible
+        assert btc.sent == "signed00"
+    finally:
+        _restore(orig)
+
+
+def test_swap_prices_itself_one_percent_below_the_live_quote():
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+    orig = _patch(btc, cp)
+    try:
+        rc = O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", assume_yes=True)
+        assert rc == 0
+        assert cp.compose_kwargs["get_quantity"] == 990_000   # 99% of 1_000_000
+    finally:
+        _restore(orig)
+
+
+def test_swap_with_zero_slippage_takes_the_quote_as_is():
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+    orig = _patch(btc, cp)
+    try:
+        rc = O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", slippage=0,
+                        assume_yes=True)
+        assert rc == 0
+        assert cp.compose_kwargs["get_quantity"] == 1_000_000
+    finally:
+        _restore(orig)
+
+
+def test_swap_refuses_btc_on_either_side():
+    for give, get in (("BTC", "XCP"), ("XCP", "BTC")):
+        btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+        orig = _patch(btc, cp)
+        try:
+            rc = O.cmd_swap(Config(), "me", give, "1", get, assume_yes=True)
+            assert rc == 1, f"{give}->{get} was not refused"
+            assert cp.compose_kwargs is None
+        finally:
+            _restore(orig)
+
+
+def test_swap_without_a_market_is_fatal_but_open_order_survives_it():
+    """open-order sets its own price, so a missing quote is cosmetic there. A
+    swap has no price of its own, so it must refuse."""
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=None)
+    orig = _patch(btc, cp)
+    try:
+        assert O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", assume_yes=True) == 1
+        assert cp.compose_kwargs is None
+    finally:
+        _restore(orig)
+
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote_raises=True)
+    orig = _patch(btc, cp)
+    try:
+        rc = O.cmd_open_order(Config(), "me", "PEPE", "10", "XCP", "5",
+                              assume_yes=True)
+        assert rc == 0 and cp.compose_kwargs is not None
+    finally:
+        _restore(orig)
+
+
+def test_swap_refuses_a_slippage_floor_that_rounds_to_nothing():
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=dict(_QUOTE, estimated_output=1))
+    orig = _patch(btc, cp)
+    try:
+        rc = O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", slippage=99.9,
+                        assume_yes=True)
+        assert rc == 1
+        assert cp.compose_kwargs is None
+    finally:
+        _restore(orig)
+
+
+def test_swap_never_sends_a_fee_required():
+    """fee_required only means anything for an order that RECEIVES BTC, and a
+    swap can never have a BTC leg."""
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+    orig = _patch(btc, cp)
+    try:
+        assert O.cmd_swap(Config(), "me", "PEPE", "10", "XCP", assume_yes=True) == 0
+        assert cp.compose_kwargs["fee_required"] == 0
+    finally:
+        _restore(orig)
+
+
+def test_swap_declined_composes_nothing():
+    btc, cp = FakeBtc(), FakeCp(assets=_BOTH, quote=_QUOTE)
+    orig, orig_confirm = _patch(btc, cp), O._confirm
+    O._confirm = lambda q: False
+    try:
+        rc = O.cmd_swap(Config(), "me", "PEPE", "10", "XCP")
+        assert rc == 0
+        assert cp.compose_kwargs is None and btc.sent is None
+    finally:
+        _restore(orig)
+        O._confirm = orig_confirm
 
 
 if __name__ == "__main__":

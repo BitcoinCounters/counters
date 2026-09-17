@@ -536,12 +536,179 @@ class CounterpartyClient:
 
     def get_pool_quote(self, asset1: str, asset2: str, quantity: int) -> dict | None:
         """AMM+book combined output estimate for selling `quantity` (raw units
-        of asset1) into the asset1/asset2 market; None if no pool exists."""
+        of asset1) into the asset1/asset2 market; None if no pool exists.
+
+        The result splits the fill by venue — `pool_output`, `book_output`,
+        `book_orders_matched`, `give_remaining` — and carries `effective_price`,
+        `price_impact`, and the pool's `fee_bps`/`fee_amount`.
+        """
         data = self._get(
             f"/v2/pools/{asset1}/{asset2}/quote",
             params={"quantity": quantity, "verbose": "true"},
         )
         return data.get("result") if data else None
+
+    # --- AMM liquidity pools -----------------------------------------------
+
+    def get_pool(self, asset1: str, asset2: str) -> dict | None:
+        """One pool's current state — reserves and `lp_asset` — or None when the
+        pair has no pool yet (in which case a deposit CREATES it)."""
+        data = self._get(f"/v2/pools/{asset1}/{asset2}", params={"verbose": "true"})
+        return data.get("result") if data else None
+
+    def list_pools(self, limit: int = 20) -> tuple[list[dict], int]:
+        """A page of pools, newest first, plus the total count."""
+        return self._page("/v2/pools", {"limit": limit})
+
+    def get_pool_deposit_quote(
+        self, asset1: str, asset2: str, quantity: int
+    ) -> dict | None:
+        """The ratio a deposit of `quantity` of asset1 must match: returns
+        `quantity_a_required`, `quantity_b_required`, `quantity_minted_estimate`
+        and `first_deposit`. None when the pair has no pool."""
+        data = self._get(
+            f"/v2/pools/{asset1}/{asset2}/quote/deposit",
+            params={"quantity": quantity, "verbose": "true"},
+        )
+        return data.get("result") if data else None
+
+    def get_pool_withdraw_quote(
+        self, asset1: str, asset2: str, quantity: int
+    ) -> dict | None:
+        """What burning `quantity` LP tokens returns: `quantity_a_estimate`,
+        `quantity_b_estimate`, plus `supply` and the reserves.
+
+        NOTE: this endpoint is the one compose/read call that must NOT be sent
+        `verbose=true` — Counterparty Core v11.2.0 answers 500 "Internal server
+        error" when it is present, though the sibling quote/deposit accepts it.
+        Do not "fix" this to match the rest of the client.
+        """
+        data = self._get(
+            f"/v2/pools/{asset1}/{asset2}/quote/withdraw",
+            params={"quantity": quantity},
+        )
+        return data.get("result") if data else None
+
+    def compose_pooldeposit(
+        self,
+        source: str,
+        asset_a: str,
+        asset_b: str,
+        quantity_a: int,
+        quantity_b: int,
+        min_lp_quantity: int = 0,
+        lp_asset: str | None = None,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose an AMM *pooldeposit*: add liquidity to the asset_a/asset_b
+        pool, receiving LP tokens. Quantities are raw units.
+
+        On the FIRST deposit the pair has no pool, so the two quantities set
+        the opening price and `lp_asset` may name the LP token (Core generates
+        one otherwise). On a later deposit the quantities are MAXIMUMS: Core
+        debits only the proportional amounts, so over-stating a side is safe
+        and under-stating it caps the deposit.
+
+        `min_lp_quantity` is slippage protection — the message is invalid if it
+        would mint fewer LP tokens than this. Core's own default is 0, i.e.
+        none.
+
+        The encoding is deliberately left at the API default (never taproot):
+        creating a pool mints an LP-token issuance under THIS transaction's
+        hash, and the counters indexer decides its carrier rule on the
+        transaction rather than the message — so a taproot-encoded deposit
+        would number Core's generated "LP token for …" string as a counter.
+        """
+        params: dict[str, Any] = {
+            "asset_a": asset_a,
+            "asset_b": asset_b,
+            "quantity_a": quantity_a,
+            "quantity_b": quantity_b,
+            "min_lp_quantity": min_lp_quantity,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if lp_asset:
+            params["lp_asset"] = lp_asset
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/pooldeposit", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose pooldeposit failed: {data}")
+        return data["result"]
+
+    def compose_poolwithdraw(
+        self,
+        source: str,
+        asset_a: str,
+        asset_b: str,
+        quantity: int,
+        min_quantity_a: int = 0,
+        min_quantity_b: int = 0,
+        sat_per_vbyte: float | int | None = None,
+    ) -> dict:
+        """Compose an AMM *poolwithdraw*: burn `quantity` LP tokens and take
+        back both assets pro rata. `min_quantity_a`/`min_quantity_b` are
+        slippage protection — the message is invalid if either side would come
+        back short. Core's own defaults are 0, i.e. none.
+
+        Encoding is left at the API default for the same reason as
+        `compose_pooldeposit`.
+        """
+        params: dict[str, Any] = {
+            "asset_a": asset_a,
+            "asset_b": asset_b,
+            "quantity": quantity,
+            "min_quantity_a": min_quantity_a,
+            "min_quantity_b": min_quantity_b,
+            "disable_utxo_locks": "true",
+            "allow_unconfirmed_inputs": "true",
+            "verbose": "true",
+        }
+        if sat_per_vbyte is not None:
+            params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
+        data = self._post(f"/v2/addresses/{source}/compose/poolwithdraw", params=params)
+        if not data or "result" not in data:
+            raise CounterpartyError(f"compose poolwithdraw failed: {data}")
+        return data["result"]
+
+    def get_pool_deposits(self, asset1: str, asset2: str, limit: int = 5) -> list[dict]:
+        """Recent deposits into one pool."""
+        rows, _ = self._page(f"/v2/pools/{asset1}/{asset2}/deposits", {"limit": limit})
+        return rows
+
+    def get_pool_withdrawals(
+        self, asset1: str, asset2: str, limit: int = 5
+    ) -> list[dict]:
+        """Recent withdrawals from one pool."""
+        rows, _ = self._page(
+            f"/v2/pools/{asset1}/{asset2}/withdrawals", {"limit": limit}
+        )
+        return rows
+
+    def get_pool_matches(self, asset1: str, asset2: str, limit: int = 5) -> list[dict]:
+        """Recent swaps that filled against one pool."""
+        rows, _ = self._page(f"/v2/pools/{asset1}/{asset2}/matches", {"limit": limit})
+        return rows
+
+    def get_address_mempool_events(
+        self, address: str, event_name: str | None = None
+    ) -> list[dict]:
+        """Counterparty events for an address that are in the mempool but not
+        yet in a block.
+
+        This is the only way to see a Counterparty transfer that has been
+        broadcast but not confirmed: balances are credited when the block is
+        parsed, so `get_address_balances` cannot show one, and neither can the
+        composer's own validation.
+        """
+        params: dict[str, Any] = {"addresses": address, "limit": 100}
+        if event_name:
+            params["event_name"] = event_name
+        data = self._get("/v2/addresses/mempool", params=params)
+        result = (data or {}).get("result")
+        return result if isinstance(result, list) else []
 
     def get_address_balances(self, address: str) -> list[dict]:
         """All Counterparty (XCP + asset) balances held by an address."""
