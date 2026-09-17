@@ -11,7 +11,8 @@ parsing and dispatch live in `counters.__main__`.
 - burn.py      permanently destroy a quantity of an asset (Counterparty destroy)
 - dispenser.py buy-from-dispenser (and, called bare, what is for sale —
   cheapest per unit first), plus the operator side: open/refill/close/list
-- order.py     DEX: open-order / cancel-order / pay-order / orders
+- order.py     DEX: swap / open-order / cancel-order / pay-order / orders
+- pool.py      AMM liquidity: add-liquidity / remove-liquidity / pools
 - bump.py      CPFP-accelerate an unconfirmed transaction
 - cancel.py    RBF-abandon an unconfirmed transaction
 - serve.py     the `server` command entry point

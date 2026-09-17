@@ -14,7 +14,8 @@ from pathlib import Path
 
 from . import CP_SERIES, __version__
 from .commands import (
-    bump, burn, cancel, dispenser, inscribe, issue, order, read, send, serve, wallet,
+    bump, burn, cancel, dispenser, inscribe, issue, order, pool, read, send, serve,
+    wallet,
 )
 from .bitcoind import BitcoindError
 from .config import GENESIS_HEIGHT, Config
@@ -197,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     g_info.add_argument("--json", action="store_true", help="metadata as JSON")
     g_info.add_argument("--raw", action="store_true", help="stream raw file bytes to stdout")
     g_info.add_argument("--save", metavar="PATH", help="write the counter's file to disk")
+
+    p_pools = sub.add_parser("pools", parents=[common],
+                             help="list AMM liquidity pools, or show one pair")
+    _add_dual(p_pools, "asset_a", "asset-a", help="first asset of a pair to detail")
+    _add_dual(p_pools, "asset_b", "asset-b", help="second asset of a pair to detail")
+    p_pools.add_argument("--limit", type=int, default=20, metavar="N",
+                         help="how many pools to list (default 20)")
 
     p_list = sub.add_parser("list", parents=[common], help="list counters")
     g_list = p_list.add_mutually_exclusive_group()
@@ -610,6 +618,87 @@ def main(argv: list[str] | None = None) -> int:
     wsub.add_parser("orders", parents=[common, wname],
                     help="list this wallet's open orders and pending BTC settlements")
 
+    # `swap` composes the same `order` message as `open-order` — it is the
+    # market-order shape of it, priced from a live AMM+book quote and expiring
+    # in a block rather than resting. Nothing steers a fill to the pool or the
+    # book; consensus decides that.
+    p_swap = wsub.add_parser(
+        "swap", parents=[common, wname, fundargs],
+        help="market-swap an asset at the live AMM+book price",
+        usage="counters wallet [--name NAME] swap <GIVE_ASSET> <GIVE_AMOUNT> <GET_ASSET>",
+    )
+    _add_dual(p_swap, "give_asset", "give-asset", help="asset to sell (never BTC)")
+    _add_dual(p_swap, "give_amount", "give-amount", help="quantity to sell")
+    _add_dual(p_swap, "get_asset", "get-asset", help="asset to receive (never BTC)")
+    p_swap.add_argument("--slippage", type=float, default=order.DEFAULT_SLIPPAGE,
+                        metavar="PCT",
+                        help=f"percent below the live quote still accepted "
+                             f"(default {order.DEFAULT_SLIPPAGE:g}; 0 disables the guard)")
+    p_swap.add_argument("--expiration", type=int, default=order.SWAP_EXPIRATION,
+                        metavar="BLOCKS",
+                        help=f"blocks before an unfilled remainder expires "
+                             f"(default {order.SWAP_EXPIRATION}; 0 rests forever)")
+    p_swap.add_argument("--source", metavar="ADDRESS",
+                        help="spend from this address instead of choosing one")
+    p_swap.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                        help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_swap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_swap.add_argument("--dry-run", action="store_true",
+                        help="compose + sign + validate but do not broadcast; print raw hex")
+
+    # --- AMM liquidity pools ---
+    p_addliq = wsub.add_parser(
+        "add-liquidity", parents=[common, wname, fundargs],
+        help="deposit into an AMM pool and receive LP tokens",
+        usage="counters wallet [--name NAME] add-liquidity <ASSET_A> <AMOUNT_A> "
+              "<ASSET_B> [AMOUNT_B]",
+    )
+    _add_dual(p_addliq, "asset_a", "asset-a", help="first asset of the pair")
+    _add_dual(p_addliq, "amount_a", "amount-a", help="quantity of the first asset")
+    _add_dual(p_addliq, "asset_b", "asset-b", help="second asset of the pair")
+    _add_dual(p_addliq, "amount_b", "amount-b",
+              help="quantity of the second asset (taken from the pool ratio if "
+                   "omitted; required when this deposit creates the pool)")
+    p_addliq.add_argument("--lp-asset", metavar="NAME", default=None,
+                          help="name the LP token (first deposit only; Counterparty "
+                               "generates one otherwise)")
+    p_addliq.add_argument("--slippage", type=float, default=pool.DEFAULT_SLIPPAGE,
+                          metavar="PCT",
+                          help=f"percent below the quoted LP mint still accepted "
+                               f"(default {pool.DEFAULT_SLIPPAGE:g}; 0 disables the guard)")
+    p_addliq.add_argument("--source", metavar="ADDRESS",
+                          help="deposit from this address instead of choosing one")
+    p_addliq.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                          help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_addliq.add_argument("--consolidate", action="store_true",
+                          help="if the two assets sit on different addresses, move "
+                               "the missing one without asking (it still has to "
+                               "confirm before the deposit; --yes does NOT imply this)")
+    p_addliq.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_addliq.add_argument("--dry-run", action="store_true",
+                          help="compose + sign + validate but do not broadcast; print raw hex")
+
+    p_rmliq = wsub.add_parser(
+        "remove-liquidity", parents=[common, wname, fundargs],
+        help="burn LP tokens and take both assets back out of a pool",
+        usage="counters wallet [--name NAME] remove-liquidity <ASSET_A> <ASSET_B> "
+              "<LP_AMOUNT|all>",
+    )
+    _add_dual(p_rmliq, "asset_a", "asset-a", help="first asset of the pair")
+    _add_dual(p_rmliq, "asset_b", "asset-b", help="second asset of the pair")
+    _add_dual(p_rmliq, "amount", "amount", help="LP tokens to burn, or 'all'")
+    p_rmliq.add_argument("--slippage", type=float, default=pool.DEFAULT_SLIPPAGE,
+                         metavar="PCT",
+                         help=f"percent below the quoted return still accepted "
+                              f"(default {pool.DEFAULT_SLIPPAGE:g}; 0 disables the guard)")
+    p_rmliq.add_argument("--source", metavar="ADDRESS",
+                         help="withdraw from this address instead of choosing one")
+    p_rmliq.add_argument("--fee-rate", type=float, default=None, metavar="SAT_VB",
+                         help="fee rate in sat/vB (default: Counterparty estimates one)")
+    p_rmliq.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_rmliq.add_argument("--dry-run", action="store_true",
+                         help="compose + sign + validate but do not broadcast; print raw hex")
+
     p_bump = wsub.add_parser(
         "bump", parents=[common, wname],
         help="pay more to get an unconfirmed transaction mined (CPFP)",
@@ -688,6 +777,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return read.cmd_list(config, recent=args.recent, source=args.source, block=args.block)
+
+    if args.command == "pools":
+        return pool.cmd_pools(
+            config,
+            _dual_value(p_pools, args, "asset_a", required=False),
+            _dual_value(p_pools, args, "asset_b", required=False),
+            limit=args.limit,
+        )
 
     if args.command == "server":
         return serve.cmd_server(
@@ -851,6 +948,41 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if args.wallet_command == "orders":
                 return order.cmd_list_orders(config, args.name)
+            if args.wallet_command == "swap":
+                return order.cmd_swap(
+                    config, args.name,
+                    _dual_value(p_swap, args, "give_asset"),
+                    _dual_value(p_swap, args, "give_amount"),
+                    _dual_value(p_swap, args, "get_asset"),
+                    slippage=args.slippage, expiration=args.expiration,
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
+                )
+            if args.wallet_command == "add-liquidity":
+                return pool.cmd_add_liquidity(
+                    config, args.name,
+                    _dual_value(p_addliq, args, "asset_a"),
+                    _dual_value(p_addliq, args, "amount_a"),
+                    _dual_value(p_addliq, args, "asset_b"),
+                    _dual_value(p_addliq, args, "amount_b", required=False),
+                    lp_asset=args.lp_asset, slippage=args.slippage,
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
+                    consolidate=args.consolidate,
+                )
+            if args.wallet_command == "remove-liquidity":
+                return pool.cmd_remove_liquidity(
+                    config, args.name,
+                    _dual_value(p_rmliq, args, "asset_a"),
+                    _dual_value(p_rmliq, args, "asset_b"),
+                    _dual_value(p_rmliq, args, "amount"),
+                    slippage=args.slippage,
+                    source=args.source, fee_rate=args.fee_rate,
+                    assume_yes=args.yes, dry_run=args.dry_run,
+                    fund_from=args.fund_from, no_fund=args.no_fund,
+                )
             if args.wallet_command == "bump":
                 return bump.cmd_bump(
                     config, args.name, txid=args.txid, fee_rate=args.fee_rate,

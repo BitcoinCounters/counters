@@ -231,6 +231,11 @@ def test_every_tx_creating_command_accepts_fee_rate():
         (M.order, "cmd_open_order", ["open-order", "XCP", "10", "BTC", "0.001"]),
         (M.order, "cmd_cancel_order", ["cancel-order", HASH0]),
         (M.order, "cmd_pay_order", ["pay-order"]),
+        (M.order, "cmd_swap", ["swap", "FEWGOODMAN", "1000", "XCP"]),
+        (M.pool, "cmd_add_liquidity",
+         ["add-liquidity", "FEWGOODMAN", "1000", "XCP"]),
+        (M.pool, "cmd_remove_liquidity",
+         ["remove-liquidity", "FEWGOODMAN", "XCP", "1"]),
         (M.bump, "cmd_bump", ["bump"]),
         (M.cancel, "cmd_cancel", ["cancel"]),
     ]
