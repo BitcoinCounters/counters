@@ -237,3 +237,46 @@ if __name__ == "__main__":
     test_api_and_static()
     test_store_migrates_pre_burned_db()
     print("ok")
+
+
+def test_inscription_id_addressing():
+    """§6.1: every record carries its inscription id, and the per-counter
+    endpoints accept one wherever they accept a number. A bare txid is never
+    an identifier — the index is load-bearing."""
+    httpd, base = _run_server()
+    try:
+        status, _, body = _get(base, "/counter/0")
+        assert status == 200
+        rec = json.loads(body)
+        iid = rec["id"]
+        assert iid == "aa" * 32 + "i0"
+
+        # /counter/<id>, with uppercase hex normalised on input
+        for token in (iid, ("aa" * 32).upper() + "i0"):
+            status, _, body = _get(base, f"/counter/{token}")
+            assert status == 200 and json.loads(body)["number"] == 0
+
+        # /content/<id> serves the very same bytes and type as /content/<n>
+        by_num = _get(base, "/content/0")
+        by_id = _get(base, f"/content/{iid}")
+        assert by_num == by_id and by_id[0] == 200 and by_id[2] == b"hi"
+
+        # /preview/<id> renders; /stamp/<id> decodes the stamp counter
+        status, ctype, _ = _get(base, f"/preview/{iid}")
+        assert status == 200 and "text/html" in ctype
+        status, _, body = _get(base, "/counter/2")
+        stamp_id = json.loads(body)["id"]
+        assert stamp_id == "cc" * 32 + "i0"
+        status, ctype, body = _get(base, f"/stamp/{stamp_id}")
+        assert status == 200 and ctype == "image/gif" and body == GIF
+
+        # unknown event: a valid ID shape that names nothing → 404, not 500
+        status, _, _ = _get(base, "/counter/" + "ee" * 32 + "i0")
+        assert status == 404
+        # a bare txid matches no route (content) and no identifier (counter)
+        status, _, _ = _get(base, "/content/" + "aa" * 32)
+        assert status == 404
+        status, _, _ = _get(base, "/counter/" + "aa" * 32)
+        assert status == 404
+    finally:
+        httpd.shutdown()

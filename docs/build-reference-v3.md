@@ -63,6 +63,7 @@ chain by a fresh sync. Only Bitcoin's copy is load-bearing.
 | **Reveal tx** | Script-path-spends the commit output, exposing the envelope in **input 0's witness**, and carries an `OP_RETURN` holding only the literal marker `CNTRPRTY`. This is the transaction Counterparty parses and the one a counter is keyed to. |
 | **File event** | A qualifying Counterparty message (issuance or fairminter deploy) whose description is non-empty and taproot-carried. One counter per file event. |
 | **Kind** | `issuance` or `fairminter` — which message type produced the event. |
+| **Inscription ID** | `<reveal_txid>i<msg_index>` — the canonical text form of a counter's event key ([§6.1](#61-inscription-id)). |
 | **Content** | The description bytes as stored by Counterparty consensus (see [§5](#5-content)). |
 
 ---
@@ -241,9 +242,11 @@ Display rules never affect anything in this document.
 - **N1 — Order.** Events are ordered by
   `(block_index, tx_index, msg_index)` where `tx_index` is Counterparty's
   global transaction index of the **reveal** tx and `msg_index` is
-  Counterparty's intra-transaction message index (today always `0` for
-  qualifying messages — the key is future-proof for multi-message bundling;
-  fairminter rows carry no `msg_index` and use `0`). One counter per
+  Counterparty's per-transaction event index (`0` for every qualifying
+  event: Core uses `msg_index` to disambiguate multiple event rows
+  attributed to one transaction, and rows beyond the transaction's own
+  message are Core-derived events R2 excludes — see [§14](#14-amendments)
+  A1; fairminter rows carry no `msg_index` and use `0`). One counter per
   Counterparty **message**, keyed `(tx_hash, msg_index)`.
 - **N2 — Numbers start at 0**, gap-free; the next number is `MAX(number) + 1`.
 - **N3 — Genesis.** The scan floor is block **902,000** (`taproot_support`
@@ -262,6 +265,37 @@ Display rules never affect anything in this document.
   reinscription — a Counterparty reissuance — (or fairminter deploy) it produces. The lowest-numbered counter
   on an asset is its *original*; the explorer lists all of an asset's counters
   together.
+
+### 6.1 Inscription ID
+
+Every counter has a canonical, on-chain identity: its N1 event key written
+as text —
+
+```
+<reveal_txid>i<msg_index>          e.g. 5dfbc6ff…d464i0
+```
+
+— ordinals' inscription-ID syntax carrying counters' event index. The strict
+form is `^[0-9a-f]{64}i(0|[1-9][0-9]*)$`: lowercase hex is canonical,
+uppercase is accepted on input and normalised, and nothing else (no leading
+zeros on the index, no bare txid — one transaction can carry several event
+rows, so the index is load-bearing).
+
+The index is **Counterparty's `msg_index`**, not ord's envelope index. The
+two count different things — Counterparty events attributed to the
+transaction vs. inscription envelopes inside the reveal — and coincide at
+`0`, which since A1 is every counter: a counter is always its transaction's
+own message. For a **counterparty + ord** counter the ID is therefore
+byte-identical to the ordinals inscription ID of the same reveal, and ord
+tooling dereferences it unchanged; a counterparty-native counter's ID has no
+ord counterpart, and the syntax is shared, not borrowed meaning.
+
+An inscription ID is **not consensus of its own**: it is pure formatting of
+the `(tx_hash, msg_index)` key that N1 defines and the rolling hash chain
+already commits to (§7). Numbers remain this lens's human handle — an ID
+means the same event to any reader, numbered or not. Servers accept either
+wherever a single counter is named; resolution is always the event-key
+lookup, never a transaction lookup.
 
 ---
 

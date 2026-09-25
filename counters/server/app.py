@@ -43,6 +43,7 @@ from . import card, picture, preview
 from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
+from ..ids import format_id
 from ..content import classify_mime_type, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
@@ -410,6 +411,10 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
     stamp = _stamp_payload(store, row)
     return {
         "number": row["number"],
+        # §6.1: <reveal txid>i<msg_index> — the event's on-chain identity,
+        # ordinals' syntax; for a counterparty/ord counter it is byte-identical
+        # to the ord inscription ID of the same reveal.
+        "id": format_id(row["mint_txid"], row["msg_index"]),
         "asset": _display_name(row),
         "asset_id": row["asset_id"],
         "kind": row["kind"],  # 'issuance' | 'fairminter'
@@ -443,6 +448,11 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
     }
 
 
+# A per-counter endpoint accepts a number or an inscription ID (§6.1); asset
+# names stay on /counter/ and /c/, which resolve any identifier via find().
+_IDENT = r"\d+|[0-9a-fA-F]{64}i\d+"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "counters/0.1"
     protocol_version = "HTTP/1.1"
@@ -467,18 +477,18 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/block/(\d+)", path)
             if m:
                 return self._block(int(m.group(1)))
-            m = re.fullmatch(r"/preview/(\d+)", path)
+            m = re.fullmatch(rf"/preview/({_IDENT})", path)
             if m:
-                return self._preview(int(m.group(1)))
-            m = re.fullmatch(r"/content/(\d+)", path)
+                return self._preview(m.group(1))
+            m = re.fullmatch(rf"/content/({_IDENT})", path)
             if m:
-                return self._content(int(m.group(1)))
-            m = re.fullmatch(r"/stamp/(\d+)", path)
+                return self._content(m.group(1))
+            m = re.fullmatch(rf"/stamp/({_IDENT})", path)
             if m:
-                return self._stamp(int(m.group(1)))
-            m = re.fullmatch(r"/social/(\d+)\.png", path)
+                return self._stamp(m.group(1))
+            m = re.fullmatch(rf"/social/({_IDENT})\.png", path)
             if m:
-                return self._social(int(m.group(1)))
+                return self._social(m.group(1))
             # A counter's own page: the SPA, but server-rendered with per-counter
             # Open Graph tags so a shared link previews *that counter's* image
             # (crawlers don't run the JS or see the #/c/<id> hash).
@@ -637,10 +647,10 @@ class Handler(BaseHTTPRequestHandler):
             log.debug("xcp_burned backfill failed for #%s", row["number"], exc_info=True)
             return None
 
-    def _content(self, number: int) -> None:
+    def _content(self, ident: str) -> None:
         store = Store(self.config)
         try:
-            row = store.get_counter(number)
+            row = store.find(ident)
             if row is None:
                 return self._send(404, "text/plain; charset=utf-8", b"counter not found")
             blob = store.read_blob(row["content_sha256"])
@@ -658,12 +668,12 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             store.close()
 
-    def _stamp(self, number: int) -> None:
+    def _stamp(self, ident: str) -> None:
         """The decoded image of a stamp-like counter (`STAMP:<base64>` body).
         /content/<n> stays the raw consensus bytes; this is display-only."""
         store = Store(self.config)
         try:
-            row = store.get_counter(number)
+            row = store.find(ident)
             if row is None:
                 return self._send(404, "text/plain; charset=utf-8", b"counter not found")
             stamp = _stamp_payload(store, row)
@@ -674,7 +684,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             store.close()
 
-    def _social(self, number: int) -> None:
+    def _social(self, ident: str) -> None:
         """The og:image for /c/<number> — see `render_social`.
 
         Rendering costs real CPU (a 1.4 MB PNG has to be decoded, resized and
@@ -687,10 +697,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         store = Store(self.config)
         try:
-            row = store.get_counter(number)
+            row = store.find(ident)
             if row is None:
                 return self._send(404, "text/plain; charset=utf-8", b"counter not found")
-            name = (f"{number}-{row['content_sha256'][:16]}"
+            name = (f"{row['number']}-{row['content_sha256'][:16]}"
                     f"-v{card.VERSION}.{picture.VERSION}.png")
             path = self.config.social_dir / name
             try:
@@ -721,13 +731,13 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             log.debug("could not cache %s", path, exc_info=True)
 
-    def _preview(self, number: int) -> None:
+    def _preview(self, ident: str) -> None:
         """ord-style preview: raw content for HTML/SVG (rendered as a document
         inside the sandboxed iframe), else a confined same-origin wrapper page
         that loads /content/<n> via a native element."""
         store = Store(self.config)
         try:
-            row = store.get_counter(number)
+            row = store.find(ident)
             if row is None:
                 return self._send(404, "text/html; charset=utf-8",
                                   b"<!doctype html><meta charset=utf-8><title>404</title>not found")
@@ -752,8 +762,9 @@ class Handler(BaseHTTPRequestHandler):
                     # Stamp-like: preview the decoded image instead of the
                     # base64 text (§5.4). Served from /stamp/<n>.
                     kind, extra = preview.classify(stamp[1])
-                    doc = preview.wrapper(kind, number, stamp[1], extra,
-                                          src=f"/stamp/{number}")
+                    n = row["number"]
+                    doc = preview.wrapper(kind, n, stamp[1], extra,
+                                          src=f"/stamp/{n}")
                     return self._send(
                         200, "text/html; charset=utf-8", doc.encode("utf-8"),
                         max_age=DERIVED_MAX_AGE,
@@ -763,7 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                         ],
                     )
                 text = (blob or b"").decode("utf-8", "replace")
-            doc = preview.wrapper(kind, number, ctype, extra, text)
+            doc = preview.wrapper(kind, row["number"], ctype, extra, text)
             self._send(
                 200, "text/html; charset=utf-8", doc.encode("utf-8"),
                 max_age=DERIVED_MAX_AGE,
