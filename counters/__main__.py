@@ -537,8 +537,8 @@ def main(argv: list[str] | None = None) -> int:
                          help="price per lot, in satoshis — it can never be changed "
                               "while the dispenser is open")
     p_dopen.add_argument("--lot", metavar="AMOUNT",
-                         help="quantity vended per purchase (default: the whole "
-                              "escrow as one lot)")
+                         help="quantity vended per purchase (default: 1, so "
+                              "--price is the price of one)")
     p_dopen.add_argument("--source", metavar="ADDRESS",
                          help="wallet address to open at (it holds the escrow); "
                               "default: one that holds enough of the asset")
