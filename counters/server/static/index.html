@@ -482,7 +482,14 @@ function renderContent(c,detail){
   // allow-same-origin WITHOUT allow-scripts: script-free, but a normal origin
   // — the immutable /content bytes cache in the browser like any image.
   if(API){
-    const ct=(c.content_type||'').split(';')[0].trim().toLowerCase();
+    // Rule 9: /preview/<n> of a resolved delegate serves the TARGET's
+    // document, so the sandbox (and the raw toggle's restore) must be chosen
+    // from the target's type; the display fragment rides on the URL so a
+    // :target-styled SVG shows the named variant (edition). The fragment's
+    // charset is server-validated (content.py), URL- and attribute-safe.
+    const eff=(c.delegate&&c.delegate.number!=null&&c.delegate.content_type)||c.content_type;
+    const frag=c.delegate&&c.delegate.number!=null&&c.delegate.fragment?`#${c.delegate.fragment}`:'';
+    const ct=(eff||'').split(';')[0].trim().toLowerCase();
     // PDFs are the one kind that needs BOTH: scripts, because the browser's own
     // PDF viewer is a plugin and the sandbox blocks plugins in every frame, so
     // pdf.js has to paint the pages itself; and same-origin, because an opaque
@@ -498,7 +505,7 @@ function renderContent(c,detail){
     const sandbox=ct==='application/pdf'
                  ?'allow-scripts allow-same-origin allow-downloads'
                  :active?'allow-scripts':'allow-same-origin';
-    return `<div class="render"><iframe class="sandboxed" ${detail?`id="cframe" data-sandbox="${sandbox}" `:''}sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" title="counter ${c.number}" src="${API}/preview/${c.number}"></iframe></div>`;
+    return `<div class="render"><iframe class="sandboxed" ${detail?`id="cframe" data-sandbox="${sandbox}" data-frag="${frag}" `:''}sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" title="counter ${c.number}" src="${API}/preview/${c.number}${frag}"></iframe></div>`;
   }
   return sampleRender(c);   // file:// has no server: render the bundled sample inline
 }
@@ -616,7 +623,7 @@ async function renderDetail(id){
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
-        ${c.delegate ? fact('delegate', c.delegate.number!=null?`<a class="blocklink" onclick="go('#/c/${c.delegate.number}')">#${c.delegate.number}</a>`:`${short(c.delegate.id)} · not indexed`) : ''}
+        ${c.delegate ? fact('delegate', `${c.delegate.number!=null?`<a class="blocklink" onclick="go('#/c/${c.delegate.number}')">#${c.delegate.number}</a>`:`${short(c.delegate.id)} · not indexed`}${c.delegate.fragment?` · ${esc('#'+c.delegate.fragment)}`:''}`) : ''}
         ${c.envelope ? fact('envelope', c.envelope==='counterparty/ord' ? (ordUrl ? `counterparty + <a href="${ordUrl}" target="_blank" rel="noopener" class="out">ord ↗</a>` : 'counterparty + ord') : 'counterparty native') : ''}
         ${c.stamp_mime ? fact('stamp', `${esc(c.stamp_mime)} · <a href="${API}/stamp/${c.number}" target="_blank" rel="noopener" class="out">decoded ↗</a>`) : ''}
         ${fact('size', fmtSize(c.size))}
@@ -674,7 +681,7 @@ function toggleRaw(n){
   const f=el('cframe'),b=el('rawbtn');
   if(!f)return;
   f.setAttribute('sandbox',RAW?'allow-same-origin':f.dataset.sandbox);
-  f.src=`${API}/preview/${n}${RAW?'?raw=1':''}`;
+  f.src=`${API}/preview/${n}${RAW?'?raw=1':(f.dataset.frag||'')}`;
   if(b){b.textContent=RAW?'rendered':'raw';b.title=RAW?'show the rendered view':'show the canonical on-chain bytes';}
 }
 function go(h){

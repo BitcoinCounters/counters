@@ -165,14 +165,36 @@ def is_pointer_like(content: bytes, textual: bool) -> bool:
 #
 # A body over DELEGATE_MAX_BYTES is never a delegate, so every server parses
 # (or refuses) identically without reading unbounded JSON.
+#
+# A reference may carry a DISPLAY FRAGMENT — `<id>#edition-69` — appended to
+# the target's document URL at render time, so a target that styles itself by
+# `:target` (an SVG edition selector) shows the named variant. In the JSON
+# form a missing fragment falls back to the fragment of an `image` string
+# member (the ordinals-marketplace convention). RFC 3986 fragment characters
+# minus quotes and percent-escapes, so the token drops into a URL and an HTML
+# attribute untouched; a malformed fragment on the reference itself makes the
+# body not a delegate (strict, no repair), while a malformed `image` fragment
+# is ignored (foreign metadata, best-effort).
 _DELEGATE_PREFIX = "delegate:"
 DELEGATE_MAX_BYTES = 65536
+_FRAGMENT_RE = re.compile(r"^[A-Za-z0-9!$&()*+,\-./:;=?@_~]{1,255}$")
 
 
-def delegate_event(content: bytes, textual: bool) -> tuple[str, int] | None:
-    """(txid, msg_index) of the event a delegate-like body names, else None.
-    Resolution (is that event an indexed counter?) is the caller's business —
-    this only recognises the shape."""
+def split_fragment(token: str) -> tuple[str, str | None] | None:
+    """(reference, fragment) — fragment None when absent; None entirely when
+    a fragment is present but malformed."""
+    base, sep, frag = token.partition("#")
+    if not sep:
+        return token, None
+    if not _FRAGMENT_RE.match(frag):
+        return None
+    return base.strip(), frag
+
+
+def delegate_ref(content: bytes, textual: bool) -> tuple[str, int, str | None] | None:
+    """(txid, msg_index, display fragment or None) named by a delegate-like
+    body, else None. Resolution (is that event an indexed counter?) is the
+    caller's business — this only recognises the shape."""
     if not textual or len(content) > DELEGATE_MAX_BYTES:
         return None
     try:
@@ -185,10 +207,36 @@ def delegate_event(content: bytes, textual: bool) -> tuple[str, int] | None:
         except ValueError:
             return None
         target = obj.get("delegate") if isinstance(obj, dict) else None
-        return parse_id(target) if isinstance(target, str) else None
+        if not isinstance(target, str):
+            return None
+        split = split_fragment(target.strip())
+        if split is None:
+            return None
+        base, frag = split
+        event = parse_id(base)
+        if event is None:
+            return None
+        if frag is None:
+            image = obj.get("image")
+            if isinstance(image, str) and "#" in image:
+                cand = image.partition("#")[2]
+                if _FRAGMENT_RE.match(cand):
+                    frag = cand
+        return (*event, frag)
     if text[:len(_DELEGATE_PREFIX)].lower() == _DELEGATE_PREFIX:
         text = text[len(_DELEGATE_PREFIX):]
-    return parse_id(text)
+    split = split_fragment(text.strip())
+    if split is None:
+        return None
+    base, frag = split
+    event = parse_id(base)
+    return None if event is None else (*event, frag)
+
+
+def delegate_event(content: bytes, textual: bool) -> tuple[str, int] | None:
+    """(txid, msg_index) alone — see delegate_ref."""
+    ref = delegate_ref(content, textual)
+    return None if ref is None else ref[:2]
 
 
 # Stamp-like content (build ref v3 §5.4): a Bitcoin Stamps payload —

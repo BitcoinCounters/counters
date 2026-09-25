@@ -308,6 +308,11 @@ def _seed_delegate_store(data_dir: str) -> Config:
         json.dumps({"delegate": token, "name": "Ed 3"}).encode(), "b3" * 32)
     rec(4, "EDLOST", ("ee" * 32 + "i0").encode(), "b4" * 32)
     rec(5, "EDHOP", ("b1" * 32 + "i0").encode(), "b5" * 32)  # → the delegate #1
+    rec(6, "EDFRAG", f"DELEGATE:{token}#edition-69".encode(), "b6" * 32)
+    rec(7, "EDIMG", json.dumps({
+        "delegate": token,
+        "image": f"https://ordinals.com/content/{token}#edition-7",
+    }).encode(), "b7" * 32)
     store.set_last_height(902011, None)
     store.commit()
     store.close()
@@ -332,8 +337,16 @@ def test_delegation():
         for n in (1, 2, 3):
             status, _, body = _get(base, f"/counter/{n}")
             d = json.loads(body)["delegate"]
-            assert d == {"id": token, "number": 0, "content_type": "text/plain"}, n
+            assert d == {"id": token, "number": 0, "content_type": "text/plain",
+                         "fragment": None}, n
         assert json.loads(_get(base, "/counter/0")[2])["delegate"] is None
+
+        # display fragment: on the reference itself, or inherited from the
+        # JSON `image` member (ordinals-marketplace convention)
+        d = json.loads(_get(base, "/counter/6")[2])["delegate"]
+        assert (d["number"], d["fragment"]) == (0, "edition-69")
+        d = json.loads(_get(base, "/counter/7")[2])["delegate"]
+        assert (d["number"], d["fragment"]) == (0, "edition-7")
 
         # /delegate/<n>: the target's bytes; /content/<n>: the token, always
         for n in (1, 2, 3):

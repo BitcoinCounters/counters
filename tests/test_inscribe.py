@@ -337,3 +337,9 @@ def test_resolve_delegate():
         assert _resolve_delegate(cfg, ("AB" * 32) + "i3") == "ab" * 32 + "i3"
         assert _resolve_delegate(cfg, "ab" * 32) is None      # bare txid
         assert _resolve_delegate(cfg, "XDUALS") is None       # not an id
+        # a #fragment rides through on either form, verbatim
+        assert _resolve_delegate(cfg, "0#edition-69") == "ab" * 32 + "i0#edition-69"
+        assert (_resolve_delegate(cfg, ("AB" * 32) + "i3#edition-2")
+                == "ab" * 32 + "i3#edition-2")
+        assert _resolve_delegate(cfg, '0#bad"frag') is None   # charset-strict
+        assert _resolve_delegate(cfg, "0#") is None           # empty fragment

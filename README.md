@@ -333,6 +333,9 @@ counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
 # that form is just a normal --file inscribe of the JSON.
 counters wallet --name mywallet inscribe --delegate 121
 counters wallet --name mywallet inscribe --delegate <txid>i0 --asset MYEDITION
+# a #fragment rides onto the rendered document's URL, so a :target-styled
+# SVG (one file, many editions) shows the named variant
+counters wallet --name mywallet inscribe --delegate '218#edition-69' --asset RARE.PEPE.69
 # pick the taproot envelope style (default: counterparty, Counterparty's own)
 counters wallet --name mywallet inscribe --file cat.png --envelope counterparty/ord  # also an ordinals inscription
 # XCP on one address, BTC on another? Counterparty takes the issuance fee from the

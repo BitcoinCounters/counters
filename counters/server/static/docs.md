@@ -96,11 +96,15 @@ Non-rules: MIME type never gates validity, duplicate content is allowed, and the
 
 A counter whose body **names another counter's event** renders that counter's content in its place — one file inscribed once, referenced by any number of cheap (~30–90 byte) counters. The reference is an **inscription id**, never a counter number (numbers are this explorer's handle, not on-chain data). Three body shapes count, all strict: the bare id (`<txid>i<msg_index>`), the tagged form `DELEGATE:<txid>i<msg_index>`, or a JSON object whose `delegate` member holds the id — every other JSON member is the edition's own metadata (traits, a name), carried untouched. Resolution is display-only and happens inside this index: the target either is an indexed counter (rendered, badged, linked) or the body shows as text. One hop only, and `/content/<n>` always returns the delegate's own bytes; the **raw** toggle on the counter page shows them in place of the rendered view.
 
+The reference may carry a **display fragment** — `<id>#edition-69` — appended to the rendered document's URL, so an SVG that styles itself by `:target` (one file, many editions) shows the named variant. In the JSON form, a reference without a fragment inherits the fragment of an `image` member (the ordinals-marketplace convention), so a dual counter+ordinal edition JSON renders its edition here with no extra field.
+
 ```
 # delegate to a counter you saw in the explorer (number resolves locally;
 # only the inscription id goes on chain)
 counters wallet --name me inscribe --delegate 121
 counters wallet --name me inscribe --delegate <txid>i0 --asset MYEDITION
+# edition 69 of a :target-styled SVG counter
+counters wallet --name me inscribe --delegate '218#edition-69' --asset RARE.PEPE.69
 ```
 
 ## Reinscription {#reinscribe}

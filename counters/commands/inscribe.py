@@ -35,7 +35,7 @@ from decimal import Decimal
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
-from ..content import classify_mime_type
+from ..content import classify_mime_type, split_fragment
 from ..ids import format_id, parse_id
 from ..store import Store
 from ..counterparty import CounterpartyClient, CounterpartyError
@@ -577,27 +577,37 @@ def cmd_slipstream_status(config: Config, txid: str) -> int:
 
 
 def _resolve_delegate(config: Config, ref: str) -> str | None:
-    """The inscription id a --delegate reference names, or None (reported).
-    A counter number is a lens-derived handle: it is resolved through the
-    local index here, and only the id ever goes on chain (build ref §5.5)."""
-    if ref.isdigit():
+    """The on-chain token a --delegate reference names — the inscription id,
+    plus any `#<fragment>` display fragment (an SVG edition selector, carried
+    verbatim) — or None (reported). A counter number is a lens-derived
+    handle: it is resolved through the local index here, and only the id
+    ever goes on chain (build ref §5.5)."""
+    split = split_fragment(ref.strip())
+    if split is None:
+        print(f"--delegate fragment must be RFC 3986 fragment characters "
+              f"(no quotes or percent-escapes): {ref!r}", file=sys.stderr)
+        return None
+    base, fragment = split
+    suffix = f"#{fragment}" if fragment else ""
+    if base.isdigit():
         store = Store(config)
         try:
-            row = store.get_counter(int(ref))
+            row = store.get_counter(int(base))
         finally:
             store.close()
         if row is None:
-            print(f"counter #{ref} is not in the local index — pass the "
+            print(f"counter #{base} is not in the local index — pass the "
                   f"target's inscription id (<txid>i<msg_index>) instead",
                   file=sys.stderr)
             return None
-        return format_id(row["mint_txid"], row["msg_index"])
-    event = parse_id(ref)
+        return format_id(row["mint_txid"], row["msg_index"]) + suffix
+    event = parse_id(base)
     if event is None:
         print(f"--delegate takes a counter number or an inscription id "
-              f"(<txid>i<msg_index>): {ref!r}", file=sys.stderr)
+              f"(<txid>i<msg_index>), optionally with a #fragment: {ref!r}",
+              file=sys.stderr)
         return None
-    return format_id(*event)
+    return format_id(*event) + suffix
 
 
 def cmd_inscribe(
