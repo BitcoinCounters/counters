@@ -24,9 +24,13 @@ For each block (ascending, from genesis 902,000):
 
 1. **Fetch from the oracle** — the block's issuances and fairminter deploys
    from Counterparty Core (`/v2/blocks/{h}/issuances`, `.../fairminters`).
-2. **Filter (R1–R3)** — keep valid issuances (fairmints excluded — a
-   fair-minted collection gets one counter at deploy) and fairminter deploys,
-   with a **non-null, non-empty description**. The content is exactly what
+2. **Filter (R1–R3)** — keep valid issuances and fairminter deploys with a
+   **non-null, non-empty description**. Fairmints are excluded (a fair-minted
+   collection gets one counter at deploy), and so are rows Core *derives*
+   during block processing — LP-token issuances, fairminter lifecycle rows —
+   recognized by their `asset_events` tags: a counter must come from an event
+   the transaction's own message wrote, never from a row Core writes on its
+   behalf. The content is exactly what
    Counterparty consensus stores as the description; the indexer never
    re-interprets witness data.
 3. **Carrier check (R4)** — the transaction must be a Counterparty taproot

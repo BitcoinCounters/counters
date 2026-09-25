@@ -78,11 +78,30 @@ are explicit non-rules.
   deploys are never recorded there; the fairminter `status` field —
   open/closed — is lifecycle, not validity). The asset exists in Counterparty
   state by construction.
-- **R2 — Qualifying message types.** Issuances (all variants: creation,
-  reissuance, subasset) and **fairminter deploys**. **Fairmints (mints) never
-  qualify** — they carry no content (`fair_minting == true` issuance rows are
-  excluded); a fair-minted collection gets one counter at deploy. Broadcasts
-  are excluded.
+- **R2 — Message-authored events only** *(amended — see [§14](#14-amendments), A1)*.
+  Issuances (all variants: creation, reissuance, subasset) and **fairminter
+  deploys**. A counter must come from an event the transaction's own message
+  wrote — never from a row Core writes on its behalf. Concretely: an issuance
+  row qualifies only if every tag in Counterparty's event classification for
+  it (`asset_events`) is **message-authored**:
+
+  `creation · reissuance · transfer · change_description · lock_quantity ·
+  lock_description · reset`
+
+  These are the events a composed issuance message can produce, so the row's
+  description is bytes its transaction carried (§5.1). Rows Core *derives*
+  during block processing carry their own tags — `fairmint`,
+  `open_fairminter`, `close_fairminter`, `fairminter_pool_creation`,
+  `pool_deposit_mint` — and are attributed to a transaction whose witness
+  never carried their description (an LP token's Core-written name, a
+  lifecycle row's copy of the deploy content). Any such tag, **or any tag
+  this list does not name**, disqualifies the row: a future Core event type
+  cannot mint counters until this spec admits it. A row with **no** tags
+  remains eligible — Core tags every row it derives, so an untagged row is a
+  composed message that changed nothing worth tagging (R3–R4 still apply).
+  **Fairmints never qualify** (`fair_minting == true` rows are additionally
+  excluded; a fair-minted collection gets one counter at deploy); deploys
+  are read from the fairminters table only. Broadcasts are excluded.
 - **R3 — Non-empty description, deferred to the oracle.** The content is what
   Counterparty consensus stores as the description — the indexer never
   re-derives it from the witness. `description` must be non-null and non-empty.
@@ -298,8 +317,9 @@ walking blocks the oracle has not parsed would silently skip events.
 A transaction message records a counter iff **all** hold:
 
 1. `block_index ≥ 902,000`.
-2. It is a Counterparty **issuance** with `status == "valid"` and
-   `fair_minting == false`, **or** a **fairminter deploy**.
+2. It is a Counterparty **issuance** with `status == "valid"`,
+   `fair_minting == false`, and no `asset_events` tag outside the
+   message-authored set (R2), **or** a **fairminter deploy**.
 3. `description` is non-null and non-empty (as parsed by Counterparty).
 4. The transaction is a **taproot reveal** ([§4](#4-carrier-detection)).
 5. The message has not already produced a counter (dedup by
@@ -411,7 +431,30 @@ starts a new namespace defined entirely by Counterparty state.
 | `GENESIS_HEIGHT` | `902000` (`taproot_support` activation; counter #0 = XDUALS @ 902005) |
 | `EXTENDED_MIME_GATE` | `952800` (`extended_mime_types_support` activation) |
 | Rolling-hash genesis tag | `counters:v3:bitcoin-mainnet:902000` |
+| Message-authored `asset_events` (R2) | `creation reissuance transfer change_description lock_quantity lock_description reset` |
 | Recommended confirmations | `6` |
+
+---
+
+## 14. Amendments
+
+**A1 — Derived events excluded (R2), 2026-09-24.** Counterparty Core also
+writes issuance rows it *derives* during block processing, attributing them
+to the transaction that caused them and disambiguating with `msg_index`. The
+first to qualify under the original R2 was the LP token issued when the
+MEMENOME fairminter (deploy tx `5dfbc6ff…`, block 964,250, counter #160)
+closed and seeded its AMM pool at block 965,043: Core wrote `LP token for
+MEMENOME/XCP pool` as the description of `A18189972090142917414`, on the
+deploy's tx_hash at `msg_index = 1` (`asset_events =
+fairminter_pool_creation`), and it was numbered #163 — content that never
+travelled in any witness, breaking §5.1's two-test definition. The same
+fail-open gap left `close_fairminter` and final-`fairmint` rows — which
+carry a full copy of the deploy's description with `fair_minting == false` —
+held out only by R4's carrier check. R2 is amended to the message-authored
+include-list above, failing closed on unknown tags. Effect on history:
+exactly one counter, #163, is removed; every later counter renumbers down by
+one, and the rolling hash chain diverges from number 163 onward. Indexes
+built before this amendment must resync from genesis.
 
 ---
 

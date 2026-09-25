@@ -49,6 +49,20 @@ ROLLING_HASH_GENESIS_TAG = b"counters:v3:bitcoin-mainnet:902000"
 # Assets the wallet refuses to operate on (they cannot be issued anyway).
 RESERVED_ASSETS = frozenset({"BTC", "XCP"})
 
+# R2 (amended, build reference v3 §3/§14 A1): the `asset_events` tags a
+# transaction's OWN issuance message can author. A row carrying any tag
+# outside this set — `fairmint`, `open_fairminter`, `close_fairminter`,
+# `fairminter_pool_creation`, `pool_deposit_mint`, or anything a future Core
+# invents — was written by Core during block processing, not composed by the
+# transaction it is attributed to, so its description never travelled in that
+# transaction's witness and it can never be a counter (fail closed). Untagged
+# rows pass: Core tags every row it derives, so no tags means a composed
+# message that changed nothing worth tagging (R3/R4 still apply on top).
+MESSAGE_AUTHORED_ASSET_EVENTS = frozenset({
+    "creation", "reissuance", "transfer", "change_description",
+    "lock_quantity", "lock_description", "reset",
+})
+
 
 @dataclass
 class Config:

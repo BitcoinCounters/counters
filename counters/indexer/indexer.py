@@ -8,7 +8,8 @@ bitcoind (R4), then number and store in (block, tx_index, msg_index) order.
 Validity rules enforced here:
   R1  valid Counterparty state only (issuance status == "valid"; a fairminter
       deploy's presence in the fairminters table IS its validity)
-  R2  issuances + fairminter deploys; fairmints (fair_minting) excluded
+  R2  issuances + fairminter deploys; fairmints and Core-derived rows
+      (any asset_events tag outside the message-authored set) excluded
   R3  non-null, non-empty description — content defers to Counterparty state
   R4  taproot envelope carrier only (reveal.py)
   R5  permissive content — MIME never gates validity
@@ -24,7 +25,7 @@ import signal
 import time
 
 from ..bitcoind import BitcoindClient, BitcoindError
-from ..config import GENESIS_HEIGHT, Config
+from ..config import GENESIS_HEIGHT, MESSAGE_AUTHORED_ASSET_EVENTS, Config
 from ..content import classify_mime_type, content_bytes, is_pointer_like, normalize_mime
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..ledger import CounterpartyLedger
@@ -36,9 +37,20 @@ log = logging.getLogger("counters")
 
 
 def is_qualifying_issuance(row: dict) -> bool:
-    """R1+R2 for an issuance row: valid per Counterparty, and not a fairmint
-    (mints carry no content; the collection's counter lands on the deploy)."""
-    return row.get("status") == "valid" and not row.get("fair_minting")
+    """R1+R2 for an issuance row: valid per Counterparty, not a fairmint
+    (mints carry no content; the collection's counter lands on the deploy),
+    and authored by the transaction's own message. Core also writes rows it
+    *derives* during block processing — an LP token issued at a fairminter
+    close or pool deposit, a close row copying the deploy's description —
+    attributed to a transaction whose witness never carried those bytes.
+    Every derived row is tagged, so any `asset_events` tag outside the
+    message-authored set disqualifies, failing closed on tags a future Core
+    invents; an untagged row is a composed message that changed nothing
+    worth tagging, and passes."""
+    if row.get("status") != "valid" or row.get("fair_minting"):
+        return False
+    tags = (row.get("asset_events") or "").split()
+    return all(t in MESSAGE_AUTHORED_ASSET_EVENTS for t in tags)
 
 
 def has_content(row: dict) -> bool:
