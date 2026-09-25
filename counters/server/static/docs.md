@@ -107,11 +107,13 @@ This explorer reads these endpoints from `counters server`:
 
 - `GET /status` — latest synced block + total counter count
 - `GET /counters?before=N&limit=K` — recent counters
-- `GET /counter/<number|asset>` — one counter's record
+- `GET /counter/<number|asset|inscription id>` — one counter's record
 - `GET /block/<height>` — counters minted in a block
-- `GET /content/<number>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing
-- `GET /preview/<number>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
-- `GET /stamp/<number>` — the decoded image of a `STAMP:` counter
+- `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing
+- `GET /preview/<number|inscription id>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
+- `GET /stamp/<number|inscription id>` — the decoded image of a `STAMP:` counter
+
+Every counter record carries its **inscription id**: `<reveal txid>i<msg_index>` — the event's on-chain identity, in ordinals' syntax. The index is Counterparty's per-transaction event index (0 for every counter to date); for a counterparty + ord counter the string is byte-identical to the ordinals inscription id of the same reveal, so ord tooling can dereference it too. Numbers are this lens's handle; the inscription id means the same thing to any reader.
 
 Served over HTTP by `counters server`, this explorer talks to its own origin; opened straight from disk it falls back to a bundled sample.
 

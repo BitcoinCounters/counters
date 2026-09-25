@@ -433,6 +433,7 @@ const ZERO={
   owner:"bc1qp0ys5k7uuzhnekcuyymg76ujpgf9ut9j5vf7sd",
   source:"bc1qp0ys5k7uuzhnekcuyymg76ujpgf9ut9j5vf7sd",
   txid:"efeb4f6ad804a6716334de029788a1002933325f86c1e99132b32347ac6d7503",
+  id:"efeb4f6ad804a6716334de029788a1002933325f86c1e99132b32347ac6d7503i0",
   block:902005, tx_index:3030441, fee:null, tx_size:null, xcp_burned:50000000,
   supply:10000, divisible:false, locked:false, is_pointer_like:false,
   sha256:"806f58fc5f3d4db74df985debab79bad0f8ec1400a11aea349829414cd098287"
@@ -579,11 +580,11 @@ async function renderDetail(id){
   const mp=`https://explore.block.space/tx/${c.txid}`;
   const xcp=`https://tokenscan.io/asset/${encodeURIComponent(c.asset)}`;
   const tsTx=c.tx_index!=null?`https://tokenscan.io/tx/${c.tx_index}`:null;
-  // The reveal is the inscription: ord ids are <reveal txid>i<envelope index>,
-  // and Core writes exactly one envelope, so the reveal's inscription is i0. But
-  // one reveal can carry several counter events against that single envelope, so
-  // only the first message is the inscription — the rest just name their envelope.
-  const ordUrl=c.msg_index?null:`https://ordinals.com/inscription/${c.txid}i0`;
+  // c.id is the counter's inscription id, <reveal txid>i<msg_index> (build
+  // reference §6.1). Its index is Counterparty's event index, not ord's
+  // envelope index: Core writes exactly one envelope, so only a msg_index-0
+  // counter is the reveal's ord inscription — for it the two ids coincide.
+  const ordUrl=c.msg_index?null:`https://ordinals.com/inscription/${c.id}`;
   el('detail').innerHTML=`
     <div class="stage">
       <div class="frame">
@@ -614,6 +615,7 @@ async function renderDetail(id){
         ${c.fee!=null ? fact('fee paid', `${c.fee.toLocaleString()} sats`) : ''}
         ${(c.fee!=null && c.tx_size) ? fact('fee/B', `${(c.fee/c.tx_size).toFixed(1)} sats/B`) : ''}
         ${c.xcp_burned!=null ? fact('xcp burned', tsTx ? `<a href="${tsTx}" target="_blank" rel="noopener" class="out">${+(c.xcp_burned/1e8).toFixed(8)} XCP ↗</a>` : `${+(c.xcp_burned/1e8).toFixed(8)} XCP`) : ''}
+        ${fact('id', short(c.id), true, c.id)}
         ${fact('asset_id', c.asset_id, true)}
         ${fact('owner', short(c.owner), true, c.owner)}
         ${c.commit ? fact('commit tx', short(c.commit), true, c.commit) : ''}

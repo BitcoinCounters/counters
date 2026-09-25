@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ROLLING_HASH_GENESIS_TAG, Config
+from .ids import parse_id
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS counters (
@@ -305,14 +306,19 @@ class Store:
         ).fetchall()
 
     def find(self, identifier: str) -> sqlite3.Row | None:
-        """Resolve a counter by number (all-digit) or asset name/longname.
+        """Resolve a counter by number (all-digit), inscription ID
+        (`<txid>i<msg_index>`, ids.py §6.1), or asset name/longname.
 
-        Asset names never begin with a digit (named are A-Z; numeric display is
-        'A'+int; subassets contain a '.'), so an all-digit token is a number.
+        The forms cannot collide: asset names never begin with a digit (named
+        are A-Z; numeric display is 'A'+int; subassets contain a '.'), and
+        none is 64 hex characters followed by 'i'.
         """
         token = str(identifier)
         if token.isdigit():
             return self.get_counter(int(token))
+        event = parse_id(token)
+        if event is not None:
+            return self.get_counter_by_event(*event)
         return self.get_counter_by_asset(token)
 
     def list_recent(self, limit: int = 20) -> list[sqlite3.Row]:

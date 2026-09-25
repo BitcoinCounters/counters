@@ -17,6 +17,7 @@ from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..content import classify_mime_type, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from ..ids import format_id, parse_id
 from ..ledger import CounterpartyLedger
 from ..reveal import commit_txid, envelope_style
 from ..store import Store
@@ -174,6 +175,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     if as_json:
         info = _live_asset(config, row["asset"])
         record = {k: row[k] for k in row.keys()}
+        record["id"] = format_id(row["mint_txid"], row["msg_index"])
         record["current_owner"] = info.get("owner") or row["source"]
         record["fee"] = fee
         record["tx_size"] = tx_size
@@ -217,6 +219,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         asset_numbers = [r["number"] for r in store.get_counters_by_asset(row["asset"])]
 
     print(f"number       : {row['number']}")
+    print(f"id           : {format_id(row['mint_txid'], row['msg_index'])}")
     print(f"asset        : {_display_name(row)}")
     if detailed:
         print(f"kind         : {row['kind']}")
@@ -492,11 +495,14 @@ def cmd_info(
 ) -> int:
     store = Store(config)
     try:
-        # A number names one counter (the event); an asset name gets the
-        # asset summary. Numeric Counterparty assets are A-prefixed, so a
-        # digit string is never ambiguous.
-        if identifier.isdigit():
-            row = store.get_counter(int(identifier))
+        # A number or an inscription ID (<txid>i<msg_index>, §6.1) names one
+        # counter (the event); an asset name gets the asset summary. Numeric
+        # Counterparty assets are A-prefixed, so a digit string is never
+        # ambiguous, and no asset name is 64 hex characters followed by 'i'.
+        event = None if identifier.isdigit() else parse_id(identifier)
+        if identifier.isdigit() or event is not None:
+            row = (store.get_counter(int(identifier)) if event is None
+                   else store.get_counter_by_event(*event))
             if row is None:
                 print(f"no counter for {identifier!r}", file=sys.stderr)
                 return 1
