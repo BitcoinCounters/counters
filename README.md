@@ -249,8 +249,9 @@ counters wallet --name mywallet buy-from-dispenser bc1q... 1 --yes    # no promp
 # open: escrow an asset and vend it for BTC. The escrow leaves the address
 # immediately; the price (satoshis per lot) can NEVER be changed while open —
 # to reprice, close, wait ~5 blocks, and reopen.
-counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 5000 --lot 1
-counters wallet --name mywallet open-dispenser MYCOUNTER 1 --price 250000  # one lot: all-or-nothing
+counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 5000   # 5,000 sat each, 100 for sale
+counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 45000 --lot 10  # sold in tens
+counters wallet --name mywallet open-dispenser MYCOUNTER 1 --price 250000   # one token, all-or-nothing
 counters wallet --name mywallet dispensers                    # list yours, with status
 # refill: adds stock on the SAME terms (Counterparty rejects any change, so the
 # live terms are read from the chain — you only name the amount). Max 5 refills.

@@ -541,7 +541,20 @@ def cmd_open_dispenser(
         return 1
     try:
         escrow_raw = _to_raw_quantity(amount, divisible)
-        lot_raw = _to_raw_quantity(lot, divisible) if lot is not None else escrow_raw
+        # One unit per purchase, unless told otherwise.
+        #
+        # The lot decides what --price means, since a dispenser's price is per
+        # lot: with a lot of one, `--price 5000` reads as "5,000 sats each",
+        # which is what almost every listing intends. Defaulting to the whole
+        # escrow made the same command mean "5,000 sats for all 100" — an
+        # all-or-nothing sale at a per-unit price, and the terms can never be
+        # changed once open. `--lot` still says otherwise for a machine that
+        # really does vend in tens.
+        #
+        # An escrow below one whole unit cannot vend in whole ones, so there
+        # the escrow is the lot and the dispenser stays openable.
+        lot_raw = (_to_raw_quantity(lot, divisible) if lot is not None
+                   else min(_to_raw_quantity("1", divisible), escrow_raw))
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

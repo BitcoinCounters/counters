@@ -115,7 +115,10 @@ def test_open_converts_human_amounts_to_raw_units():
         _restore(orig)
 
 
-def test_open_default_lot_is_the_whole_escrow():
+def test_open_default_lot_is_one_unit():
+    # The lot decides what --price buys. Defaulted to one, `--price 9999`
+    # means 9,999 sat each; defaulted to the escrow it would have meant 9,999
+    # sat for all five, at terms that can never be changed once open.
     btc, cp = FakeBtc(), FakeCp()
     orig = _patch(btc, cp)
     try:
@@ -123,7 +126,38 @@ def test_open_default_lot_is_the_whole_escrow():
                                   assume_yes=True)
         assert rc == 0
         k = cp.compose_kwargs
-        assert k["give_quantity"] == k["escrow_quantity"] == 500_000_000
+        assert k["give_quantity"] == 100_000_000        # one whole PEPECASH
+        assert k["escrow_quantity"] == 500_000_000      # all five
+    finally:
+        _restore(orig)
+
+
+def test_open_default_lot_is_one_unit_for_an_indivisible_asset():
+    # A counter is usually indivisible, where one whole unit is 1 raw.
+    btc, cp = FakeBtc(), FakeCp(asset_info={"asset": "MYCOUNTER", "divisible": False})
+    orig = _patch(btc, cp)
+    try:
+        rc = D.cmd_open_dispenser(Config(), "me", "MYCOUNTER", "100", 5000,
+                                  assume_yes=True)
+        assert rc == 0
+        k = cp.compose_kwargs
+        assert k["give_quantity"] == 1 and k["escrow_quantity"] == 100
+    finally:
+        _restore(orig)
+
+
+def test_open_falls_back_to_the_escrow_below_one_unit():
+    # Half a divisible token cannot vend in whole ones, and a lot larger than
+    # the escrow is refused — so the escrow itself is the lot and the
+    # dispenser still opens.
+    btc, cp = FakeBtc(), FakeCp()
+    orig = _patch(btc, cp)
+    try:
+        rc = D.cmd_open_dispenser(Config(), "me", "PEPECASH", "0.5", 2780,
+                                  assume_yes=True)
+        assert rc == 0
+        k = cp.compose_kwargs
+        assert k["give_quantity"] == k["escrow_quantity"] == 50_000_000
     finally:
         _restore(orig)
 
