@@ -307,6 +307,13 @@ def main(argv: list[str] | None = None) -> int:
         "inscribe", parents=[common, wname, fundargs], help="mint a counter from a file"
     )
     p_insc.add_argument("--file", help="file to inscribe")
+    p_insc.add_argument("--delegate", metavar="ID_OR_NUMBER",
+                        help="mint a DELEGATE instead of a file: the content is "
+                             "DELEGATE:<txid>i<msg_index> naming another counter's "
+                             "event, and explorers render that counter's file in its "
+                             "place (display-only; ~30 bytes on chain). Takes an "
+                             "inscription id, or a counter number resolved through "
+                             "the local index — only the id ever goes on chain")
     p_insc.add_argument("--asset",
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "
@@ -823,10 +830,11 @@ def main(argv: list[str] | None = None) -> int:
                 # A status lookup is a read, not a mint: no wallet, no file.
                 if args.slipstream_status:
                     return inscribe.cmd_slipstream_status(config, args.slipstream_status)
-                if not args.file:
-                    p_insc.error("--file is required (or use --slipstream-status TXID)")
+                if bool(args.file) == bool(args.delegate):
+                    p_insc.error("pass exactly one of --file or --delegate "
+                                 "(or use --slipstream-status TXID)")
                 return inscribe.cmd_inscribe(
-                    config, args.name, args.file,
+                    config, args.name, args.file, delegate=args.delegate,
                     asset=args.asset, fee_rate=args.fee_rate,
                     supply=args.supply, divisible=args.divisible, lock=args.locked,
                     source=args.source, inputs_set=args.inputs_set,

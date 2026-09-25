@@ -36,6 +36,8 @@ from decimal import Decimal
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type
+from ..ids import format_id, parse_id
+from ..store import Store
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
 from ..slipstream import (
@@ -574,10 +576,34 @@ def cmd_slipstream_status(config: Config, txid: str) -> int:
     return 0
 
 
+def _resolve_delegate(config: Config, ref: str) -> str | None:
+    """The inscription id a --delegate reference names, or None (reported).
+    A counter number is a lens-derived handle: it is resolved through the
+    local index here, and only the id ever goes on chain (build ref §5.5)."""
+    if ref.isdigit():
+        store = Store(config)
+        try:
+            row = store.get_counter(int(ref))
+        finally:
+            store.close()
+        if row is None:
+            print(f"counter #{ref} is not in the local index — pass the "
+                  f"target's inscription id (<txid>i<msg_index>) instead",
+                  file=sys.stderr)
+            return None
+        return format_id(row["mint_txid"], row["msg_index"])
+    event = parse_id(ref)
+    if event is None:
+        print(f"--delegate takes a counter number or an inscription id "
+              f"(<txid>i<msg_index>): {ref!r}", file=sys.stderr)
+        return None
+    return format_id(*event)
+
+
 def cmd_inscribe(
     config: Config,
     wallet: str,
-    file_path: str,
+    file_path: str | None,
     asset: str | None = None,
     fee_rate: float | None = None,
     supply: int = 1,
@@ -593,20 +619,33 @@ def cmd_inscribe(
     slipstream_all: bool = False,
     envelope: str = "counterparty",
     commit_fee_rate: float | None = None,
+    delegate: str | None = None,
 ) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
-    if not os.path.isfile(file_path):
-        print(f"file not found: {file_path}", file=sys.stderr)
-        return 1
-    with open(file_path, "rb") as fh:
-        body = fh.read()
-    if not body:
-        print("refusing to inscribe an empty file (an empty description is no "
-              "event — rule R3)", file=sys.stderr)
-        return 1
-    mime_type = guess_content_type(file_path)
+    if delegate is not None:
+        # §5.5: the content IS the reference — the tagged form, self-
+        # describing on any explorer, with the target's inscription id
+        # inside. Servers render the target's file in its place; /content
+        # keeps these exact bytes.
+        token = _resolve_delegate(config, delegate)
+        if token is None:
+            return 1
+        body = f"DELEGATE:{token}".encode()
+        mime_type = "text/plain"
+        file_path = f"<delegate {token}>"
+    else:
+        if not os.path.isfile(file_path):
+            print(f"file not found: {file_path}", file=sys.stderr)
+            return 1
+        with open(file_path, "rb") as fh:
+            body = fh.read()
+        if not body:
+            print("refusing to inscribe an empty file (an empty description is no "
+                  "event — rule R3)", file=sys.stderr)
+            return 1
+        mime_type = guess_content_type(file_path)
 
     try:
         height = btc.get_block_count()

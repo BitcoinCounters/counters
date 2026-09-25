@@ -229,6 +229,40 @@ on API records; the decoded image at `/stamp/<n>`). The canonical content
 bytes, sha256, and rolling hash remain those of the *text* per §5.1; a
 payload that fails to decode to a recognized image simply displays as text.
 
+### 5.5 Delegate-like content (informational)
+
+A textual body that **names another counter's event** is a **delegate**: a
+server renders the named counter's content in its place (display rule 9 in
+[`rules.md`](rules.md)). The reference is an inscription ID ([§6.1](#61-inscription-id)) —
+never a counter number, which is a lens-derived handle and not on chain.
+Three shapes are recognised, all strict, none repaired:
+
+1. **bare** — the body is exactly one inscription ID:
+   `<txid>i<msg_index>` (surrounding whitespace tolerated);
+2. **tagged** — `DELEGATE:<txid>i<msg_index>` (case-insensitive prefix,
+   whitespace after the colon tolerated) — self-describing on any explorer;
+3. **json** — a JSON **object** whose `delegate` member is a string in bare
+   form. Every other member is the counter's own uninterpreted metadata
+   (per-edition traits, a name — ord's delegate + metadata pattern), shown
+   raw, never executed.
+
+A body over **65,536 bytes** is never a delegate, so every implementation
+parses (or refuses) identically. A top-level JSON string or array, a nested
+`delegate` member, a bare txid, or anything else is not a delegate.
+
+Like §5.3–§5.4 this is **display metadata only**, derived at serve time and
+never indexed: the canonical content bytes, `content_sha256`, and the
+rolling hash remain those of the token/JSON text, and `/content/<n>` always
+returns them. Resolution happens **inside the index only** — the named event
+either is an indexed counter or the token displays as text; nothing is ever
+fetched (a delegate is on-chain reference, not rule 4's off-chain pointer) —
+and follows **one hop**: a delegate naming a delegate renders the middle
+counter's token as text. In ordinals the delegate is an envelope field (tag
+`11`); counters has exactly one content-bearing slot, so here the reference
+*is* the content — and for a counterparty + ord target the bare token is
+byte-identical to a real ordinals inscription ID, dereferenceable by ord
+tooling.
+
 How content is *rendered* — including the deterministic repair of
 transport-damaged stamp base64, magic-number sniffing when the declared MIME
 type is generic or wrong, pointer handling, and caching of derived views —

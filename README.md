@@ -323,6 +323,16 @@ counters wallet --name mywallet inscribe --file cat.png                     # fr
 counters wallet --name mywallet inscribe --file cat.png --asset MYCOUNTER   # named (0.5 XCP)
 counters wallet --name mywallet inscribe --file v2.png --asset MYCOUNTER    # EXISTING asset you own: reinscribe with new content (a new counter)
 counters wallet --name mywallet inscribe --file cat.png --fee-rate 8
+# DELEGATE (build ref §5.5): inscribe a reference instead of a file — explorers
+# render the referenced counter's content in its place, so one file serves any
+# number of ~30-byte editions. Takes a counter number (resolved through the
+# local index) or an inscription id <txid>i<msg_index>; only the id goes on
+# chain. Display-only: /content of the new counter is the reference text
+# itself, and its target must be an indexed counter to render. A JSON body
+# {"delegate": "<id>", ...traits} does the same with per-edition metadata —
+# that form is just a normal --file inscribe of the JSON.
+counters wallet --name mywallet inscribe --delegate 121
+counters wallet --name mywallet inscribe --delegate <txid>i0 --asset MYEDITION
 # pick the taproot envelope style (default: counterparty, Counterparty's own)
 counters wallet --name mywallet inscribe --file cat.png --envelope counterparty/ord  # also an ordinals inscription
 # XCP on one address, BTC on another? Counterparty takes the issuance fee from the

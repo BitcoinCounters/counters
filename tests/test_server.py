@@ -280,3 +280,87 @@ def test_inscription_id_addressing():
         assert status == 404
     finally:
         httpd.shutdown()
+
+
+def _seed_delegate_store(data_dir: str) -> Config:
+    """A target counter plus one delegate of each §5.5 form, an unresolved
+    one, and a delegate-of-a-delegate for the single-hop rule."""
+    cfg = Config()
+    cfg.data_dir = data_dir
+    store = Store(cfg)
+    token = "aa" * 32 + "i0"
+
+    def rec(n, asset, body, txid):
+        sha = store.store_blob(body)
+        store.add_counter(n, CounterRecord(
+            asset=asset, asset_id=str(900 + n), asset_longname=None,
+            kind="issuance", content_type="text/plain", content_type_raw=None,
+            content_sha256=sha, content_length=len(body),
+            is_pointer_like=False, mint_txid=txid, msg_index=0,
+            block_index=902005 + n, cp_tx_index=n + 1, source="bc1pstored",
+            divisible=False, supply=1,
+        ))
+
+    rec(0, "TARGET", b"hello-target-bytes", "aa" * 32)
+    rec(1, "EDBARE", token.encode(), "b1" * 32)
+    rec(2, "EDTAG", f"Delegate: {token}".encode(), "b2" * 32)
+    rec(3, "EDJSON",
+        json.dumps({"delegate": token, "name": "Ed 3"}).encode(), "b3" * 32)
+    rec(4, "EDLOST", ("ee" * 32 + "i0").encode(), "b4" * 32)
+    rec(5, "EDHOP", ("b1" * 32 + "i0").encode(), "b5" * 32)  # → the delegate #1
+    store.set_last_height(902011, None)
+    store.commit()
+    store.close()
+    return cfg
+
+
+def test_delegation():
+    """§5.5 + rule 9: all three body forms resolve inside the index, one hop,
+    display-only — /content keeps the token, /delegate serves the target,
+    /preview renders through the hop and ?raw=1 shows the canonical bytes."""
+    tmp = tempfile.mkdtemp()
+    cfg = _seed_delegate_store(tmp)
+    appmod._live_asset = lambda config, asset: {}
+    appmod._asset_burned = lambda config, asset: None
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), appmod.Handler)
+    httpd.config = cfg
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    token = "aa" * 32 + "i0"
+    try:
+        # every form resolves to the target in the API record
+        for n in (1, 2, 3):
+            status, _, body = _get(base, f"/counter/{n}")
+            d = json.loads(body)["delegate"]
+            assert d == {"id": token, "number": 0, "content_type": "text/plain"}, n
+        assert json.loads(_get(base, "/counter/0")[2])["delegate"] is None
+
+        # /delegate/<n>: the target's bytes; /content/<n>: the token, always
+        for n in (1, 2, 3):
+            status, _, body = _get(base, f"/delegate/{n}")
+            assert (status, body) == (200, b"hello-target-bytes"), n
+        assert _get(base, "/content/1")[2] == token.encode()
+        status, _, body = _get(base, "/delegate/0")
+        assert status == 404 and b"not a delegate" in body
+
+        # unresolved: named event isn't indexed — token shows, nothing serves
+        d = json.loads(_get(base, "/counter/4")[2])["delegate"]
+        assert d["number"] is None and d["id"] == "ee" * 32 + "i0"
+        status, _, body = _get(base, "/delegate/4")
+        assert status == 404 and b"not an indexed counter" in body
+
+        # /preview renders through the hop; ?raw=1 is the canonical bytes
+        status, _, body = _get(base, "/preview/1")
+        assert status == 200 and b"hello-target-bytes" in body
+        status, _, body = _get(base, "/preview/1?raw=1")
+        assert status == 200 and token.encode() in body
+        assert b"hello-target-bytes" not in body
+
+        # single hop: a delegate's delegate resolves ONCE — #5 renders #1's
+        # canonical bytes (the aa… token, as text), never the target behind it
+        status, _, body = _get(base, "/preview/5")
+        assert status == 200 and token.encode() in body
+        assert b"hello-target-bytes" not in body
+        assert json.loads(_get(base, "/counter/5")[2])["delegate"]["number"] == 1
+    finally:
+        httpd.shutdown()

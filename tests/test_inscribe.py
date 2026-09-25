@@ -306,3 +306,34 @@ def test_commit_child_refuses_when_change_cannot_pay():
     hex_, _v, _f, err = _commit_child(_ChildBtc(), "w", _commit_dec(change_sat=900),
                                       154, _SRC, 3)
     assert hex_ is None and "cannot pay" in err
+
+
+def test_resolve_delegate():
+    """--delegate: a number resolves through the local index to an inscription
+    id (only the id goes on chain); an id passes through canonicalised; a bare
+    txid or junk is refused."""
+    import tempfile
+
+    from counters.commands.inscribe import _resolve_delegate
+    from counters.config import Config
+    from counters.store import CounterRecord, Store
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Config()
+        cfg.data_dir = tmp
+        store = Store(cfg)
+        sha = store.store_blob(b"x")
+        store.add_counter(0, CounterRecord(
+            asset="TESTASSET", asset_id="1", asset_longname=None,
+            kind="issuance", content_type="text/plain", content_type_raw=None,
+            content_sha256=sha, content_length=1, is_pointer_like=False,
+            mint_txid="ab" * 32, msg_index=0, block_index=902005,
+            cp_tx_index=1, source="bc1p", divisible=False, supply=1,
+        ))
+        store.commit()
+        store.close()
+        assert _resolve_delegate(cfg, "0") == "ab" * 32 + "i0"
+        assert _resolve_delegate(cfg, "5") is None            # not indexed
+        assert _resolve_delegate(cfg, ("AB" * 32) + "i3") == "ab" * 32 + "i3"
+        assert _resolve_delegate(cfg, "ab" * 32) is None      # bare txid
+        assert _resolve_delegate(cfg, "XDUALS") is None       # not an id

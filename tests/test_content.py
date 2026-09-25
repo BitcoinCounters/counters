@@ -6,6 +6,8 @@ Zero-dependency runner: python tests/test_content.py   (or via pytest)
 
 from __future__ import annotations
 
+import json
+
 import hashlib
 import os
 import sys
@@ -152,3 +154,42 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print(f"ok  {name}")
+
+
+# --- delegate-like content (§5.5) -------------------------------------------
+
+def test_delegate_event_accepts_all_three_forms():
+    from counters.content import delegate_event
+    t = "ab" * 32 + "i0"
+    ev = ("ab" * 32, 0)
+    assert delegate_event(t.encode(), True) == ev                       # bare
+    assert delegate_event(f"  {t}\n".encode(), True) == ev
+    assert delegate_event(f"DELEGATE:{t}".encode(), True) == ev         # tagged
+    assert delegate_event(f"Delegate: {t}".encode(), True) == ev        # case/ws
+    assert delegate_event(("AB" * 32 + "i0").encode(), True) == ev      # normalised
+    body = json.dumps({"delegate": t, "name": "Ed 3",
+                       "traits": {"eyes": "laser"}}).encode()
+    assert delegate_event(body, True) == ev                             # json
+    assert delegate_event(json.dumps({"delegate": "cd" * 32 + "i7"}).encode(),
+                          True) == ("cd" * 32, 7)
+
+
+def test_delegate_event_refuses_everything_else():
+    from counters.content import DELEGATE_MAX_BYTES, delegate_event
+    t = "ab" * 32 + "i0"
+    bad = [
+        ("ab" * 32).encode(),                          # bare txid: no index
+        b"42",                                         # a number is not on chain
+        f'"{t}"'.encode(),                             # top-level JSON string
+        json.dumps([t]).encode(),                      # array
+        json.dumps({"delegate": 42}).encode(),         # non-string member
+        json.dumps({"meta": {"delegate": t}}).encode(),  # nested only
+        b"DELEGATE:" + ("ab" * 32).encode(),           # tagged bare txid
+        b"{delegate:" + t.encode() + b"}",             # not JSON
+        b"\xff\xfe",                                   # not UTF-8
+    ]
+    for body in bad:
+        assert delegate_event(body, True) is None, body
+    assert delegate_event(t.encode(), False) is None   # binary MIME never
+    huge = b"{" + b" " * DELEGATE_MAX_BYTES + b"}"
+    assert delegate_event(huge, True) is None          # over the parse cap
