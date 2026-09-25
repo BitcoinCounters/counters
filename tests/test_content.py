@@ -223,3 +223,14 @@ def test_delegate_display_fragment():
     # non-string image: ignored
     body = json.dumps({"delegate": t, "image": ["https://x.example/f#e-1"]})
     assert delegate_ref(body.encode(), True) == (*ev, None)
+    # `edition` member: a positive integer becomes edition-<n>
+    body = json.dumps({"delegate": t, "edition": 69})
+    assert delegate_ref(body.encode(), True) == (*ev, "edition-69")
+    # ...but only as the last fallback: image's fragment wins over it
+    body = json.dumps({"delegate": t, "edition": 69,
+                       "image": f"https://x.example/{t}#edition-2"})
+    assert delegate_ref(body.encode(), True) == (*ev, "edition-2")
+    # non-conforming editions are ignored, never repaired
+    for edition in (0, -1, 69.0, "69", True, 10**9 + 1, None):
+        body = json.dumps({"delegate": t, "edition": edition})
+        assert delegate_ref(body.encode(), True) == (*ev, None), edition

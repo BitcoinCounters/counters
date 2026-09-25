@@ -259,10 +259,13 @@ edition per fragment) shows the named variant. Allowed characters are RFC
 (`A–Z a–z 0–9 ! $ & ( ) * + , - . / : ; = ? @ _ ~`), 1–255 of them; a
 malformed fragment on the reference makes the body **not a delegate**
 (strict, no repair). In the JSON form a reference without a fragment
-inherits the fragment of an `image` string member when one is present and
-well-formed (the ordinals-marketplace convention of pointing `image` at the
-target's content URL plus a variant fragment); a malformed `image` fragment
-is simply ignored — that member is foreign metadata, not the reference. The
+inherits, in order: the fragment of an `image` string member when one is
+present and well-formed (the ordinals-marketplace convention of pointing
+`image` at the target's content URL plus a variant fragment), then an
+`edition` member — a positive integer, at most 10^9 — as `edition-<n>`, the
+anchor-naming convention of `:target`-styled edition SVGs. A malformed
+`image` fragment or a non-conforming `edition` is simply ignored — those
+members are foreign metadata, not the reference. The
 fragment is display metadata like the reference itself: it never affects
 resolution, validity, content bytes, or the rolling hash.
 
