@@ -86,7 +86,7 @@ counters wallet --name me inscribe --file cat.png --asset MYCOUNTER
 
 A Counterparty message records a counter when all hold:
 
-1. it is **valid Counterparty state** — an issuance with `status = valid` (any variant), or a fairminter deploy. Fairmints never qualify (the collection gets one counter at deploy); broadcasts are excluded;
+1. it is **valid Counterparty state, authored by the transaction's own message** — an issuance with `status = valid` (any variant), or a fairminter deploy. Fairmints never qualify (the collection gets one counter at deploy); broadcasts are excluded; and rows Counterparty *derives* during block processing — an LP token issued at a fairminter close or pool deposit, lifecycle rows copying the deploy's description — never qualify: every `asset_events` tag on the row must be message-authored (`creation`, `reissuance`, `transfer`, `change_description`, `lock_quantity`, `lock_description`, `reset`), with unknown tags failing closed;
 2. its **description is non-empty** — the content is exactly what Counterparty consensus stores as the asset's description (1 byte is enough);
 3. the description is **carried in a taproot envelope** — the transaction is a reveal showing the literal, unencrypted `CNTRPRTY` marker in its `OP_RETURN`. Classic `OP_RETURN`-carried descriptions never count.
 

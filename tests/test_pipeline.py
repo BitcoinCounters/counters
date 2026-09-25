@@ -42,13 +42,13 @@ def classic_tx(txid: str) -> dict:
 
 
 def issuance(txid, tx_index, desc="hello", *, status="valid", fair_minting=False,
-             asset="TESTASSET", mime=None, msg_index=0):
+             asset="TESTASSET", mime=None, msg_index=0, asset_events=""):
     return {
         "tx_hash": txid, "tx_index": tx_index, "msg_index": msg_index,
         "status": status, "fair_minting": fair_minting, "asset": asset,
         "asset_longname": None, "description": desc, "mime_type": mime,
         "issuer": "bc1qissuer", "source": "bc1qissuer", "fee_paid": 0,
-        "divisible": False,
+        "divisible": False, "asset_events": asset_events,
     }
 
 
@@ -141,6 +141,36 @@ def test_rules_filter_candidates():
         assert row["mint_txid"] == "t-valid"
         assert row["kind"] == "issuance"
         assert row["cp_tx_index"] == 6
+        idx.close()
+
+
+def test_derived_events_never_qualify():
+    """R2 (amended, A1): a counter must come from an event the transaction's
+    own message wrote. Rows Core derives during block processing — LP-token
+    issuances at a fairminter close or pool deposit, lifecycle rows copying
+    the deploy's description — are excluded by their asset_events tags even
+    when the transaction they are attributed to IS a taproot reveal, and an
+    unknown tag fails closed. Composed rows — multi-tag or untagged — count."""
+    txs = {t: reveal_tx(t) for t in
+           ("t-lp", "t-lp2", "t-close", "t-mint", "t-unknown", "t-multi", "t-plain")}
+    rows = [
+        issuance("t-lp", 1, desc="LP token for MEME/XCP pool",
+                 asset_events="fairminter_pool_creation"),     # the #163 class
+        issuance("t-lp2", 2, desc="LP token for A/B pool",
+                 asset_events="pool_deposit_mint"),
+        issuance("t-close", 3, desc="x" * 100,                 # copied deploy desc
+                 asset_events="close_fairminter"),
+        issuance("t-mint", 4, desc="x" * 100,                  # final fairmint row,
+                 asset_events="fairmint"),                     # fair_minting=False
+        issuance("t-unknown", 5, asset_events="creation utxo_shuffle"),  # closed
+        issuance("t-multi", 6, asset_events="transfer creation lock_quantity"),
+        issuance("t-plain", 7, asset_events=""),               # untagged composed
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        idx = make_indexer(tmp, FakeBTC(txs), FakeCP({G: rows}))
+        assert idx.process_block(G) == 2
+        assert idx.store.get_counter(0)["mint_txid"] == "t-multi"
+        assert idx.store.get_counter(1)["mint_txid"] == "t-plain"
         idx.close()
 
 
