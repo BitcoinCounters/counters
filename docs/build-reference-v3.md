@@ -250,6 +250,22 @@ A body over **65,536 bytes** is never a delegate, so every implementation
 parses (or refuses) identically. A top-level JSON string or array, a nested
 `delegate` member, a bare txid, or anything else is not a delegate.
 
+**Display fragment.** In any of the three shapes the reference may carry a
+`#<fragment>` suffix — `DELEGATE:<id>#edition-69`, `{"delegate":
+"<id>#edition-69"}` — which a renderer appends to the target's document URL,
+so a target that styles itself by `:target` (an SVG whose CSS selects an
+edition per fragment) shows the named variant. Allowed characters are RFC
+3986's fragment set minus quotes and percent-escapes
+(`A–Z a–z 0–9 ! $ & ( ) * + , - . / : ; = ? @ _ ~`), 1–255 of them; a
+malformed fragment on the reference makes the body **not a delegate**
+(strict, no repair). In the JSON form a reference without a fragment
+inherits the fragment of an `image` string member when one is present and
+well-formed (the ordinals-marketplace convention of pointing `image` at the
+target's content URL plus a variant fragment); a malformed `image` fragment
+is simply ignored — that member is foreign metadata, not the reference. The
+fragment is display metadata like the reference itself: it never affects
+resolution, validity, content bytes, or the rolling hash.
+
 Like §5.3–§5.4 this is **display metadata only**, derived at serve time and
 never indexed: the canonical content bytes, `content_sha256`, and the
 rolling hash remain those of the token/JSON text, and `/content/<n>` always

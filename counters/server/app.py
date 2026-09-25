@@ -44,7 +44,7 @@ from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..ids import format_id
-from ..content import classify_mime_type, delegate_event, sniff_media, stamp_image
+from ..content import classify_mime_type, delegate_ref, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
 from ..store import Store
@@ -323,24 +323,29 @@ def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
 
 
 def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
-    """{'id','number','content_type'} for a delegate-like counter (build ref
-    v3 §5.5): the named event, resolved against the local index ONLY —
-    number/content_type are None while the target is not an indexed counter.
-    None for a non-delegate. Serve-time, like the stamp tag; never indexed."""
+    """{'id','number','content_type','fragment'} for a delegate-like counter
+    (build ref v3 §5.5): the named event, resolved against the local index
+    ONLY — number/content_type are None while the target is not an indexed
+    counter. The fragment is the display fragment the explorer appends to the
+    target's preview URL (an SVG edition selector); charset-validated in
+    content.py, so it is URL- and attribute-safe as-is. None for a
+    non-delegate. Serve-time, like the stamp tag; never indexed."""
     ct = row["content_type"] or "text/plain"
     if classify_mime_type(ct, row["block_index"]) != "text":
         return None
     blob = store.read_blob(row["content_sha256"])
     if blob is None:
         return None
-    event = delegate_event(blob, textual=True)
-    if event is None:
+    ref = delegate_ref(blob, textual=True)
+    if ref is None:
         return None
-    target = store.get_counter_by_event(*event)
+    txid, msg_index, fragment = ref
+    target = store.get_counter_by_event(txid, msg_index)
     return {
-        "id": format_id(*event),
+        "id": format_id(txid, msg_index),
         "number": target["number"] if target is not None else None,
         "content_type": target["content_type"] if target is not None else None,
+        "fragment": fragment,
     }
 
 
@@ -455,8 +460,8 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "size": row["content_length"],
         "is_pointer_like": bool(row["is_pointer_like"]),
         "stamp_mime": stamp[1] if stamp else None,
-        # §5.5: the event a delegate body names — {'id','number','content_type'},
-        # number None while unresolved — or null for a non-delegate.
+        # §5.5: the event a delegate body names — {'id','number','content_type',
+        # 'fragment'}, number None while unresolved — or null for a non-delegate.
         "delegate": _delegate_info(store, row),
         # Envelope style is computed from the reveal tx (a bitcoind fetch), so
         # it is filled only on the single-counter endpoint; null in lists

@@ -313,7 +313,10 @@ def main(argv: list[str] | None = None) -> int:
                              "event, and explorers render that counter's file in its "
                              "place (display-only; ~30 bytes on chain). Takes an "
                              "inscription id, or a counter number resolved through "
-                             "the local index — only the id ever goes on chain")
+                             "the local index — only the id ever goes on chain. "
+                             "A #fragment suffix (218#edition-69) is carried onto "
+                             "the rendered document's URL, selecting a variant of "
+                             "a :target-styled SVG")
     p_insc.add_argument("--asset",
                         help="named asset or PARENT.CHILD subasset; omit for free numeric. "
                              "An EXISTING asset you own gets the content attached via a "

@@ -89,8 +89,11 @@ textual body in one of §5.5's three shapes (a bare inscription id,
 `DELEGATE:<id>`, or a JSON object with a `delegate` member) names another
 counter's event. If that event **is an indexed counter**, the frame, preview,
 card and og:image show *that* counter's content, with a delegate badge and a
-link; `/delegate/<n>` serves the target's bytes as a derived view (short
-cache, rule 7). If it is not, show the body as text with an unresolved badge
+link — the frame's sandbox and media handling follow the **target's** type,
+and a §5.5 display fragment is appended to the frame's URL so a
+`:target`-styled SVG shows the named variant; `/delegate/<n>` serves the
+target's bytes as a derived view (short cache, rule 7). If it is not, show
+the body as text with an unresolved badge
 — never an error. **One hop**: a delegate naming a delegate renders the
 middle counter's token as text. `/content/<n>` always returns the delegate's
 own canonical bytes (rule 1). This is not an exception to rule 4: no byte

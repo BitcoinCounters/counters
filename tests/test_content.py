@@ -193,3 +193,33 @@ def test_delegate_event_refuses_everything_else():
     assert delegate_event(t.encode(), False) is None   # binary MIME never
     huge = b"{" + b" " * DELEGATE_MAX_BYTES + b"}"
     assert delegate_event(huge, True) is None          # over the parse cap
+
+
+def test_delegate_display_fragment():
+    from counters.content import delegate_ref
+    t = "ab" * 32 + "i0"
+    ev = ("ab" * 32, 0)
+    # on the reference itself, in every shape
+    assert delegate_ref(f"{t}#edition-69".encode(), True) == (*ev, "edition-69")
+    assert delegate_ref(f"DELEGATE:{t}#edition-69".encode(), True) == (*ev, "edition-69")
+    assert delegate_ref(json.dumps({"delegate": f"{t}#edition-69"}).encode(),
+                        True) == (*ev, "edition-69")
+    # absent → None; JSON inherits the `image` member's fragment
+    assert delegate_ref(t.encode(), True) == (*ev, None)
+    body = json.dumps({"delegate": t,
+                       "image": f"https://ordinals.com/content/{t}#edition-69"})
+    assert delegate_ref(body.encode(), True) == (*ev, "edition-69")
+    # the reference's own fragment wins over image's
+    body = json.dumps({"delegate": f"{t}#edition-1",
+                       "image": f"https://x.example/{t}#edition-2"})
+    assert delegate_ref(body.encode(), True) == (*ev, "edition-1")
+    # malformed on the reference: not a delegate at all (strict, no repair)
+    assert delegate_ref(f'{t}#bad"frag'.encode(), True) is None
+    assert delegate_ref(f"{t}#".encode(), True) is None
+    assert delegate_ref((t + "#" + "x" * 256).encode(), True) is None
+    # malformed on image: ignored — foreign metadata, best-effort
+    body = json.dumps({"delegate": t, "image": 'https://x.example/f#bad"frag'})
+    assert delegate_ref(body.encode(), True) == (*ev, None)
+    # non-string image: ignored
+    body = json.dumps({"delegate": t, "image": ["https://x.example/f#e-1"]})
+    assert delegate_ref(body.encode(), True) == (*ev, None)
