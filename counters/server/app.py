@@ -44,7 +44,7 @@ from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..ids import format_id
-from ..content import classify_mime_type, sniff_media, stamp_image
+from ..content import classify_mime_type, delegate_event, sniff_media, stamp_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
 from ..store import Store
@@ -322,6 +322,38 @@ def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
     return stamp_image(blob, textual=True)
 
 
+def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
+    """{'id','number','content_type'} for a delegate-like counter (build ref
+    v3 §5.5): the named event, resolved against the local index ONLY —
+    number/content_type are None while the target is not an indexed counter.
+    None for a non-delegate. Serve-time, like the stamp tag; never indexed."""
+    ct = row["content_type"] or "text/plain"
+    if classify_mime_type(ct, row["block_index"]) != "text":
+        return None
+    blob = store.read_blob(row["content_sha256"])
+    if blob is None:
+        return None
+    event = delegate_event(blob, textual=True)
+    if event is None:
+        return None
+    target = store.get_counter_by_event(*event)
+    return {
+        "id": format_id(*event),
+        "number": target["number"] if target is not None else None,
+        "content_type": target["content_type"] if target is not None else None,
+    }
+
+
+def _effective_row(store: Store, row: sqlite3.Row) -> sqlite3.Row:
+    """The row display draws from: a resolved delegate's target (rule 9, ONE
+    hop — a delegate's own delegate is not followed, so its token shows as
+    text), else the row itself. /content/<n> is never routed through this."""
+    info = _delegate_info(store, row)
+    if info is None or info["number"] is None or info["number"] == row["number"]:
+        return row
+    return store.get_counter(info["number"]) or row
+
+
 # Rendering a social image is seconds of CPU for a large PNG, and crawlers
 # fire several requests at once for a freshly shared link. One lock per cache
 # key means the first request renders and the rest wait for its file.
@@ -398,7 +430,7 @@ def render_social(store: Store, row: sqlite3.Row) -> bytes:
     """The og:image bytes for one counter: its own picture, re-encoded to a
     size and format crawlers show large, or the rendered card when it hasn't
     got one that can be drawn (including SVGs that script their own art)."""
-    source = _picture_source(store, row)
+    source = _picture_source(store, _effective_row(store, row))
     if source is not None:
         out = picture.render(*source)
         if out is not None:
@@ -423,6 +455,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "size": row["content_length"],
         "is_pointer_like": bool(row["is_pointer_like"]),
         "stamp_mime": stamp[1] if stamp else None,
+        # §5.5: the event a delegate body names — {'id','number','content_type'},
+        # number None while unresolved — or null for a non-delegate.
+        "delegate": _delegate_info(store, row),
         # Envelope style is computed from the reveal tx (a bitcoind fetch), so
         # it is filled only on the single-counter endpoint; null in lists
         # (unknown, not "no"). Server-determined, never indexed.
@@ -479,7 +514,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._block(int(m.group(1)))
             m = re.fullmatch(rf"/preview/({_IDENT})", path)
             if m:
-                return self._preview(m.group(1))
+                return self._preview(m.group(1),
+                                     raw="raw" in parse_qs(parsed.query))
+            m = re.fullmatch(rf"/delegate/({_IDENT})", path)
+            if m:
+                return self._delegate(m.group(1))
             m = re.fullmatch(rf"/content/({_IDENT})", path)
             if m:
                 return self._content(m.group(1))
@@ -684,6 +723,33 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             store.close()
 
+    def _delegate(self, ident: str) -> None:
+        """The bytes a delegate's target committed — the one-hop resolution
+        of a §5.5 body, from the local index only. /content/<n> keeps
+        returning the delegate's own canonical bytes (rule 1); this is the
+        rendered counterpart, cached briefly like every derived view (rule
+        7), since an unresolved target can resolve when it gets indexed."""
+        store = Store(self.config)
+        try:
+            row = store.find(ident)
+            if row is None:
+                return self._send(404, "text/plain; charset=utf-8", b"counter not found")
+            info = _delegate_info(store, row)
+            if info is None:
+                return self._send(404, "text/plain; charset=utf-8", b"not a delegate")
+            if info["number"] is None:
+                return self._send(404, "text/plain; charset=utf-8",
+                                  b"delegate target is not an indexed counter")
+            target = store.get_counter(info["number"])
+            blob = store.read_blob(target["content_sha256"]) if target is not None else None
+            if blob is None:
+                return self._send(404, "text/plain; charset=utf-8", b"content unavailable")
+            ctype = sniff_media(blob) or target["content_type"] or "application/octet-stream"
+            self._send(200, ctype, blob, max_age=DERIVED_MAX_AGE,
+                       extra_headers=CONTENT_HEADERS, ranged=True)
+        finally:
+            store.close()
+
     def _social(self, ident: str) -> None:
         """The og:image for /c/<number> — see `render_social`.
 
@@ -731,16 +797,39 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             log.debug("could not cache %s", path, exc_info=True)
 
-    def _preview(self, ident: str) -> None:
+    def _preview(self, ident: str, raw: bool = False) -> None:
         """ord-style preview: raw content for HTML/SVG (rendered as a document
         inside the sandboxed iframe), else a confined same-origin wrapper page
-        that loads /content/<n> via a native element."""
+        that loads /content/<n> via a native element.
+
+        ?raw=1 shows the canonical bytes as inert escaped text instead of any
+        derived view — no delegate hop, no stamp decode, no live document —
+        for any textual body (the explorer's raw toggle). Non-textual bodies
+        have no raw text form and keep the normal preview."""
         store = Store(self.config)
         try:
             row = store.find(ident)
             if row is None:
                 return self._send(404, "text/html; charset=utf-8",
                                   b"<!doctype html><meta charset=utf-8><title>404</title>not found")
+            if raw:
+                declared = row["content_type"] or "text/plain"
+                if classify_mime_type(declared, row["block_index"]) == "text":
+                    blob = store.read_blob(row["content_sha256"])
+                    text = (blob or b"").decode("utf-8", "replace")
+                    doc = preview.wrapper("text", row["number"], "text/plain",
+                                          None, text)
+                    return self._send(
+                        200, "text/html; charset=utf-8", doc.encode("utf-8"),
+                        max_age=DERIVED_MAX_AGE,
+                        extra_headers=[
+                            ("Content-Security-Policy", preview.csp_for("text")),
+                            ("X-Content-Type-Options", "nosniff"),
+                        ],
+                    )
+            else:
+                # Rule 9: a resolved delegate previews as its target.
+                row = _effective_row(store, row)
             blob = store.read_blob(row["content_sha256"])
             # Rule 2: sniff the bytes; a recognized signature wins over the
             # declared type when picking the native element — so #51's Ogg
@@ -803,7 +892,11 @@ class Handler(BaseHTTPRequestHandler):
                 base = f"{proto}://{host}"
                 n = row["number"]
                 name = _display_name(row)
-                ct = _served_type(store, row)
+                # Rule 9: a resolved delegate's link preview carries the
+                # TARGET's picture; page identity (title, url) stays its own.
+                eff = _effective_row(store, row)
+                en = eff["number"]
+                ct = _served_type(store, eff)
                 dims: tuple[int, int] | None = None
                 itype: str | None = None
                 alt = f"Counter #{n} — {name}"
@@ -812,17 +905,17 @@ class Handler(BaseHTTPRequestHandler):
                 # as-is (an animated GIF keeps animating); any other picture
                 # goes through /social, which re-encodes it. Its final size
                 # and format depend on the picture, so none are claimed.
-                stamp = _stamp_payload(store, row)
+                stamp = _stamp_payload(store, eff)
                 if stamp:
                     if picture.serve_as_is(*stamp):
-                        image, itype = f"{base}/stamp/{n}", stamp[1]
+                        image, itype = f"{base}/stamp/{en}", stamp[1]
                     else:
                         image = f"{base}/social/{n}.png"
                 elif _is_raster(ct):
-                    blob = (store.read_blob(row["content_sha256"])
-                            if row["content_length"] <= picture.MAX_BYTES else None)
+                    blob = (store.read_blob(eff["content_sha256"])
+                            if eff["content_length"] <= picture.MAX_BYTES else None)
                     if blob is not None and picture.serve_as_is(blob, ct):
-                        image, itype = f"{base}/content/{n}", ct
+                        image, itype = f"{base}/content/{en}", ct
                     else:
                         image = f"{base}/social/{n}.png"
                 elif picture.is_svg(ct):

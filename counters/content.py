@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 
 from .config import EXTENDED_MIME_GATE
+from .ids import parse_id
 
 # Counterparty's fixed textual application/* list (helpers.py
 # TEXTUAL_APPLICATION_MIME_TYPES, verbatim). Post-gate classification also
@@ -148,6 +150,45 @@ def is_pointer_like(content: bytes, textual: bool) -> bool:
     except UnicodeDecodeError:
         return False
     return bool(_POINTER_RE.match(text)) and len(text.split()) == 1
+
+
+# Delegate-like content (build ref v3 §5.5): the body names another
+# counter's event, and a server renders that counter's content in its place
+# (display rule 9 — resolved inside the index only, one hop, never fetched).
+# Display metadata only: it never affects validity, numbering, content
+# bytes, or the rolling hash. Three shapes, all strict (no repair):
+#
+#   1. bare:    <txid>i<msg_index>                    — the inscription id alone
+#   2. tagged:  DELEGATE:<txid>i<msg_index>           — case-insensitive prefix
+#   3. json:    {"delegate": "<txid>i<msg_index>", …} — a JSON object; every
+#               other member is the counter's own uninterpreted metadata
+#
+# A body over DELEGATE_MAX_BYTES is never a delegate, so every server parses
+# (or refuses) identically without reading unbounded JSON.
+_DELEGATE_PREFIX = "delegate:"
+DELEGATE_MAX_BYTES = 65536
+
+
+def delegate_event(content: bytes, textual: bool) -> tuple[str, int] | None:
+    """(txid, msg_index) of the event a delegate-like body names, else None.
+    Resolution (is that event an indexed counter?) is the caller's business —
+    this only recognises the shape."""
+    if not textual or len(content) > DELEGATE_MAX_BYTES:
+        return None
+    try:
+        text = content.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if text[:1] == "{":
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            return None
+        target = obj.get("delegate") if isinstance(obj, dict) else None
+        return parse_id(target) if isinstance(target, str) else None
+    if text[:len(_DELEGATE_PREFIX)].lower() == _DELEGATE_PREFIX:
+        text = text[len(_DELEGATE_PREFIX):]
+    return parse_id(text)
 
 
 # Stamp-like content (build ref v3 §5.4): a Bitcoin Stamps payload —

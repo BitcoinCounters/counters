@@ -84,6 +84,25 @@ HTML and SVG as their source, and formats with nothing to draw as their name.
 The site logo is no longer used as a fallback; a preview that shows the wrong
 counter is worse than one that shows less of the right one.
 
+**9 — A delegate renders its target, resolved only inside the index.** A
+textual body in one of §5.5's three shapes (a bare inscription id,
+`DELEGATE:<id>`, or a JSON object with a `delegate` member) names another
+counter's event. If that event **is an indexed counter**, the frame, preview,
+card and og:image show *that* counter's content, with a delegate badge and a
+link; `/delegate/<n>` serves the target's bytes as a derived view (short
+cache, rule 7). If it is not, show the body as text with an unresolved badge
+— never an error. **One hop**: a delegate naming a delegate renders the
+middle counter's token as text. `/content/<n>` always returns the delegate's
+own canonical bytes (rule 1). This is not an exception to rule 4: no byte
+comes from off chain — resolution is a lookup in the index the server
+already holds, and nothing is ever fetched.
+
+**10 — Any derived view carries a raw toggle.** Wherever the frame shows a
+*derived* rendering — a delegate's target (rule 9), a stamp's decoded image
+(rule 3), a live HTML/SVG document (rule 5) — the detail view offers a
+toggle to the canonical bytes as inert escaped text (`/preview/<n>?raw=1`).
+The raw view is script-free and never executes the content.
+
 ## What each counter renders (#0–#86)
 
 Renders-as — **image / audio / html / text / pointer**. Status — **OK**:

@@ -92,6 +92,17 @@ A Counterparty message records a counter when all hold:
 
 Non-rules: MIME type never gates validity, duplicate content is allowed, and there is no minimum size. Sweeps and ownership transfers copy descriptions rather than create them — Counterparty refuses taproot encoding for them, so they can never count. Validity is Counterparty's verdict, not an explorer's listing.
 
+## Delegation {#delegate}
+
+A counter whose body **names another counter's event** renders that counter's content in its place — one file inscribed once, referenced by any number of cheap (~30–90 byte) counters. The reference is an **inscription id**, never a counter number (numbers are this explorer's handle, not on-chain data). Three body shapes count, all strict: the bare id (`<txid>i<msg_index>`), the tagged form `DELEGATE:<txid>i<msg_index>`, or a JSON object whose `delegate` member holds the id — every other JSON member is the edition's own metadata (traits, a name), carried untouched. Resolution is display-only and happens inside this index: the target either is an indexed counter (rendered, badged, linked) or the body shows as text. One hop only, and `/content/<n>` always returns the delegate's own bytes; the **raw** toggle on the counter page shows them in place of the rendered view.
+
+```
+# delegate to a counter you saw in the explorer (number resolves locally;
+# only the inscription id goes on chain)
+counters wallet --name me inscribe --delegate 121
+counters wallet --name me inscribe --delegate <txid>i0 --asset MYEDITION
+```
+
 ## Reinscription {#reinscribe}
 
 There is one counter per inscription event, not per asset. To attach new content to an asset you own, reinscribe it with a fresh taproot-carried description — the reinscription earns its own permanent number. One asset can hold many counters; the lowest-numbered is the *original*, and the asset's page lists them all. Locks, transfers, and destroys never renumber anything.
@@ -112,6 +123,8 @@ This explorer reads these endpoints from `counters server`:
 - `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing
 - `GET /preview/<number|inscription id>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
 - `GET /stamp/<number|inscription id>` — the decoded image of a `STAMP:` counter
+- `GET /delegate/<number|inscription id>` — the bytes a delegate's target committed (one hop, from this index only); 404 for a non-delegate or an unresolved target
+- `GET /preview/<number|inscription id>?raw=1` — the canonical on-chain bytes as inert text (the raw toggle) instead of any derived view
 
 Every counter record carries its **inscription id**: `<reveal txid>i<msg_index>` — the event's on-chain identity, in ordinals' syntax. The index is Counterparty's per-transaction event index (0 for every counter to date); for a counterparty + ord counter the string is byte-identical to the ordinals inscription id of the same reveal, so ord tooling can dereference it too. Numbers are this lens's handle; the inscription id means the same thing to any reader.
 
