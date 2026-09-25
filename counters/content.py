@@ -170,7 +170,8 @@ def is_pointer_like(content: bytes, textual: bool) -> bool:
 # the target's document URL at render time, so a target that styles itself by
 # `:target` (an SVG edition selector) shows the named variant. In the JSON
 # form a missing fragment falls back to the fragment of an `image` string
-# member (the ordinals-marketplace convention). RFC 3986 fragment characters
+# member (the ordinals-marketplace convention), then to an `edition` integer
+# member as `edition-<n>`. RFC 3986 fragment characters
 # minus quotes and percent-escapes, so the token drops into a URL and an HTML
 # attribute untouched; a malformed fragment on the reference itself makes the
 # body not a delegate (strict, no repair), while a malformed `image` fragment
@@ -222,6 +223,15 @@ def delegate_ref(content: bytes, textual: bool) -> tuple[str, int, str | None] |
                 cand = image.partition("#")[2]
                 if _FRAGMENT_RE.match(cand):
                     frag = cand
+        if frag is None:
+            # `edition` member: `"edition": 69` → `edition-69`, the anchor
+            # naming of :target-styled edition SVGs. A positive integer only
+            # (bool is an int in Python — excluded), bounded so the fragment
+            # regex's length cap can never trip.
+            edition = obj.get("edition")
+            if (isinstance(edition, int) and not isinstance(edition, bool)
+                    and 0 < edition <= 10**9):
+                frag = f"edition-{edition}"
         return (*event, frag)
     if text[:len(_DELEGATE_PREFIX)].lower() == _DELEGATE_PREFIX:
         text = text[len(_DELEGATE_PREFIX):]
