@@ -13,6 +13,7 @@ unspent), then ask Counterparty Core for each address's balances.
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -642,8 +643,46 @@ def cmd_wallet_rescan(config: Config, name: str, *, start_height: int | None = N
     return 0
 
 
+def _open_index(config: Config) -> Store | None:
+    """The local counter index, for the balance views' counter column — or
+    None when nothing has been indexed here. A balance is a read: it works
+    without an index, and must not create an empty one as a side effect."""
+    if not config.db_path.is_file():
+        return None
+    try:
+        return Store(config)
+    except sqlite3.Error:
+        return None
+
+
+def _counter_column(store: Store | None, asset: str) -> str:
+    """`counter #1,4,7` — every counter on `asset`, oldest first (an asset
+    accumulates one per qualifying event, N6) — or empty when it has none."""
+    if store is None:
+        return ""
+    numbers = [str(r["number"]) for r in store.get_counters_by_asset(asset)]
+    return "counter #" + ",".join(numbers) if numbers else ""
+
+
+def _asset_line(name: str, value: str, counters: str, width: int = 0) -> str:
+    """One asset row: name, its value padded to `width` so the counter column
+    lines up, then the counters. No trailing blanks when there are none."""
+    return f"  {name:<28} {value:<{width}}  {counters}".rstrip()
+
+
 def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
                        addresses: int = 20, detailed: bool = False) -> int:
+    store = _open_index(config)
+    try:
+        return _wallet_balance(config, name, store, no_rescan=no_rescan,
+                               addresses=addresses, detailed=detailed)
+    finally:
+        if store is not None:
+            store.close()
+
+
+def _wallet_balance(config: Config, name: str, store: Store | None, *,
+                    no_rescan: bool, addresses: int, detailed: bool) -> int:
     btc = BitcoindClient(config)
     cp = CounterpartyClient(config)
 
@@ -661,8 +700,8 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
         print(f"checking Counterparty for {len(addrs)} derived addresses "
               f"({addresses}/chain)...")
         if detailed:
-            return _report_addresses(cp, addrs, None)
-        return _report_cp_balances(cp, addrs)
+            return _report_addresses(cp, addrs, None, store)
+        return _report_cp_balances(cp, addrs, store)
 
     try:
         bal = btc.wallet_call(name, "getbalances", [])
@@ -689,8 +728,8 @@ def cmd_wallet_balance(config: Config, name: str, *, no_rescan: bool = False,
             if u.get("address"):
                 btc_by_addr[u["address"]] = (btc_by_addr.get(u["address"], Decimal(0))
                                              + Decimal(str(u["amount"])))
-        return _report_addresses(cp, sorted(addrs), btc_by_addr)
-    return _report_cp_balances(cp, sorted(addrs))
+        return _report_addresses(cp, sorted(addrs), btc_by_addr, store)
+    return _report_cp_balances(cp, sorted(addrs), store)
 
 
 def _fmt_btc(value) -> str:
@@ -708,8 +747,10 @@ def _fmt_qty(raw: int, divisible: bool) -> str:
     return format((Decimal(raw) / COIN).quantize(Decimal("0.00000001")), "f")
 
 
-def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
-    # Aggregate Counterparty balances across the given addresses.
+def _report_cp_balances(cp: CounterpartyClient, addrs: list[str],
+                        store: Store | None = None) -> int:
+    # Aggregate Counterparty balances across the given addresses. With the
+    # local index at hand, each asset also lists the counters it carries.
     totals: dict[str, dict] = {}
     owned: dict[str, str] = {}   # asset -> display name (issuance rights held)
     unreachable = 0
@@ -738,8 +779,11 @@ def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
             pass
     if totals:
         print("\nCounterparty assets:")
+        qtys = {a: _fmt_qty(agg["qty"], agg["divisible"]) for a, agg in totals.items()}
+        width = max(len(q) for q in qtys.values())
         for asset, agg in sorted(totals.items()):
-            print(f"  {agg['name']:<28} {_fmt_qty(agg['qty'], agg['divisible'])}")
+            print(_asset_line(agg["name"], qtys[asset],
+                              _counter_column(store, asset), width))
     elif unreachable:
         # Never let an unreachable oracle read as "you own nothing": while
         # Counterparty catches up its API answers "Counterparty not ready".
@@ -759,12 +803,13 @@ def _report_cp_balances(cp: CounterpartyClient, addrs: list[str]) -> int:
         # a distinct holding.
         print("\nOwnership rights assets (transferable control, independent of supply):")
         for asset, name in sorted(owned.items()):
-            print(f"  {name}")
+            print(f"  {name:<28} {_counter_column(store, asset)}".rstrip())
     return 0
 
 
 def _report_addresses(cp: CounterpartyClient, addrs: list[str],
-                      btc_by_addr: dict[str, Decimal] | None) -> int:
+                      btc_by_addr: dict[str, Decimal] | None,
+                      store: Store | None = None) -> int:
     """Per-address breakdown: every address holding anything — BTC, Counterparty
     assets, issuance rights, an open dispenser, or an open DEX order. Addresses
     with nothing on them are omitted. btc_by_addr is None when the on-chain
@@ -778,7 +823,7 @@ def _report_addresses(cp: CounterpartyClient, addrs: list[str],
     for addr in addrs:
         reachable = True
         totals: dict[str, dict] = {}
-        owned: list[str] = []
+        owned: list[tuple[str, str]] = []   # (display name, asset)
         dispensers: list[str] = []
         orders: list[str] = []
         try:
@@ -792,7 +837,7 @@ def _report_addresses(cp: CounterpartyClient, addrs: list[str],
                     "divisible": bool((r.get("asset_info") or {}).get("divisible")),
                 })
                 agg["qty"] += q
-            owned = [a.get("asset_longname") or a["asset"]
+            owned = [(a.get("asset_longname") or a["asset"], a["asset"])
                      for a in cp.get_address_owned_assets(addr)]
             dispensers = [_describe(d) for d in cp.get_address_dispensers(addr)
                           if int(d.get("status") or 0) in _OPEN]
@@ -818,10 +863,14 @@ def _report_addresses(cp: CounterpartyClient, addrs: list[str],
         print(f"\n{addr}")
         if btc_here:
             print(f"  {'BTC':<28} {_fmt_btc(btc_here)}")
+        qtys = {a: _fmt_qty(agg["qty"], agg["divisible"]) for a, agg in totals.items()}
+        width = max((len(q) for q in qtys.values()), default=0)
         for asset, agg in sorted(totals.items()):
-            print(f"  {agg['name']:<28} {_fmt_qty(agg['qty'], agg['divisible'])}")
-        for asset_name in sorted(owned):
-            print(f"  {asset_name:<28} (ownership rights)")
+            print(_asset_line(agg["name"], qtys[asset],
+                              _counter_column(store, asset), width))
+        for asset_name, asset in sorted(owned):
+            print(_asset_line(asset_name, "(ownership rights)",
+                              _counter_column(store, asset)))
         for line in dispensers:
             print(f"  open dispenser: {line}")
         for line in orders:
