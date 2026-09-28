@@ -212,22 +212,27 @@
   .dots i.arrows{width:12px;height:12px}
   /* Whole block shares large's yellow; its size is what tells them apart. */
   .dots i.big{width:12px;height:12px}
-  /* ---------- filter ----------
-     One switch, in the heading: native only. */
-  .only{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);cursor:pointer;user-select:none;white-space:nowrap}
+  /* ---------- filters ----------
+     Two switches, on a line of their own under the heading. Each takes the
+     colour of what it is about: native green, references neutral. */
+  .filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;margin:-4px 0 16px}
+  .only{--tag:var(--patina);display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);cursor:pointer;user-select:none;white-space:nowrap}
+  .only.refs{--tag:var(--ink)}
   .only:hover{color:var(--ink)}
   .only input{appearance:none;-webkit-appearance:none;margin:0;width:16px;height:16px;border:1px solid var(--faint);border-radius:4px;background:var(--bg2);display:inline-grid;place-content:center;cursor:pointer;transition:.15s;flex:none}
-  .only input::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--patina);box-shadow:0 0 8px var(--patina);transform:scale(0);transition:transform .15s}
-  .only input:checked{border-color:var(--patina)}
+  .only input::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--tag);box-shadow:0 0 8px var(--tag);transform:scale(0);transition:transform .15s}
+  .only input:checked{border-color:var(--tag)}
   .only input:checked::after{transform:scale(1)}
-  .only:has(input:checked){color:var(--patina)}
+  .only:has(input:checked){color:var(--tag)}
   /* The count of what matched, in the odometer's digits; it rolls when it changes. */
   .sechead .meta .meter{vertical-align:middle;gap:2px;margin-right:7px}
   .sechead .meta .meter .d{font-size:12px;width:1.05em;height:1.55em;color:var(--ink)}
   .meter.roll .d{animation:roll .3s cubic-bezier(.2,.8,.2,1)}
   @keyframes roll{from{transform:translateY(-45%);opacity:0}to{transform:none;opacity:1}}
   @media(max-width:620px){
-    .sechead{flex-wrap:wrap;row-gap:10px}
+    /* the heading keeps its rule; what is shown drops to a line of its own */
+    .sechead{flex-wrap:wrap;row-gap:8px}
+    .sechead .meta{flex-basis:100%}
     .only{min-height:40px}
     .only input{width:20px;height:20px}
     .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -381,9 +386,11 @@
 <main id="view-explore">
   <div class="wrap" style="padding-top:30px">
     <div class="synced" id="synced"></div>
-    <div class="sechead"><h2>Counters</h2><div class="rule"></div>
+    <div class="sechead"><h2>Counters</h2><div class="rule"></div><div class="meta" id="latest-meta"></div></div>
+    <div class="filters">
       <label class="only" title="show only counters in Counterparty's own envelope, without an ordinals inscription"><input type="checkbox" id="native-only">native only</label>
-      <div class="meta" id="latest-meta"></div></div>
+      <label class="only refs" title="hide counters whose content is a link to a file, or a reference to another counter's file"><input type="checkbox" id="hide-refs">hide pointers/delegates</label>
+    </div>
     <div class="grid" id="grid"></div>
     <div id="emptystate"></div>
     <div class="pager" id="pager"></div>
@@ -775,14 +782,29 @@ function card(c){
 }
 
 /* ============================================================
-   FILTER — native only
+   FILTERS — native only · hide pointers/delegates
    ============================================================ */
-// Numbers are gap-free over ALL counters, so the native ones cannot be asked
+// Numbers are gap-free over ALL counters, so a filtered set cannot be asked
 // for a page at a time by number. The whole index is small enough to take at
 // once instead (/facets — every counter as the few fields a card needs, ~6 KB
-// on the wire for 500) and is filtered here. The switch lives in the link,
-// #/?only=native[&p=2], so the view can be shared and Back undoes it.
-const NATIVE='#/?only=native';
+// on the wire for 500) and is filtered here. The switches live in the link,
+// #/?only=native&hide=pointer,delegate[&p=2], so a view can be shared and
+// Back undoes a tick.
+function parseFilters(q){
+  const p=new URLSearchParams(q||''), hide=(p.get('hide')||'').split(',');
+  return {native:p.get('only')==='native',
+          refs:hide.includes('pointer')||hide.includes('delegate'),
+          page:Math.max(0,(parseInt(p.get('p'),10)||1)-1)};
+}
+function filterHash(F,page){
+  const q=[];
+  if(F.native)q.push('only=native');
+  if(F.refs)q.push('hide=pointer,delegate');
+  if(!q.length)return '#/';
+  if(page)q.push('p='+(page+1));
+  return '#/?'+q.join('&');
+}
+const shows=(c,F)=>(!F.native||c.envelope==='counterparty')&&(!F.refs||!(c.delegate||c.is_pointer_like));
 let FACETS=null, facetsAt=0, facetsLoading=null;
 function loadFacets(){
   if(!API)return Promise.resolve([]);
@@ -801,7 +823,8 @@ function loadFacets(){
     })
     .finally(()=>{facetsLoading=null;}));
 }
-el('native-only').addEventListener('change',e=>go(e.target.checked?NATIVE:'#/'));
+for(const id of ['native-only','hide-refs'])el(id).addEventListener('change',()=>
+  go(filterHash({native:el('native-only').checked,refs:el('hide-refs').checked})));
 
 /* ============================================================
    VIEWS
@@ -834,10 +857,10 @@ function showSynced(st){
 let lastStatus=null,lastStatusAt=0;
 const statusSoon=()=>lastStatus&&Date.now()-lastStatusAt<15000?Promise.resolve(lastStatus):getStatus();
 
-async function renderNative(page){
+async function renderFiltered(F){
   const me=++nav;
   showView('explore');
-  el('native-only').checked=true;
+  el('native-only').checked=F.native; el('hide-refs').checked=F.refs;
   el('grid').innerHTML=skeleton(24);
   el('emptystate').innerHTML='';
   el('latest-meta').textContent='loading…';
@@ -859,17 +882,17 @@ async function renderNative(page){
     if(me!==nav)return;
   }
   showSynced(st);
-  const list=all.filter(c=>c.envelope==='counterparty').reverse();   // newest first
-  const pages=Math.max(1,Math.ceil(list.length/PAGE)), cur=Math.min(page,pages-1);
+  const list=all.filter(c=>shows(c,F)).reverse();   // newest first
+  const pages=Math.max(1,Math.ceil(list.length/PAGE)), cur=Math.min(F.page,pages-1);
   el('grid').innerHTML=list.slice(cur*PAGE,(cur+1)*PAGE).map(c=>card(c)).join('');
   el('pager').classList.remove('busy');
   thumbsWatch(el('grid'));
   el('latest-meta').innerHTML=`<span class="meter${list.length!==lastTally?' roll':''}">${[...list.length.toLocaleString('en-US')].map(ch=>ch===','?'<span class="sep">,</span>':`<span class="d">${ch}</span>`).join('')}</span>`
-    +`native of ${all.length.toLocaleString('en-US')}${pages>1?` · page ${cur+1} of ${pages}`:''}`;
+    +`of ${all.length.toLocaleString('en-US')}${pages>1?` · page ${cur+1} of ${pages}`:''}`;
   lastTally=list.length;
-  el('emptystate').innerHTML=list.length?'':`<div class="empty"><b>No native counters yet</b>Every counter indexed so far is also an ordinals inscription.</div>`;
+  el('emptystate').innerHTML=list.length?'':`<div class="empty"><b>Nothing to show</b>No counter is left with those boxes ticked.</div>`;
   // Newest first, so the first page is the newest and "older" counts up.
-  const to=p=>p?`${NATIVE}&p=${p+1}`:NATIVE;
+  const to=p=>filterHash(F,p);
   el('pager').innerHTML = pages>1 ? `
     <a class="${cur>=pages-1?'off':''}" onclick="go('${to(pages-1)}')">« oldest</a>
     <a class="${cur>=pages-1?'off':''}" onclick="go('${to(cur+1)}')">← older</a>
@@ -883,7 +906,7 @@ async function renderExplore(page){
   const me=++nav;
   showView('explore');
   const latest=(page==null);
-  el('native-only').checked=false;
+  el('native-only').checked=el('hide-refs').checked=false;
   lastTally=-1;
   // Answer the click before the network does: the old page goes (and with it
   // every document it was still loading), a skeleton stands in, and the pager
@@ -1065,8 +1088,8 @@ function route(){
   const h=location.hash||'#/';
   if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}   // legacy hash links still work
   else if(m=h.match(/^#\/\?(.*)$/)){
-    const q=new URLSearchParams(m[1]);
-    q.get('only')==='native' ? renderNative(Math.max(0,(parseInt(q.get('p'),10)||1)-1)) : renderExplore();
+    const F=parseFilters(m[1]);
+    F.native||F.refs ? renderFiltered(F) : renderExplore();
   }
   else if(m=h.match(/^#\/p\/(\d+)$/)){renderExplore(+m[1]);}
   else if(m=h.match(/^#\/b\/(\d+)$/)){renderBlock(m[1]);}
