@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS indexed_blocks (
     height     INTEGER PRIMARY KEY,
     block_hash TEXT    NOT NULL
 );
+
+-- Serve-time DERIVED cache, not index data: the envelope style of a reveal
+-- (build ref v3 §10.1). Never hashed, never gating anything, and keyed by the
+-- classifier's version so a rules change simply stops matching the old rows
+-- instead of needing a reindex. A reveal's witness cannot change, so an entry
+-- is good for as long as its version is.
+CREATE TABLE IF NOT EXISTS envelopes (
+    mint_txid TEXT    PRIMARY KEY,
+    envelope  TEXT    NOT NULL,
+    version   INTEGER NOT NULL
+);
 """
 
 # Block hashes kept for reorg detection. Far deeper than any plausible reorg.
@@ -304,6 +315,43 @@ class Store:
             "ORDER BY number",
             (name, name),
         ).fetchall()
+
+    def first_number(self, asset: str) -> int | None:
+        """The number of an asset's ORIGINAL counter — its lowest (N6)."""
+        row = self.db.execute(
+            "SELECT MIN(number) AS m FROM counters WHERE asset = ?", (asset,)
+        ).fetchone()
+        return row["m"]
+
+    # --- envelope cache (derived, serve-time) --------------------------------
+
+    def get_envelope(self, txid: str, version: int) -> str | None:
+        """The cached envelope style of a reveal, or None while unknown (or
+        classified by an older version of the rule)."""
+        row = self.db.execute(
+            "SELECT envelope FROM envelopes WHERE mint_txid = ? AND version = ?",
+            (txid, version),
+        ).fetchone()
+        return row["envelope"] if row else None
+
+    def set_envelope(self, txid: str, envelope: str, version: int) -> None:
+        self.db.execute(
+            "INSERT INTO envelopes (mint_txid, envelope, version) VALUES (?, ?, ?) "
+            "ON CONFLICT(mint_txid) DO UPDATE SET envelope = excluded.envelope, "
+            "version = excluded.version",
+            (txid, envelope, version),
+        )
+        self.db.commit()
+
+    def reveals_without_envelope(self, version: int, limit: int = 1000) -> list[str]:
+        """Reveal txids of indexed counters whose envelope is not cached at
+        this version, oldest first."""
+        return [r["mint_txid"] for r in self.db.execute(
+            "SELECT DISTINCT c.mint_txid FROM counters c "
+            "LEFT JOIN envelopes e ON e.mint_txid = c.mint_txid AND e.version = ? "
+            "WHERE e.mint_txid IS NULL ORDER BY c.number LIMIT ?",
+            (version, limit),
+        )]
 
     def find(self, identifier: str) -> sqlite3.Row | None:
         """Resolve a counter by number (all-digit), inscription ID

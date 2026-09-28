@@ -42,7 +42,7 @@
     --ink:#ece3d4; --dim:#a4957f; --faint:#6e6253;
     --copper:#e0682f; --copper2:#f3905a; --copper-ghost:#e0682f22;
     --patina:#5bb394; --patina-dim:#3f7d68;
-    --gold:#d9a441;
+    --gold:#d9a441; --sky:#7fa9d8; --rose:#d97c96;
     --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
     --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     --wrap:1120px;
@@ -140,7 +140,7 @@
   .card .num{align-self:flex-start}
   .card .num .d{font-size:13px;width:1.05em;height:1.5em;color:var(--ink)}
   .card .asset{font-family:var(--mono);font-size:13px;color:var(--copper2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pager{display:flex;justify-content:center;align-items:center;gap:14px;margin:28px 0 64px;font-family:var(--mono);font-size:12.5px}
+  .pager{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:14px;margin:28px 0 64px;font-family:var(--mono);font-size:12.5px}
   .pager a{color:var(--dim);border:1px solid var(--line);background:var(--card);padding:9px 18px;border-radius:9px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;transition:.15s}
   .pager a:hover{color:var(--ink);border-color:var(--copper)}
   .pager a.off{opacity:.35;pointer-events:none}
@@ -183,16 +183,31 @@
   .dhead{display:flex;align-items:flex-start;gap:14px;margin-bottom:6px}
   .dhead .meter .d{font-size:26px;width:.82em;height:1.34em;color:var(--ink)}
   .dhead h1{font-family:var(--mono);font-weight:600;font-size:30px;margin:0;color:var(--copper2);word-break:break-all;line-height:1.1}
-  .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--patina);border:1px solid var(--patina-dim);border-radius:99px;padding:4px 11px;margin:14px 0 26px}
-  .vbadge .dot{width:6px;height:6px;border-radius:99px;background:var(--patina);box-shadow:0 0 8px var(--patina)}
-  .vbadge.re{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
-  .vbadge.re .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
-  .vbadge.lg{color:var(--gold);border-color:var(--gold);margin-left:8px}
-  .vbadge.lg .dot{background:var(--gold);box-shadow:0 0 8px var(--gold)}
-  .vbadge.fb{color:var(--copper2);border-color:var(--copper2);margin-left:8px}
-  .vbadge.fb .dot{background:var(--copper2);box-shadow:0 0 8px var(--copper2)}
+  /* Tags. One colour per family, carried by --tag so a badge on the counter's
+     page and a dot on its card are the same colour by construction:
+       envelope   native = green, ordinal = orange
+       issued by  fairminter, reinscribe = blue
+       refers to  delegate, pointer = grey
+       also a     stamp = rose
+       size       large, whole block = yellow */
+  .t-native{--tag:var(--patina)} .t-ordinal{--tag:var(--copper2)}
+  .t-event{--tag:var(--sky)} .t-ref{--tag:var(--dim)}
+  .t-stamp{--tag:var(--rose)} .t-size{--tag:var(--gold)}
+  .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tag,var(--dim));border:1px solid var(--tag,var(--dim));border-radius:99px;padding:4px 11px}
+  .vbadge .dot,.dots i,.legend i{width:6px;height:6px;border-radius:99px;background:var(--tag,var(--dim));box-shadow:0 0 8px var(--tag,var(--dim));display:inline-block;flex:none}
+  /* The row owns the spacing, so it holds whichever badge comes first — and
+     keeps its place when a counter has none to show. */
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 26px;min-height:1px}
+  /* A card's tags, as dots: the same ones its page spells out as badges. */
+  .card .numrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .dots{display:inline-flex;align-items:center;gap:6px}
+  .dots i{width:7px;height:7px}
+  /* Whole block shares large's yellow; its size is what tells them apart. */
+  .dots i.big{width:12px;height:12px}
+  .legend i.big,.vbadge .dot.big{width:10px;height:10px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:-6px 0 18px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
   .card .thumb .ext.large{right:auto;left:8px;color:var(--gold);border-color:var(--gold)}
-  .card .thumb .ext.large.fb{color:var(--copper2);border-color:var(--copper2)}
   .acs{margin-top:26px}
   .acs .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
   .acs .list{display:flex;flex-wrap:wrap;gap:8px}
@@ -342,6 +357,7 @@
   <div class="wrap" style="padding-top:30px">
     <div class="synced" id="synced"></div>
     <div class="sechead"><h2>Counters</h2><div class="rule"></div><div class="meta" id="latest-meta"></div></div>
+    <div class="legend" id="legend"></div>
     <div class="grid" id="grid"></div>
     <div id="emptystate"></div>
     <div class="pager" id="pager"></div>
@@ -705,11 +721,34 @@ const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' U
 const fmtQty=(q,c)=> c.divisible ? (+(q/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+q).toLocaleString();
 const fmtSupply=c=>fmtQty(c.supply,c);
 
+// A counter's tags, in the order they are shown. The one list behind the
+// badges on a counter's page, the dots on its card, and the legend.
+const TAGS=[
+  {name:'native',     family:'native',  title:'counterparty native \u2014 Counterparty\'s own envelope, no ordinals inscription', on:c=>c.envelope==='counterparty'},
+  {name:'ordinal',    family:'ordinal', title:'counterparty + ord \u2014 the reveal is also an ordinals inscription',          on:c=>c.envelope==='counterparty/ord'},
+  {name:'fairminter', family:'event',   title:'inscribed by a fairminter deploy',                                             on:c=>c.kind==='fairminter'},
+  {name:'reinscribe', family:'event',   title:'new content on an asset that already had a counter',                           on:c=>c.original===false},
+  {name:'delegate',   family:'ref',     title:'renders another counter\'s file',                                              on:c=>!!c.delegate},
+  {name:'pointer',    family:'ref',     title:'the content is a link \u2014 the file it names is not on chain',                 on:c=>!!c.is_pointer_like},
+  {name:'stamp',      family:'stamp',   title:'also a Bitcoin Stamp',                                                         on:c=>!!c.stamp_mime},
+  {name:'whole block',family:'size', big:true, title:'over 3.5 MB \u2014 the inscription fills an entire Bitcoin block',               on:c=>c.size>WHOLE_BLOCK_BYTES},
+  {name:'large',      family:'size',    title:'over 400 KB \u2014 bigger than standard relay allows; mined by direct miner submission', on:c=>c.size>LARGE_BYTES&&c.size<=WHOLE_BLOCK_BYTES},
+];
+const tagsOf=c=>TAGS.filter(t=>t.on(c));
+const dotClass=t=>`t-${t.family}${t.big?' big':''}`;
+function legend(){
+  // One entry per mark — a colour, at its size — naming every tag that wears it.
+  const by=new Map();
+  for(const t of TAGS){ const k=dotClass(t); if(!by.has(k))by.set(k,[]); by.get(k).push(t.name); }
+  return [...by].map(([cls,names])=>`<span><i class="${cls}"></i>${names.join(' \u00b7 ')}</span>`).join('');
+}
+
 function card(c){
+  const tags=tagsOf(c);
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.delegate?'delegate':c.stamp_mime?'stamp':c.envelope==='counterparty/ord'?'ordinal':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
+    <div class="thumb"><span class="ext">${c.delegate?'delegate':c.stamp_mime?'stamp':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
     <div class="cfoot">
-      <span class="num">${meterDigits(c.number)}</span>
+      <div class="numrow"><span class="num">${meterDigits(c.number)}</span>${tags.length?`<span class="dots" role="img" aria-label="${tags.map(t=>t.name).join(', ')}">${tags.map(t=>`<i class="${dotClass(t)}" title="${t.name}"></i>`).join('')}</span>`:''}</div>
       <span class="asset">${esc(c.asset)}</span>
     </div>
   </div>`;
@@ -783,10 +822,15 @@ async function renderExplore(page){
   // at the page just below the window's oldest card (they may overlap).
   const older=latest ? (oldest>0 ? `#/p/${Math.floor((oldest-1)/PAGE)}` : null)
                      : (cur>0 ? `#/p/${cur-1}` : null);
+  // The two ends: "oldest" is page 1 (genesis, #/p/0 \u2014 permanent), "newest"
+  // the sliding latest view. Each goes quiet on the view it leads to.
+  const atOldest=!latest && cur===0;
   el('pager').innerHTML = pages>1 ? `
+    <a class="${atOldest?'off':''}" onclick="go('#/p/0')" title="the first counters, from #0">\u00ab oldest</a>
     <a class="${older?'':'off'}" onclick="go('${older||'#/'}')">\u2190 older</a>
     <span class="pinfo">${latest ? 'latest' : `page ${cur+1} / ${pages}`}</span>
-    <a class="${cur>=pages-1?'off':''}" onclick="go('${cur+1===pages-1?'#/':'#/p/'+(cur+1)}')">newer \u2192</a>` : '';
+    <a class="${cur>=pages-1?'off':''}" onclick="go('${cur+1===pages-1?'#/':'#/p/'+(cur+1)}')">newer \u2192</a>
+    <a class="${latest?'off':''}" onclick="go('#/')" title="the latest counters">newest \u00bb</a>` : '';
 }
 
 async function renderDetail(id){
@@ -826,15 +870,7 @@ async function renderDetail(id){
     </div>
     <div class="dbody">
       <div class="dhead">${meterDigits(c.number)}<h1>${esc(c.asset)}</h1></div>
-      <span class="vbadge"><span class="dot"></span>valid counter</span>
-      ${c.kind==='fairminter' ? `<span class="vbadge re"><span class="dot"></span>fairminter</span>` : ''}
-      ${c.original===false ? `<span class="vbadge re"><span class="dot"></span>reinscribe</span>` : ''}
-      ${c.is_pointer_like ? `<span class="vbadge re"><span class="dot"></span>pointer</span>` : ''}
-      ${c.delegate ? `<span class="vbadge re"><span class="dot"></span>delegate</span>` : ''}
-      ${c.stamp_mime ? `<span class="vbadge re"><span class="dot"></span>stamp</span>` : ''}
-      ${c.envelope==='counterparty/ord' ? `<span class="vbadge re"><span class="dot"></span>ordinal</span>` : ''}
-      ${c.size>WHOLE_BLOCK_BYTES ? `<span class="vbadge fb" title="over 3.5 MB — the inscription fills an entire Bitcoin block"><span class="dot"></span>whole block</span>`
-        : c.size>LARGE_BYTES ? `<span class="vbadge lg" title="over 400 KB — bigger than standard relay allows; mined by direct miner submission"><span class="dot"></span>large</span>` : ''}
+      <div class="badges">${tagsOf(c).map(t=>`<span class="vbadge t-${t.family}" title="${esc(t.title)}"><span class="dot${t.big?' big':''}"></span>${t.name}</span>`).join('')}</div>
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
@@ -1050,6 +1086,7 @@ async function showBuild(){
 }
 
 /* ---- boot ---- */
+el('legend').innerHTML=legend();
 route();
 showBuild();
 </script>

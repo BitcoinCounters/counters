@@ -409,3 +409,77 @@ def test_preview_origin_is_a_bare_origin():
                 "javascript:alert(1)", "https://a.example b.example", ""):
         assert read(bad) == "", bad
     assert Config().preview_origin == ""
+
+
+def _reveal(ord_style: bool) -> dict:
+    """A bitcoind-verbose taproot reveal whose tapscript opens the way each
+    envelope style does (reveal.envelope_style reads ops 2 and 3)."""
+    script = (b"\x00\x63\x03ord\x01\x07\x03xcp" if ord_style
+              else b"\x00\x63\x04data\x04more")
+    return {
+        "vout": [{"scriptPubKey": {"hex": "6a08434e545250525459"}}],
+        "vin": [{"txid": "ff" * 32,
+                 "txinwitness": ["00" * 64, script.hex(), "c0" + "00" * 32]}],
+    }
+
+
+def test_lists_carry_the_cached_envelope_and_original():
+    """A list never calls bitcoind: it carries the envelope verdict the
+    background pass cached (null while unknown), and marks reinscriptions."""
+    from counters.reveal import ENVELOPE_VERSION
+
+    httpd, base = _run_server()
+    try:
+        def listed():
+            recs = json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]
+            return {r["number"]: r for r in recs}
+
+        recs = listed()
+        assert [recs[n]["envelope"] for n in (0, 1, 2)] == [None, None, None]
+        # N6: #1 is a later event on #0's asset
+        assert [recs[n]["original"] for n in (0, 1, 2)] == [True, False, True]
+
+        class FakeBtc:
+            def __init__(self):
+                self.asked = []
+
+            def get_raw_transaction(self, txid, verbose=True):
+                self.asked.append(txid)
+                if txid == "cc" * 32:
+                    raise OSError("node down")
+                return _reveal(ord_style=(txid == "aa" * 32))
+
+        # A failure stops the pass where it is; what was classified is kept.
+        btc = FakeBtc()
+        try:
+            appmod.warm_envelopes_once(httpd.config, btc=btc)
+        except OSError:
+            pass
+        assert btc.asked == ["aa" * 32, "bb" * 32, "cc" * 32]
+        recs = listed()
+        assert recs[0]["envelope"] == "counterparty/ord"
+        assert recs[1]["envelope"] == "counterparty"
+        assert recs[2]["envelope"] is None
+
+        # The next pass asks only for what is still unknown.
+        class Healthy(FakeBtc):
+            def get_raw_transaction(self, txid, verbose=True):
+                self.asked.append(txid)
+                return _reveal(ord_style=False)
+
+        btc = Healthy()
+        assert appmod.warm_envelopes_once(httpd.config, btc=btc) == 1
+        assert btc.asked == ["cc" * 32]
+        assert listed()[2]["envelope"] == "counterparty"
+        assert appmod.warm_envelopes_once(httpd.config, btc=Healthy()) == 0
+
+        # A verdict from an older version of the rule is not trusted.
+        store = Store(httpd.config)
+        try:
+            assert store.get_envelope("aa" * 32, ENVELOPE_VERSION) == "counterparty/ord"
+            assert store.get_envelope("aa" * 32, ENVELOPE_VERSION + 1) is None
+            assert len(store.reveals_without_envelope(ENVELOPE_VERSION + 1)) == 3
+        finally:
+            store.close()
+    finally:
+        httpd.shutdown()

@@ -472,3 +472,23 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
             print("ok", name)
+
+
+def test_card_badges_name_the_envelope():
+    """The card's badge row: NATIVE for Counterparty's own envelope, ORDINAL
+    for counterparty + ord, neither while the envelope is unknown — and no
+    VALID badge, since every counter drawn is one."""
+    def labels(**row):
+        return [label for label, _ in card._badges(row)]
+
+    assert labels(envelope="counterparty") == ["NATIVE"]
+    assert labels(envelope="counterparty/ord") == ["ORDINAL"]
+    assert labels(envelope=None) == []
+    assert labels(envelope="counterparty", kind="fairminter", original=False,
+                  is_pointer_like=True) == ["NATIVE", "FAIRMINTER", "REINSCRIBE", "POINTER"]
+    # A card with no badge at all still renders at full size.
+    info = {"number": 7, "asset": "PLAIN", "content_type": "text/plain", "size": 2,
+            "block": 902005, "owner": "bc1qexample", "kind": "issuance",
+            "is_pointer_like": False, "original": True, "supply": 1,
+            "divisible": False, "sha256": "00" * 32, "body": "hi"}
+    assert _decode(card.render(info))[:2] == (card.WIDTH, card.HEIGHT)
