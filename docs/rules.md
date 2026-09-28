@@ -59,6 +59,13 @@ opaque origin, confining CSP — the ord model). Same-origin sub-resources
 resolve against this server only; any external or cross-protocol reference
 simply does not load (rule 4 — never fetched from a gateway). The document
 still renders; a missing dependency is the minter's bet, not a server bug.
+The confinement travels with the file, not with the frame: `/content`,
+`/delegate`, `/stamp` and a raw `/preview` answer with
+`Content-Security-Policy: sandbox allow-scripts`, so a counter followed as a
+plain link is as confined as one shown in a card — an opaque origin, its
+scripts running, nothing of the server's in reach. PDFs are the exception:
+a browser's own PDF viewer is a plugin, which a sandbox forbids, and a PDF
+is not a document that scripts against an origin.
 
 **6 — Everything else is text, or a download.** Text, JSON, and code render
 **verbatim** — escaped, in full, with no percent-decoding, no trimming, no

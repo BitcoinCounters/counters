@@ -125,7 +125,7 @@ This explorer reads these endpoints from `counters server`:
 - `GET /facets` — every counter as the few fields a filter needs (number, asset, type, size, tags), in one response
 - `GET /counter/<number|asset|inscription id>` — one counter's record
 - `GET /block/<height>` — counters minted in a block
-- `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing
+- `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing Sandboxed even when opened directly, so a counter's scripts never run as this site. Each counter's page links to it by inscription id.
 - `GET /preview/<number|inscription id>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
 - `GET /stamp/<number|inscription id>` — the decoded image of a `STAMP:` counter
 - `GET /delegate/<number|inscription id>` — the bytes a delegate's target committed (one hop, from this index only); 404 for a non-delegate or an unresolved target
