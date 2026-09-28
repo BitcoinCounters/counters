@@ -42,7 +42,10 @@
     --ink:#ece3d4; --dim:#a4957f; --faint:#6e6253;
     --copper:#e0682f; --copper2:#f3905a; --copper-ghost:#e0682f22;
     --patina:#5bb394; --patina-dim:#3f7d68;
-    --gold:#d9a441; --sky:#7fa9d8; --rose:#d97c96;
+    --gold:#d9a441; --sky:#7fa9d8; --rose:#d97c96; --red:#e5534b;
+    /* Two arrows chasing each other: the reinscribe mark, drawn as a mask so it
+       takes its colour from --tag like every dot. */
+    --arrows:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 3v7h-7'/%3E%3Cpath d='M2 21v-7h7'/%3E%3Cpath d='M4.3 9a9 9 0 0 1 14.7-3.3L22 10M2 14l3 4.3A9 9 0 0 0 19.7 15'/%3E%3C/svg%3E");
     --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
     --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     --wrap:1120px;
@@ -186,13 +189,14 @@
   /* Tags. One colour per family, carried by --tag so a badge on the counter's
      page and a dot on its card are the same colour by construction:
        envelope   native = green, ordinal = orange
-       issued by  fairminter, reinscribe = blue
+       issued by  fairminter = rose
+       again      reinscribe = red, and arrows rather than a dot
        refers to  delegate, pointer = grey
-       also a     stamp = rose
-       size       large, whole block = yellow */
+       also a     stamp = blue
+       size       large, whole block = yellow (whole block the larger dot) */
   .t-native{--tag:var(--patina)} .t-ordinal{--tag:var(--copper2)}
-  .t-event{--tag:var(--sky)} .t-ref{--tag:var(--dim)}
-  .t-stamp{--tag:var(--rose)} .t-size{--tag:var(--gold)}
+  .t-fair{--tag:var(--rose)} .t-redo{--tag:var(--red)} .t-ref{--tag:var(--dim)}
+  .t-stamp{--tag:var(--sky)} .t-size{--tag:var(--gold)}
   .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tag,var(--dim));border:1px solid var(--tag,var(--dim));border-radius:99px;padding:4px 11px}
   .vbadge .dot,.dots i,.legend i{width:6px;height:6px;border-radius:99px;background:var(--tag,var(--dim));box-shadow:0 0 8px var(--tag,var(--dim));display:inline-block;flex:none}
   /* The row owns the spacing, so it holds whichever badge comes first — and
@@ -202,6 +206,8 @@
   .card .numrow{display:flex;align-items:center;justify-content:space-between;gap:8px}
   .dots{display:inline-flex;align-items:center;gap:6px}
   .dots i{width:7px;height:7px}
+  .dots i.arrows,.legend i.arrows,.vbadge .dot.arrows{width:11px;height:11px;border-radius:0;box-shadow:none;-webkit-mask:var(--arrows) center/contain no-repeat;mask:var(--arrows) center/contain no-repeat}
+  .dots i.arrows{width:12px;height:12px}
   /* Whole block shares large's yellow; its size is what tells them apart. */
   .dots i.big{width:12px;height:12px}
   .legend i.big,.vbadge .dot.big{width:10px;height:10px}
@@ -726,8 +732,8 @@ const fmtSupply=c=>fmtQty(c.supply,c);
 const TAGS=[
   {name:'native',     family:'native',  title:'counterparty native \u2014 Counterparty\'s own envelope, no ordinals inscription', on:c=>c.envelope==='counterparty'},
   {name:'ordinal',    family:'ordinal', title:'counterparty + ord \u2014 the reveal is also an ordinals inscription',          on:c=>c.envelope==='counterparty/ord'},
-  {name:'fairminter', family:'event',   title:'inscribed by a fairminter deploy',                                             on:c=>c.kind==='fairminter'},
-  {name:'reinscribe', family:'event',   title:'new content on an asset that already had a counter',                           on:c=>c.original===false},
+  {name:'fairminter', family:'fair',    title:'inscribed by a fairminter deploy',                                             on:c=>c.kind==='fairminter'},
+  {name:'reinscribe', family:'redo', arrows:true,   title:'new content on an asset that already had a counter',                           on:c=>c.original===false},
   {name:'delegate',   family:'ref',     title:'renders another counter\'s file',                                              on:c=>!!c.delegate},
   {name:'pointer',    family:'ref',     title:'the content is a link \u2014 the file it names is not on chain',                 on:c=>!!c.is_pointer_like},
   {name:'stamp',      family:'stamp',   title:'also a Bitcoin Stamp',                                                         on:c=>!!c.stamp_mime},
@@ -735,7 +741,7 @@ const TAGS=[
   {name:'large',      family:'size',    title:'over 400 KB \u2014 bigger than standard relay allows; mined by direct miner submission', on:c=>c.size>LARGE_BYTES&&c.size<=WHOLE_BLOCK_BYTES},
 ];
 const tagsOf=c=>TAGS.filter(t=>t.on(c));
-const dotClass=t=>`t-${t.family}${t.big?' big':''}`;
+const dotClass=t=>`t-${t.family}${t.big?' big':''}${t.arrows?' arrows':''}`;
 function legend(){
   // One entry per mark — a colour, at its size — naming every tag that wears it.
   const by=new Map();
@@ -870,7 +876,7 @@ async function renderDetail(id){
     </div>
     <div class="dbody">
       <div class="dhead">${meterDigits(c.number)}<h1>${esc(c.asset)}</h1></div>
-      <div class="badges">${tagsOf(c).map(t=>`<span class="vbadge t-${t.family}" title="${esc(t.title)}"><span class="dot${t.big?' big':''}"></span>${t.name}</span>`).join('')}</div>
+      <div class="badges">${tagsOf(c).map(t=>`<span class="vbadge t-${t.family}" title="${esc(t.title)}"><span class="dot${t.big?' big':''}${t.arrows?' arrows':''}"></span>${t.name}</span>`).join('')}</div>
       <div class="facts">
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
