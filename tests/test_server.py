@@ -483,3 +483,55 @@ def test_lists_carry_the_cached_envelope_and_original():
             store.close()
     finally:
         httpd.shutdown()
+
+
+def test_lists_carry_the_cached_supply_lock():
+    """`locked` in a list is what Counterparty last said, kept by the
+    background pass: null until checked, re-asked soon while unlocked (an
+    owner can lock at any moment), rarely once locked."""
+    httpd, base = _run_server()
+    try:
+        def locks():
+            recs = json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]
+            return {r["number"]: r["locked"] for r in recs}
+
+        assert locks() == {0: None, 1: None, 2: None}
+
+        class FakeCp:
+            def __init__(self, state):
+                self.state, self.asked = state, []
+
+            def get_asset(self, asset):
+                self.asked.append(asset)
+                return {"locked": self.state[asset]} if asset in self.state else None
+
+        cp = FakeCp({"TESTASSET": False, "STAMPTEST": True})
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000) == 2
+        assert sorted(cp.asked) == ["STAMPTEST", "TESTASSET"]   # once per ASSET
+        assert locks() == {0: False, 1: False, 2: True}          # siblings share it
+
+        # Fresh answers are not re-asked...
+        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000 + 60) == 0
+        # ...an unlocked asset goes stale quickly, and its lock is picked up...
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=1000 + appmod.UNLOCKED_MAX_AGE) == 1
+        assert cp.asked == ["TESTASSET"]
+        assert locks() == {0: True, 1: True, 2: True}
+        # ...and a locked one only after a long while.
+        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=1000 + appmod.LOCKED_MAX_AGE) == 1
+        assert cp.asked == ["STAMPTEST"]
+
+        # An asset Core does not know stays unknown rather than guessed.
+        store = Store(httpd.config)
+        try:
+            store.db.execute("DELETE FROM asset_locks")
+            store.db.commit()
+        finally:
+            store.close()
+        assert appmod.warm_locks_once(httpd.config, cp=FakeCp({}), now=5000) == 0
+        assert locks() == {0: None, 1: None, 2: None}
+    finally:
+        httpd.shutdown()

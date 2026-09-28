@@ -26,7 +26,7 @@ import math
 from . import glyphs, png
 
 # Bump on any change that alters rendered output, so cached cards are rebuilt.
-VERSION = 4
+VERSION = 5
 
 WIDTH, HEIGHT = 1200, 630
 
@@ -283,6 +283,11 @@ def _badges(row: dict) -> list[tuple[str, tuple[int, int, int]]]:
         out.append(("WHOLE BLOCK", GOLD))
     elif size > LARGE_BYTES:
         out.append(("LARGE", GOLD))
+    # The supply lock, last, and only while it is open: red while more can
+    # be issued. Locked is the settled state and carries no badge, and neither
+    # does a lock that has never been checked.
+    if row.get("locked") is False:
+        out.append(("UNLOCKED", RED))
     return out
 
 

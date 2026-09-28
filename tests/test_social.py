@@ -486,6 +486,11 @@ def test_card_badges_name_the_envelope():
     assert labels(envelope=None) == []
     assert labels(envelope="counterparty", kind="fairminter", original=False,
                   is_pointer_like=True) == ["NATIVE", "FAIRMINTER", "REINSCRIBE", "POINTER"]
+    # The supply lock is marked only while it is open.
+    assert labels(locked=False) == ["UNLOCKED"]
+    assert labels(locked=True) == [] and labels(locked=None) == []
+    assert labels(envelope="counterparty/ord", size=4_000_000,
+                  locked=False) == ["ORDINAL", "WHOLE BLOCK", "UNLOCKED"]
     # A card with no badge at all still renders at full size.
     info = {"number": 7, "asset": "PLAIN", "content_type": "text/plain", "size": 2,
             "block": 902005, "owner": "bc1qexample", "kind": "issuance",

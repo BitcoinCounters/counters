@@ -193,10 +193,13 @@
        again      reinscribe = red, and arrows rather than a dot
        refers to  delegate, pointer = grey
        also a     stamp = blue
-       size       large, whole block = yellow (whole block the larger dot) */
+       size       large, whole block = yellow (whole block the larger dot)
+       supply     unlocked = red. Locked is the settled state and carries
+                  no mark: a tag is for what can still change */
   .t-native{--tag:var(--patina)} .t-ordinal{--tag:var(--copper2)}
   .t-fair{--tag:var(--rose)} .t-redo{--tag:var(--red)} .t-ref{--tag:var(--dim)}
   .t-stamp{--tag:var(--sky)} .t-size{--tag:var(--gold)}
+  .t-unlocked{--tag:var(--red)}
   .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tag,var(--dim));border:1px solid var(--tag,var(--dim));border-radius:99px;padding:4px 11px}
   .vbadge .dot,.dots i,.legend i{width:6px;height:6px;border-radius:99px;background:var(--tag,var(--dim));box-shadow:0 0 8px var(--tag,var(--dim));display:inline-block;flex:none}
   /* The row owns the spacing, so it holds whichever badge comes first — and
@@ -210,7 +213,8 @@
   .dots i.arrows{width:12px;height:12px}
   /* Whole block shares large's yellow; its size is what tells them apart. */
   .dots i.big{width:12px;height:12px}
-  .legend i.big,.vbadge .dot.big{width:10px;height:10px}
+  .legend i.big{width:10px;height:10px}
+  .vbadge .dot.big{width:10px;height:10px}
   .legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:-6px 0 18px;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
   .legend span{display:inline-flex;align-items:center;gap:7px}
   .card .thumb .ext.large{right:auto;left:8px;color:var(--gold);border-color:var(--gold)}
@@ -739,11 +743,12 @@ const TAGS=[
   {name:'stamp',      family:'stamp',   title:'also a Bitcoin Stamp',                                                         on:c=>!!c.stamp_mime},
   {name:'whole block',family:'size', big:true, title:'over 3.5 MB \u2014 the inscription fills an entire Bitcoin block',               on:c=>c.size>WHOLE_BLOCK_BYTES},
   {name:'large',      family:'size',    title:'over 400 KB \u2014 bigger than standard relay allows; mined by direct miner submission', on:c=>c.size>LARGE_BYTES&&c.size<=WHOLE_BLOCK_BYTES},
+  {name:'unlocked',   family:'unlocked',title:'supply unlocked \u2014 the owner can still issue more',                 on:c=>c.locked===false},
 ];
 const tagsOf=c=>TAGS.filter(t=>t.on(c));
 const dotClass=t=>`t-${t.family}${t.big?' big':''}${t.arrows?' arrows':''}`;
 function legend(){
-  // One entry per mark — a colour, at its size — naming every tag that wears it.
+  // One entry per mark — a colour, a shape, a size — naming every tag that wears it.
   const by=new Map();
   for(const t of TAGS){ const k=dotClass(t); if(!by.has(k))by.set(k,[]); by.get(k).push(t.name); }
   return [...by].map(([cls,names])=>`<span><i class="${cls}"></i>${names.join(' \u00b7 ')}</span>`).join('');
