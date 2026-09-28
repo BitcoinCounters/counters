@@ -218,8 +218,8 @@
      says how many.
      A few switches, on a line of their own under the heading. Each takes the
      colour of the tag it is about — native green, ordinal orange, stamp
-     blue, large yellow — and the one that hides rather than shows stays
-     neutral. */
+     blue, large yellow, reinscriptions red — and the one that hides rather
+     than shows stays neutral. */
   .filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;margin:-4px 0 16px}
   .ftoggle{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-weight:500;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);background:none;border:0;padding:0;min-height:20px;cursor:pointer}
   .ftoggle:hover{color:var(--ink)}
@@ -230,7 +230,7 @@
   .fswitches{display:none}
   .filters.open .fswitches{display:contents}
   .only{--tag:var(--patina);display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);cursor:pointer;user-select:none;white-space:nowrap}
-  .only.ordinal{--tag:var(--copper2)} .only.stamp{--tag:var(--sky)} .only.large{--tag:var(--gold)} .only.refs{--tag:var(--ink)}
+  .only.ordinal{--tag:var(--copper2)} .only.stamp{--tag:var(--sky)} .only.large{--tag:var(--gold)} .only.redo{--tag:var(--red)} .only.refs{--tag:var(--ink)}
   .only:hover{color:var(--ink)}
   .only input{appearance:none;-webkit-appearance:none;margin:0;width:16px;height:16px;border:1px solid var(--faint);border-radius:4px;background:var(--bg2);display:inline-grid;place-content:center;cursor:pointer;transition:.15s;flex:none}
   .only input::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--tag);box-shadow:0 0 8px var(--tag);transform:scale(0);transition:transform .15s}
@@ -408,6 +408,7 @@
         <label class="only ordinal" title="counters that are also an ordinals inscription"><input type="checkbox" id="f-ordinal">ordinal</label>
         <label class="only stamp" title="counters that are also a Bitcoin Stamp"><input type="checkbox" id="f-stamp">stamp</label>
         <label class="only large" title="counters over 400 KB, whole blocks included"><input type="checkbox" id="f-large">large</label>
+        <label class="only redo" title="new content on an asset that already had a counter"><input type="checkbox" id="f-reinscribe">reinscriptions</label>
         <label class="only refs" title="hide counters whose content is a link to a file, or a reference to another counter's file"><input type="checkbox" id="f-refs">hide pointers/delegates</label>
       </div>
     </div>
@@ -802,7 +803,8 @@ function card(c){
 }
 
 /* ============================================================
-   FILTERS — native · ordinal · stamp · large · hide pointers/delegates,
+   FILTERS — native · ordinal · stamp · large · reinscriptions ·
+   hide pointers/delegates,
    folded behind one word
    ============================================================ */
 // Numbers are gap-free over ALL counters, so a filtered set cannot be asked
@@ -814,7 +816,7 @@ function card(c){
 //
 // native and ordinal are the two envelopes, so ticking both asks for either;
 // every other switch narrows what is shown.
-const SHOWN=['native','ordinal','stamp','large'], SWITCHES=[...SHOWN,'refs'];
+const SHOWN=['native','ordinal','stamp','large','reinscribe'], SWITCHES=[...SHOWN,'refs'];
 function parseFilters(q){
   const p=new URLSearchParams(q||''), only=(p.get('only')||'').split(','), hide=(p.get('hide')||'').split(',');
   const F={refs:hide.includes('pointer')||hide.includes('delegate'),
@@ -835,6 +837,7 @@ function shows(c,F){
   if((F.native||F.ordinal)&&!((F.native&&c.envelope==='counterparty')||(F.ordinal&&c.envelope==='counterparty/ord')))return false;
   if(F.stamp&&!c.stamp_mime)return false;
   if(F.large&&!(c.size>LARGE_BYTES))return false;          // whole blocks are large too
+  if(F.reinscribe&&c.original!==false)return false;
   return !F.refs||!(c.delegate||c.is_pointer_like);
 }
 // Folded by default, and open when a view arrives with switches ticked —
