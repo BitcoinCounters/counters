@@ -174,6 +174,27 @@ CONTENT_HEADERS = [
     ("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length"),
 ]
 
+# A counter's file is confined the same way wherever it is opened. Inside the
+# explorer it sits in an `<iframe sandbox=allow-scripts>`; followed as a plain
+# link, /content/<id> would otherwise be a top-level document on THIS origin,
+# and an HTML or SVG counter's scripts would run as the explorer itself. The
+# `sandbox` directive gives the response the frame's confinement on its own:
+# an opaque origin, scripts allowed, nothing of ours in reach. ord does not
+# send it; its origin holds nothing to reach for, and ours need not stay so.
+SANDBOX_HEADER = ("Content-Security-Policy", "sandbox allow-scripts")
+
+
+def content_headers(ctype: str | None) -> list[tuple[str, str]]:
+    """CONTENT_HEADERS, sandboxed — for every type but PDF. A browser's own
+    PDF viewer is a plugin, and a sandbox forbids plugins outright: a
+    sandboxed PDF opened directly would be a blank page. It is also not a
+    document that can run script against an origin, so it loses nothing."""
+    base = (ctype or "").split(";")[0].strip().lower()
+    if base == "application/pdf":
+        return CONTENT_HEADERS
+    return CONTENT_HEADERS + [SANDBOX_HEADER]
+
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -817,7 +838,7 @@ class Handler(BaseHTTPRequestHandler):
             # reporting the declared content_type. Deterministic in the bytes,
             # so the content-addressed immutable cache still holds.
             ctype = sniff_media(blob) or row["content_type"] or "application/octet-stream"
-            self._send(200, ctype, blob, immutable=True, extra_headers=CONTENT_HEADERS,
+            self._send(200, ctype, blob, immutable=True, extra_headers=content_headers(ctype),
                        ranged=True)
         finally:
             store.close()
@@ -834,7 +855,7 @@ class Handler(BaseHTTPRequestHandler):
             if stamp is None:
                 return self._send(404, "text/plain; charset=utf-8", b"not stamp-like")
             raw, mime = stamp
-            self._send(200, mime, raw, max_age=DERIVED_MAX_AGE, extra_headers=CONTENT_HEADERS)
+            self._send(200, mime, raw, max_age=DERIVED_MAX_AGE, extra_headers=content_headers(mime))
         finally:
             store.close()
 
@@ -861,7 +882,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, "text/plain; charset=utf-8", b"content unavailable")
             ctype = sniff_media(blob) or target["content_type"] or "application/octet-stream"
             self._send(200, ctype, blob, max_age=DERIVED_MAX_AGE,
-                       extra_headers=CONTENT_HEADERS, ranged=True)
+                       extra_headers=content_headers(ctype), ranged=True)
         finally:
             store.close()
 
@@ -965,7 +986,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(404, "text/html; charset=utf-8",
                                       b"<!doctype html><meta charset=utf-8><title>404</title>content unavailable")
                 return self._send(200, ctype, blob, max_age=DERIVED_MAX_AGE,
-                                  extra_headers=CONTENT_HEADERS)
+                                  extra_headers=content_headers(ctype))
             text = None
             if kind in ("text", "code", "markdown"):
                 stamp = _stamp_payload(store, row)

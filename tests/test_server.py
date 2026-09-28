@@ -606,3 +606,54 @@ def test_facets_carries_a_delegate_as_its_target():
     assert recs[1]["delegate"] == [0, "text/plain", len(b"hello-target-bytes"), None]
     assert recs[6]["delegate"][0] == 0 and recs[6]["delegate"][3] == "edition-69"
     assert recs[4]["delegate"][:3] == [None, None, None]      # unresolved
+
+
+def test_a_file_is_sandboxed_wherever_it_is_opened():
+    """/content, /stamp, /delegate and a raw /preview carry the `sandbox`
+    directive, so a counter followed as a plain link is confined as it is in
+    the explorer's frame — except a PDF, which a sandbox would blank."""
+    import urllib.request
+
+    def csp(base, path):
+        with urllib.request.urlopen(base + path, timeout=5) as r:
+            return r.headers.get_all("Content-Security-Policy") or []
+
+    httpd, base = _run_server()
+    try:
+        for path in ("/content/0", "/content/" + "aa" * 32 + "i0", "/stamp/2"):
+            policies = csp(base, path)
+            assert "sandbox allow-scripts" in policies, path
+            # the confining policies it joins are still there
+            assert any(p.startswith("default-src 'self'") for p in policies), path
+    finally:
+        httpd.shutdown()
+
+    tmp = tempfile.mkdtemp()
+    cfg = _seed_delegate_store(tmp)
+    store = Store(cfg)
+    try:
+        def add(number, asset, body, ctype, txid):
+            store.add_counter(number, CounterRecord(
+                asset=asset, asset_id=str(900 + number), asset_longname=None,
+                kind="issuance", content_type=ctype, content_type_raw=None,
+                content_sha256=store.store_blob(body), content_length=len(body),
+                is_pointer_like=False, mint_txid=txid, msg_index=0,
+                block_index=902100 + number, cp_tx_index=100 + number,
+                source="bc1pstored", divisible=False, supply=1))
+        n = store.count()
+        add(n, "LIVEPAGE", b"<!doctype html><script>1</script>", "text/html", "d1" * 32)
+        add(n + 1, "ABOOK", b"%PDF-1.4 tiny", "application/pdf", "d2" * 32)
+        store.commit()
+    finally:
+        store.close()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), appmod.Handler)
+    httpd.config = cfg
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        assert "sandbox allow-scripts" in csp(base, f"/content/{n}")      # html
+        assert "sandbox allow-scripts" in csp(base, f"/preview/{n}")      # the raw document
+        assert "sandbox allow-scripts" in csp(base, "/delegate/1")        # a delegate's target
+        assert "sandbox allow-scripts" not in csp(base, f"/content/{n + 1}")   # pdf
+    finally:
+        httpd.shutdown()
