@@ -138,7 +138,6 @@
   .card{background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden;cursor:pointer;transition:.16s;display:flex;flex-direction:column}
   .card:hover{border-color:var(--copper);transform:translateY(-3px);box-shadow:0 10px 24px -14px #000}
   .card .thumb{aspect-ratio:1;background:var(--bg2);border-bottom:1px solid var(--line2);position:relative;overflow:hidden}
-  .card .thumb .ext{position:absolute;top:8px;right:8px;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);background:#0009;border:1px solid var(--line);padding:2px 6px;border-radius:5px}
   .card .cfoot{padding:11px 12px;display:flex;flex-direction:column;gap:8px}
   .card .num{align-self:flex-start}
   .card .num .d{font-size:13px;width:1.05em;height:1.5em;color:var(--ink)}
@@ -213,73 +212,27 @@
   .dots i.arrows{width:12px;height:12px}
   /* Whole block shares large's yellow; its size is what tells them apart. */
   .dots i.big{width:12px;height:12px}
-  /* ---------- filters ----------
-     The legend, made clickable: one chip per tag, wearing that tag's mark
-     and colour, with how many counters picking it would give. A chip has
-     three states — only, hide, off — because hiding is half the use: most of
-     the index can be one file's editions. */
-  .fbar{position:sticky;top:var(--head);z-index:30;display:flex;flex-direction:column;gap:9px;margin:-4px 0 12px;padding:6px 0 14px;
-        background:linear-gradient(var(--bg) 84%,transparent)}
-  .chips{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-height:30px}
-  .chips .rowlabel{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);width:46px;flex:none}
-  .chips .push{flex:1}
-  /* No --tag of its own: a chip takes its tag's (.t-native …), grey without one. */
-  .chip{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:500;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;
-        color:var(--dim);background:transparent;border:1px solid var(--line);border-radius:99px;padding:5px 11px;cursor:pointer;white-space:nowrap;
-        transition:background .15s,border-color .15s,color .15s,transform .15s}
-  .chip:hover{border-color:var(--tag,var(--dim));color:var(--ink)}
-  .chip:active{transform:scale(.97)}
-  .chip i{width:7px;height:7px;border-radius:99px;background:var(--tag,var(--dim));box-shadow:0 0 8px var(--tag,var(--dim));flex:none}
-  .chip i.big{width:11px;height:11px}
-  .chip i.arrows{width:12px;height:12px;border-radius:0;box-shadow:none;-webkit-mask:var(--arrows) center/contain no-repeat;mask:var(--arrows) center/contain no-repeat}
-  .chip .n{color:var(--faint);letter-spacing:.02em;font-weight:400}
-  .chip[data-state="in"]{color:var(--tag,var(--dim));border-color:var(--tag,var(--dim));background:color-mix(in srgb,var(--tag,var(--dim)) 16%,transparent)}
-  .chip[data-state="in"] .n{color:var(--tag,var(--dim))}
-  .chip[data-state="out"]{color:var(--faint);border-style:dashed;border-color:var(--faint);text-decoration:line-through}
-  .chip[data-state="out"] i{background:none;box-shadow:none;border:1.5px solid var(--faint)}
-  .chip[data-state="out"] i.arrows{background:var(--faint);border:0}
-  .chip[data-empty="1"]:not([data-state]){opacity:.4}
-  .chip.type{--tag:var(--ink)}
-  .fbtn{font-family:var(--mono);font-weight:500;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);background:var(--card);border:1px solid var(--line);border-radius:9px;padding:6px 12px;cursor:pointer}
-  .fbtn:hover{color:var(--ink);border-color:var(--copper)}
+  /* ---------- filter ----------
+     One switch, in the heading: native only. */
+  .only{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);cursor:pointer;user-select:none;white-space:nowrap}
+  .only:hover{color:var(--ink)}
+  .only input{appearance:none;-webkit-appearance:none;margin:0;width:16px;height:16px;border:1px solid var(--faint);border-radius:4px;background:var(--bg2);display:inline-grid;place-content:center;cursor:pointer;transition:.15s;flex:none}
+  .only input::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--patina);box-shadow:0 0 8px var(--patina);transform:scale(0);transition:transform .15s}
+  .only input:checked{border-color:var(--patina)}
+  .only input:checked::after{transform:scale(1)}
+  .only:has(input:checked){color:var(--patina)}
   /* The count of what matched, in the odometer's digits; it rolls when it changes. */
   .sechead .meta .meter{vertical-align:middle;gap:2px;margin-right:7px}
   .sechead .meta .meter .d{font-size:12px;width:1.05em;height:1.55em;color:var(--ink)}
   .meter.roll .d{animation:roll .3s cubic-bezier(.2,.8,.2,1)}
   @keyframes roll{from{transform:translateY(-45%);opacity:0}to{transform:none;opacity:1}}
-  /* A dot that is one of the picked tags: why this card is in the result. */
-  .dots i.hit{outline:1.5px solid var(--tag);outline-offset:2.5px}
-  .mbar,.sheet,.scrim{display:none}
   @media(max-width:620px){
-    /* One sticky line — a Filters button and the active chips, scrolling
-       sideways — and every chip in a sheet, at a size a thumb can hit. */
-    .fbar{top:0;padding:8px 0 12px}
-    .fbar .chips{display:none}
-    .mbar{display:flex;align-items:center;gap:10px}
-    .fopen{flex:none;display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-weight:600;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;min-height:44px;cursor:pointer}
-    .fopen .k{background:var(--copper);color:#14110d;border-radius:99px;min-width:20px;padding:0 6px;font-size:11px;line-height:20px;text-align:center}
-    .flive{display:flex;align-items:center;gap:8px;overflow-x:auto;scrollbar-width:none;min-width:0;flex:1;padding-right:26px;
-           -webkit-mask:linear-gradient(90deg,#000 86%,transparent);mask:linear-gradient(90deg,#000 86%,transparent)}
-    .flive::-webkit-scrollbar{display:none}
-    .flive .chip{padding:9px 12px;min-height:40px}
-    .flive .none{font-family:var(--mono);font-size:11.5px;color:var(--faint);letter-spacing:.06em;white-space:nowrap}
-    .scrim{display:block;position:fixed;inset:0;background:#000a;opacity:0;pointer-events:none;transition:opacity .2s;z-index:60}
-    .sheet{display:flex;flex-direction:column;gap:16px;position:fixed;left:0;right:0;bottom:0;z-index:61;background:var(--bg2);border-top:1px solid var(--line);border-radius:20px 20px 0 0;
-           padding:10px 16px calc(16px + env(safe-area-inset-bottom,0px));max-height:84dvh;overflow-y:auto;overscroll-behavior:contain;
-           transform:translateY(105%);transition:transform .26s cubic-bezier(.2,.8,.2,1)}
-    .sheet-open .sheet{transform:none}
-    .sheet-open .scrim{opacity:1;pointer-events:auto}
-    .sheet .grab{width:40px;height:4px;border-radius:9px;background:var(--line);align-self:center;flex:none}
-    .sheet h3{font-family:var(--mono);font-weight:600;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin:0 0 8px}
-    .sheet .chips{display:flex}
-    .sheet .chips .rowlabel,.sheet .chips .push{display:none}
-    .sheet .chip{padding:11px 14px;min-height:44px;font-size:12px}
-    .sheet .fbtn{padding:11px 14px;min-height:44px}
-    .sheet .go{font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;background:var(--copper);color:#14110d;border:0;border-radius:12px;padding:15px;min-height:50px;cursor:pointer;position:sticky;bottom:0;flex:none}
+    .sechead{flex-wrap:wrap;row-gap:10px}
+    .only{min-height:40px}
+    .only input{width:20px;height:20px}
     .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
   }
-  @media(prefers-reduced-motion:reduce){.meter.roll .d{animation:none}.sheet,.scrim{transition:none}}
-  .card .thumb .ext.large{right:auto;left:8px;color:var(--gold);border-color:var(--gold)}
+  @media(prefers-reduced-motion:reduce){.meter.roll .d{animation:none}}
   .acs{margin-top:26px}
   .acs .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
   .acs .list{display:flex;flex-wrap:wrap;gap:8px}
@@ -428,26 +381,12 @@
 <main id="view-explore">
   <div class="wrap" style="padding-top:30px">
     <div class="synced" id="synced"></div>
-    <div class="sechead"><h2>Counters</h2><div class="rule"></div><div class="meta" id="latest-meta"></div></div>
-    <div class="fbar" id="fbar">
-      <div class="mbar">
-        <button class="fopen" id="fopen" aria-haspopup="dialog">Filters <span class="k hidden" id="fk"></span></button>
-        <div class="flive" id="flive"></div>
-      </div>
-      <div class="chips" id="ftags"></div>
-      <div class="chips" id="ftypes"></div>
-    </div>
+    <div class="sechead"><h2>Counters</h2><div class="rule"></div>
+      <label class="only" title="show only counters in Counterparty's own envelope, without an ordinals inscription"><input type="checkbox" id="native-only">native only</label>
+      <div class="meta" id="latest-meta"></div></div>
     <div class="grid" id="grid"></div>
     <div id="emptystate"></div>
     <div class="pager" id="pager"></div>
-  </div>
-  <div class="scrim" id="scrim"></div>
-  <div class="sheet" id="sheet" role="dialog" aria-label="Filters">
-    <div class="grab"></div>
-    <div><h3>Tags</h3><div class="chips" id="stags"></div></div>
-    <div><h3>Type</h3><div class="chips" id="stypes"></div></div>
-    <div class="chips" id="stools"></div>
-    <button class="go" id="sgo">Show counters</button>
   </div>
 </main>
 
@@ -804,13 +743,12 @@ const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",
 const fmtSize=b=> b<1000?`${b} B`: b<1e6?`${(b/1000).toFixed(1)} KB`:`${(b/1e6).toFixed(2)} MB`;
 const LARGE_BYTES=400000;      // over 400 KB: too big for standard relay, mined direct
 const WHOLE_BLOCK_BYTES=3500000; // over 3.5 MB: the inscription fills an entire block
-const sizeTag=c=> c.size>WHOLE_BLOCK_BYTES?'whole block': c.size>LARGE_BYTES?'large': null;
 const fmtDate=t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,16)+' UTC';
 const fmtQty=(q,c)=> c.divisible ? (+(q/1e8).toFixed(8)).toLocaleString('en-US',{maximumFractionDigits:8}) : (+q).toLocaleString();
 const fmtSupply=c=>fmtQty(c.supply,c);
 
 // A counter's tags, in the order they are shown. The one list behind the
-// badges on a counter's page, the dots on its card, and the filter chips.
+// badges on a counter's page and the dots on its card.
 const TAGS=[
   {name:'native',     family:'native',  title:'counterparty native \u2014 Counterparty\'s own envelope, no ordinals inscription', on:c=>c.envelope==='counterparty'},
   {name:'ordinal',    family:'ordinal', title:'counterparty + ord \u2014 the reveal is also an ordinals inscription',          on:c=>c.envelope==='counterparty/ord'},
@@ -825,71 +763,26 @@ const TAGS=[
 ];
 const tagsOf=c=>TAGS.filter(t=>t.on(c));
 const dotClass=t=>`t-${t.family}${t.big?' big':''}${t.arrows?' arrows':''}`;
-function card(c,picked){
+function card(c){
   const tags=tagsOf(c);
   return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
-    <div class="thumb"><span class="ext">${c.delegate?'delegate':c.stamp_mime?'stamp':((c.content_type||'').split('/')[1]||c.content_type)}</span>${sizeTag(c)?`<span class="ext large ${c.size>WHOLE_BLOCK_BYTES?'fb':''}">${sizeTag(c)}</span>`:''}${renderContent(c)}</div>
+    <div class="thumb">${renderContent(c)}</div>
     <div class="cfoot">
-      <div class="numrow"><span class="num">${meterDigits(c.number)}</span>${tags.length?`<span class="dots" role="img" aria-label="${tags.map(t=>t.name).join(', ')}">${tags.map(t=>`<i class="${dotClass(t)}${picked&&picked.has(t.name)?' hit':''}" title="${t.name}"></i>`).join('')}</span>`:''}</div>
+      <div class="numrow"><span class="num">${meterDigits(c.number)}</span>${tags.length?`<span class="dots" role="img" aria-label="${tags.map(t=>t.name).join(', ')}">${tags.map(t=>`<i class="${dotClass(t)}" title="${t.name}"></i>`).join('')}</span>`:''}</div>
       <span class="asset">${esc(c.asset)}</span>
     </div>
   </div>`;
 }
 
 /* ============================================================
-   FILTERS — the legend, made clickable
+   FILTER — native only
    ============================================================ */
-// A filter has to know the WHOLE index: every chip shows how many counters
-// picking it would give, and a click must not cost a round trip. So the index
-// is fetched once (/facets — every counter as the few fields a card and a
-// filter need, ~5 KB on the wire for 500) and filtered here.
-//
-// A chip cycles only -> hide -> off. Picked tags in the same group are
-// alternatives (native OR ordinal); across groups they all have to hold;
-// hidden tags always exclude. The state lives in the link —
-// #/?only=native&hide=delegate&type=image&sort=old&p=2 — so a filtered view
-// can be shared, and the back button undoes a click.
-const GROUP={native:'envelope',ordinal:'envelope',delegate:'ref',pointer:'ref','whole block':'size',large:'size'};
-const groupOf=n=>GROUP[n]||n;
-const FTYPES=['image','svg','text','json','html','audio','video','pdf','other'];
-function typeOf(c){
-  // What the card SHOWS: a delegate's target, a stamp's decoded image.
-  const shown=(c.delegate&&c.delegate.number!=null&&c.delegate.content_type)||c.stamp_mime||c.content_type||'';
-  const ct=shown.split(';')[0].trim().toLowerCase();
-  if(ct==='image/svg+xml')return 'svg';
-  if(ct.startsWith('image/'))return 'image';
-  if(ct==='text/html')return 'html';
-  if(ct.startsWith('audio/'))return 'audio';
-  if(ct.startsWith('video/'))return 'video';
-  if(ct==='application/pdf')return 'pdf';
-  if(ct==='application/json'||ct.endsWith('+json'))return 'json';
-  if(ct.startsWith('text/'))return 'text';
-  return 'other';
-}
-const slug=n=>n.replace(/ /g,'-'), unslug=x=>x.replace(/-/g,' ');
-const noFilters=()=>({only:new Set(),hide:new Set(),types:new Set(),old:false,page:0});
-const filtering=F=>!!(F.only.size||F.hide.size||F.types.size||F.old);
-function parseFilters(q){
-  const p=new URLSearchParams(q||''), names=new Set(TAGS.map(t=>t.name));
-  const set=(k,ok)=>new Set((p.get(k)||'').split(',').map(unslug).filter(ok));
-  const F={only:set('only',n=>names.has(n)),hide:set('hide',n=>names.has(n)),
-           types:set('type',n=>FTYPES.includes(n)),old:p.get('sort')==='old',
-           page:Math.max(0,(parseInt(p.get('p'),10)||1)-1)};
-  for(const n of F.only)F.hide.delete(n);
-  return F;
-}
-function filterHash(F,page){
-  if(!filtering(F))return '#/';
-  const q=[];
-  if(F.only.size)q.push('only='+[...F.only].map(slug).join(','));
-  if(F.hide.size)q.push('hide='+[...F.hide].map(slug).join(','));
-  if(F.types.size)q.push('type='+[...F.types].join(','));
-  if(F.old)q.push('sort=old');
-  if(page)q.push('p='+(page+1));
-  return '#/?'+q.join('&');
-}
-const copyFilters=F=>({only:new Set(F.only),hide:new Set(F.hide),types:new Set(F.types),old:F.old,page:0});
-
+// Numbers are gap-free over ALL counters, so the native ones cannot be asked
+// for a page at a time by number. The whole index is small enough to take at
+// once instead (/facets — every counter as the few fields a card needs, ~6 KB
+// on the wire for 500) and is filtered here. The switch lives in the link,
+// #/?only=native[&p=2], so the view can be shared and Back undoes it.
+const NATIVE='#/?only=native';
 let FACETS=null, facetsAt=0, facetsLoading=null;
 function loadFacets(){
   if(!API)return Promise.resolve([]);
@@ -901,7 +794,6 @@ function loadFacets(){
         const c={}; j.fields.forEach((k,i)=>c[k]=row[i]);
         const d=c.delegate;
         c.delegate=d?{number:d[0],content_type:d[1],size:d[2],fragment:d[3]}:null;
-        c._tags=new Set(tagsOf(c).map(t=>t.name)); c._type=typeOf(c);
         return c;
       });
       facetsAt=Date.now();
@@ -909,70 +801,7 @@ function loadFacets(){
     })
     .finally(()=>{facetsLoading=null;}));
 }
-// `but`: the chip being counted. Its own state and its group's picks are set
-// aside, so its number is what picking it would ADD to, not what is left.
-function matches(c,F,but,anyType){
-  const g=but&&groupOf(but);
-  for(const n of F.hide)if(n!==but&&c._tags.has(n))return false;
-  const groups=new Map();
-  for(const n of F.only){
-    const k=groupOf(n); if(k===g)continue;
-    groups.set(k,groups.get(k)||c._tags.has(n));
-  }
-  for(const ok of groups.values())if(!ok)return false;
-  return anyType||!F.types.size||F.types.has(c._type);
-}
-function chipHTML(name,kind,state,count,t){
-  const mark=t?`<i class="${dotClass(t).replace(/^t-\S+ ?/,'')}"></i>`:'';
-  const label=state==='out'?`${name}: hidden`:state==='in'?`${name}: only`:name;
-  return `<button class="chip ${t?'t-'+t.family:'type'}" data-f="${kind}" data-name="${name}"${state?` data-state="${state}"`:''}${count===0?' data-empty="1"':''} aria-pressed="${state==='in'}" aria-label="${label}" title="${t?esc(t.title):name+' files'}">${mark}${name}${count==null?'':`<span class="n">${count}</span>`}</button>`;
-}
-let CURF=noFilters(), SHEET=false, lastTally=-1;
-function renderBar(F,shown){
-  CURF=F;
-  const all=FACETS;
-  const tagChips=TAGS.map(t=>chipHTML(t.name,'tag',F.only.has(t.name)?'in':F.hide.has(t.name)?'out':'',
-    all?all.filter(c=>c._tags.has(t.name)&&matches(c,F,t.name)).length:null,t)).join('');
-  // Only the types the index actually holds, plus any the link names.
-  const typeChips=FTYPES.filter(n=>F.types.has(n)||(all&&all.some(c=>c._type===n))).map(n=>chipHTML(n,'type',F.types.has(n)?'in':'',
-    all?all.filter(c=>c._type===n&&matches(c,F,null,true)).length:null)).join('');
-  const tools=`<button class="fbtn" data-f="sort" title="the order counters are shown in">${F.old?'oldest first':'newest first'}</button>`
-    +(filtering(F)?`<button class="fbtn" data-f="clear">clear all</button>`:'');
-  el('ftags').innerHTML=`<span class="rowlabel">Tags</span>${tagChips}`;
-  el('ftypes').innerHTML=`<span class="rowlabel">Type</span>${typeChips}<span class="push"></span>${tools}`;
-  el('stags').innerHTML=tagChips; el('stypes').innerHTML=typeChips; el('stools').innerHTML=tools;
-  const active=[...F.only].map(n=>[n,'in']).concat([...F.hide].map(n=>[n,'out']));
-  el('flive').innerHTML=(active.map(([n,st])=>chipHTML(n,'tag',st,null,TAGS.find(t=>t.name===n))).join('')
-    +[...F.types].map(n=>chipHTML(n,'type','in',null)).join(''))||'<span class="none">all counters</span>';
-  const k=active.length+F.types.size;
-  el('fk').textContent=k; el('fk').classList.toggle('hidden',!k);
-  if(shown!=null)el('sgo').textContent=`Show ${shown.toLocaleString()} counter${shown===1?'':'s'}`;
-}
-function onFilterClick(e){
-  const b=e.target.closest('[data-f]'); if(!b)return;
-  const F=copyFilters(CURF), n=b.dataset.name;
-  if(b.dataset.f==='tag'){
-    if(F.only.has(n)){F.only.delete(n);F.hide.add(n);}
-    else if(F.hide.has(n))F.hide.delete(n);
-    else F.only.add(n);
-  }else if(b.dataset.f==='type'){F.types.has(n)?F.types.delete(n):F.types.add(n);}
-  else if(b.dataset.f==='sort')F.old=!F.old;
-  else if(b.dataset.f==='clear'){go('#/');return;}
-  go(filterHash(F));
-}
-function sheet(open){
-  SHEET=open;
-  el('view-explore').classList.toggle('sheet-open',open);
-  document.body.style.overflow=open?'hidden':'';
-  // Cards behind an open sheet are not being looked at: their previews wait
-  // for it to close instead of loading and being thrown away at every tap.
-  if(!open)thumbsWatch(el('grid'));
-}
-for(const id of ['fbar','sheet'])el(id).addEventListener('click',onFilterClick);
-el('fopen').addEventListener('click',()=>sheet(true));
-el('scrim').addEventListener('click',()=>sheet(false));
-el('sgo').addEventListener('click',()=>sheet(false));
-addEventListener('keydown',e=>{if(e.key==='Escape'&&SHEET)sheet(false);});
+el('native-only').addEventListener('change',e=>go(e.target.checked?NATIVE:'#/'));
 
 /* ============================================================
    VIEWS
@@ -984,7 +813,6 @@ function el(id){return document.getElementById(id);}
 // paging never paints an older answer over a newer one.
 let nav=0;
 function showView(v){
-  if(v!=='explore'&&SHEET)sheet(false);
   // Live previews belong to the view being left: a hidden grid's documents
   // would go on downloading and running behind whatever is shown next.
   thumbsReset();
@@ -1006,14 +834,14 @@ function showSynced(st){
 let lastStatus=null,lastStatusAt=0;
 const statusSoon=()=>lastStatus&&Date.now()-lastStatusAt<15000?Promise.resolve(lastStatus):getStatus();
 
-async function renderFiltered(F){
+async function renderNative(page){
   const me=++nav;
   showView('explore');
+  el('native-only').checked=true;
   el('grid').innerHTML=skeleton(24);
   el('emptystate').innerHTML='';
-  el('latest-meta').textContent='loading\u2026';
+  el('latest-meta').textContent='loading…';
   el('pager').classList.add('busy');
-  renderBar(F);
   let all,st;
   try{[all,st]=await Promise.all([loadFacets(),statusSoon()]);}
   catch(_){
@@ -1031,34 +859,32 @@ async function renderFiltered(F){
     if(me!==nav)return;
   }
   showSynced(st);
-  let list=all.filter(c=>matches(c,F));
-  if(!F.old)list=list.slice().reverse();
-  const pages=Math.max(1,Math.ceil(list.length/PAGE)), cur=Math.min(F.page,pages-1);
-  el('grid').innerHTML=list.slice(cur*PAGE,(cur+1)*PAGE).map(c=>card(c,F.only)).join('');
+  const list=all.filter(c=>c.envelope==='counterparty').reverse();   // newest first
+  const pages=Math.max(1,Math.ceil(list.length/PAGE)), cur=Math.min(page,pages-1);
+  el('grid').innerHTML=list.slice(cur*PAGE,(cur+1)*PAGE).map(c=>card(c)).join('');
   el('pager').classList.remove('busy');
-  if(!SHEET)thumbsWatch(el('grid'));
-  renderBar(F,list.length);
+  thumbsWatch(el('grid'));
   el('latest-meta').innerHTML=`<span class="meter${list.length!==lastTally?' roll':''}">${[...list.length.toLocaleString('en-US')].map(ch=>ch===','?'<span class="sep">,</span>':`<span class="d">${ch}</span>`).join('')}</span>`
-    +`of ${all.length.toLocaleString('en-US')}${pages>1?` \u00b7 page ${cur+1} of ${pages}`:''}`;
+    +`native of ${all.length.toLocaleString('en-US')}${pages>1?` · page ${cur+1} of ${pages}`:''}`;
   lastTally=list.length;
-  el('emptystate').innerHTML=list.length?'':`<div class="empty"><b>Nothing matches</b>No counter has that combination. <a style="cursor:pointer;text-decoration:underline" onclick="go('#/')">Clear the filters</a> to see everything.</div>`;
-  const to=p=>filterHash(F,p);
+  el('emptystate').innerHTML=list.length?'':`<div class="empty"><b>No native counters yet</b>Every counter indexed so far is also an ordinals inscription.</div>`;
+  // Newest first, so the first page is the newest and "older" counts up.
+  const to=p=>p?`${NATIVE}&p=${p+1}`:NATIVE;
   el('pager').innerHTML = pages>1 ? `
-    <a class="${cur===0?'off':''}" onclick="go('${to(0)}')">\u00ab first</a>
-    <a class="${cur===0?'off':''}" onclick="go('${to(cur-1)}')">\u2190 prev</a>
+    <a class="${cur>=pages-1?'off':''}" onclick="go('${to(pages-1)}')">« oldest</a>
+    <a class="${cur>=pages-1?'off':''}" onclick="go('${to(cur+1)}')">← older</a>
     <span class="pinfo">page ${cur+1} / ${pages}</span>
-    <a class="${cur>=pages-1?'off':''}" onclick="go('${to(cur+1)}')">next \u2192</a>
-    <a class="${cur>=pages-1?'off':''}" onclick="go('${to(pages-1)}')">last \u00bb</a>` : '';
+    <a class="${cur===0?'off':''}" onclick="go('${to(cur-1)}')">newer →</a>
+    <a class="${cur===0?'off':''}" onclick="go('${to(0)}')">newest »</a>` : '';
 }
+let lastTally=-1;
 
 async function renderExplore(page){
   const me=++nav;
   showView('explore');
   const latest=(page==null);
-  // The chips show at once; their counts arrive with the facets.
-  renderBar(noFilters());
+  el('native-only').checked=false;
   lastTally=-1;
-  loadFacets().then(()=>{if(me===nav)renderBar(CURF);}).catch(()=>{});
   // Answer the click before the network does: the old page goes (and with it
   // every document it was still loading), a skeleton stands in, and the pager
   // holds still until there is a page to move from.
@@ -1239,8 +1065,8 @@ function route(){
   const h=location.hash||'#/';
   if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}   // legacy hash links still work
   else if(m=h.match(/^#\/\?(.*)$/)){
-    const F=parseFilters(m[1]);
-    filtering(F)?renderFiltered(F):renderExplore();
+    const q=new URLSearchParams(m[1]);
+    q.get('only')==='native' ? renderNative(Math.max(0,(parseInt(q.get('p'),10)||1)-1)) : renderExplore();
   }
   else if(m=h.match(/^#\/p\/(\d+)$/)){renderExplore(+m[1]);}
   else if(m=h.match(/^#\/b\/(\d+)$/)){renderBlock(m[1]);}
