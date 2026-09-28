@@ -35,6 +35,7 @@ import re
 import sqlite3
 import sys
 import threading
+import time
 import zlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -422,6 +423,7 @@ def _card_info(store: Store, row: sqlite3.Row) -> dict:
         "owner": row["source"],
         "kind": row["kind"],
         "envelope": store.get_envelope(row["mint_txid"], ENVELOPE_VERSION),
+        "locked": store.get_locked(row["asset"]),
         "is_pointer_like": bool(row["is_pointer_like"]),
         "original": row["number"] == first,
         "supply": row["supply"],
@@ -494,7 +496,10 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "rolling_hash": row["rolling_hash"],
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
-        "locked": None,  # mutable; filled live on the single-counter endpoint
+        # Supply lock. Mutable, so the single-counter endpoint asks
+        # Counterparty; lists carry what was last seen (warm_locks_once keeps
+        # it fresh), null while it never has been.
+        "locked": store.get_locked(row["asset"]),
         # Total destroyed: the stored snapshot (refreshed by detail views);
         # the single-counter endpoint overlays the live number.
         "burned": row["burned"],
@@ -640,7 +645,9 @@ class Handler(BaseHTTPRequestHandler):
             info = _live_asset(self.config, row["asset"])
             owner = info.get("owner") or row["source"]
             rec = record_dict(store, row, owner=owner)
-            rec["locked"] = info.get("locked")
+            if info.get("locked") is not None:
+                rec["locked"] = bool(info["locked"])
+                store.set_locked(row["asset"], rec["locked"], int(time.time()))
             if info.get("supply") is not None:
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
@@ -806,6 +813,8 @@ class Handler(BaseHTTPRequestHandler):
             # not outlive the verdict.
             env = store.get_envelope(row["mint_txid"], ENVELOPE_VERSION)
             mark = {"counterparty": "n", "counterparty/ord": "o"}.get(env, "u")
+            # ...and the supply lock, which is a badge too and can change.
+            mark += {True: "l", False: "o"}.get(store.get_locked(row["asset"]), "u")
             name = (f"{row['number']}-{row['content_sha256'][:16]}-{mark}"
                     f"-v{card.VERSION}.{picture.VERSION}.png")
             path = self.config.social_dir / name
@@ -1113,12 +1122,40 @@ def warm_envelopes_once(config: Config, btc=None) -> int:
         store.close()
 
 
+UNLOCKED_MAX_AGE = 600      # an unlocked asset can be locked at any moment
+LOCKED_MAX_AGE = 86400      # a locked one stays locked; only a reorg undoes it
+
+
+def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
+    """Ask Counterparty for the supply lock of every asset whose cached state
+    is unknown or stale, and keep the answers. Returns how many were checked.
+
+    Like the envelope, this is what lets a list carry `locked` without calling
+    a backend itself. Stops at the first failure: while Core is catching up it
+    refuses every question, and the next pass starts where this one stopped."""
+    store = Store(config)
+    try:
+        cp = cp if cp is not None else CounterpartyClient(config)
+        now = int(time.time()) if now is None else now
+        checked = 0
+        for asset in store.assets_due_lock_check(now, UNLOCKED_MAX_AGE, LOCKED_MAX_AGE):
+            info = cp.get_asset(asset) or {}
+            if info.get("locked") is None:
+                continue        # Core does not know the asset: leave it unknown
+            store.set_locked(asset, bool(info["locked"]), now)
+            checked += 1
+        return checked
+    finally:
+        store.close()
+
+
 def _warm_envelopes_forever(config: Config, stop: threading.Event) -> None:
     while not stop.is_set():
-        try:
-            warm_envelopes_once(config)
-        except Exception:   # a backend down, a locked db: try again next pass
-            log.debug("envelope warm-up pass failed", exc_info=True)
+        for warm in (warm_envelopes_once, warm_locks_once):
+            try:
+                warm(config)
+            except Exception:   # a backend down, a locked db: try again next pass
+                log.debug("%s pass failed", warm.__name__, exc_info=True)
         stop.wait(ENVELOPE_WARM_INTERVAL)
 
 

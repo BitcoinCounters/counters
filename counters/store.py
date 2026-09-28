@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS envelopes (
     envelope  TEXT    NOT NULL,
     version   INTEGER NOT NULL
 );
+
+-- Serve-time DERIVED cache, not index data: whether an asset's SUPPLY is
+-- locked, as Counterparty last reported it. Live state — an owner can lock
+-- at any time — so every row carries when it was checked and is re-asked.
+CREATE TABLE IF NOT EXISTS asset_locks (
+    asset      TEXT    PRIMARY KEY,
+    locked     INTEGER NOT NULL,
+    checked_at INTEGER NOT NULL
+);
 """
 
 # Block hashes kept for reorg detection. Far deeper than any plausible reorg.
@@ -351,6 +360,41 @@ class Store:
             "LEFT JOIN envelopes e ON e.mint_txid = c.mint_txid AND e.version = ? "
             "WHERE e.mint_txid IS NULL ORDER BY c.number LIMIT ?",
             (version, limit),
+        )]
+
+    # --- supply-lock cache (derived, serve-time) -----------------------------
+
+    def get_locked(self, asset: str) -> bool | None:
+        """Whether the asset's supply was locked when last checked; None if
+        it never has been."""
+        row = self.db.execute(
+            "SELECT locked FROM asset_locks WHERE asset = ?", (asset,)
+        ).fetchone()
+        return bool(row["locked"]) if row else None
+
+    def set_locked(self, asset: str, locked: bool, now: int) -> None:
+        self.db.execute(
+            "INSERT INTO asset_locks (asset, locked, checked_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(asset) DO UPDATE SET locked = excluded.locked, "
+            "checked_at = excluded.checked_at",
+            (asset, int(locked), now),
+        )
+        self.db.commit()
+
+    def assets_due_lock_check(self, now: int, unlocked_age: int,
+                              locked_age: int, limit: int = 2000) -> list[str]:
+        """Assets carrying a counter whose lock state is unknown or stale,
+        never-checked first. An unlocked asset can be locked at any moment, so
+        it goes stale quickly; a locked one stays locked, and is re-asked only
+        rarely (a reorg is the one thing that can take a lock back)."""
+        return [r["asset"] for r in self.db.execute(
+            "SELECT c.asset AS asset, MIN(c.number) AS n, l.checked_at AS t "
+            "FROM counters c LEFT JOIN asset_locks l ON l.asset = c.asset "
+            "WHERE l.asset IS NULL "
+            "   OR (l.locked = 0 AND l.checked_at <= ?) "
+            "   OR (l.locked = 1 AND l.checked_at <= ?) "
+            "GROUP BY c.asset ORDER BY (t IS NOT NULL), t, n LIMIT ?",
+            (now - unlocked_age, now - locked_age, limit),
         )]
 
     def find(self, identifier: str) -> sqlite3.Row | None:
