@@ -26,7 +26,7 @@ import math
 from . import glyphs, png
 
 # Bump on any change that alters rendered output, so cached cards are rebuilt.
-VERSION = 3
+VERSION = 4
 
 WIDTH, HEIGHT = 1200, 630
 
@@ -47,7 +47,8 @@ COPPER = (0xE0, 0x68, 0x2F)
 COPPER2 = (0xF3, 0x90, 0x5A)
 PATINA = (0x5B, 0xB3, 0x94)
 GOLD = (0xD9, 0xA4, 0x41)
-SKY = (0x7F, 0xA9, 0xD8)
+ROSE = (0xD9, 0x7C, 0x96)
+RED = (0xE5, 0x53, 0x4B)
 
 PAD = 40
 GUTTER = 40
@@ -218,7 +219,35 @@ BADGE_GAP = 10
 
 
 def _badge_width(label: str) -> int:
-    return text_width(label, BADGE_SCALE, 2) + 46
+    return text_width(label, BADGE_SCALE, 2) + 46 + _mark_extra(label)
+
+
+def _mark_extra(label: str) -> int:
+    """How much wider than a dot this badge's mark is."""
+    return 12 if label == "REINSCRIBE" else 0
+
+
+# The reinscribe mark: two arrows chasing each other, where other badges
+# carry a dot. The lower half is the upper half turned half a circle.
+_ARROWS_TOP = (
+    "...####...#",
+    "..#....#.##",
+    ".#......###",
+    "#......####",
+    "#..........",
+)
+_ARROWS = _ARROWS_TOP + ("." * 11,) + tuple(r[::-1] for r in reversed(_ARROWS_TOP))
+
+
+_ARROWS_SCALE = 2
+
+
+def _arrows(c: Canvas, x: int, y: int, color: tuple[int, int, int]) -> None:
+    k = _ARROWS_SCALE
+    for j, row in enumerate(_ARROWS):
+        for i, bit in enumerate(row):
+            if bit == "#":
+                c.fill(x + i * k, y + j * k, k, k, color)
 
 
 def _badge(c: Canvas, x: int, y: int, label: str,
@@ -226,24 +255,27 @@ def _badge(c: Canvas, x: int, y: int, label: str,
     """A pill like the detail page's `.vbadge`, dot and all."""
     w = _badge_width(label)
     c.box(x, y, w, BADGE_H, radius=BADGE_H // 2, stroke=color)
-    c.fill(x + 16, y + BADGE_H // 2 - 3, 6, 6, color)
-    c.text(x + 32, y + 5, label, BADGE_SCALE, color, 2)
+    if label == "REINSCRIBE":
+        _arrows(c, x + 14, y + (BADGE_H - len(_ARROWS) * _ARROWS_SCALE) // 2, color)
+    else:
+        c.fill(x + 16, y + BADGE_H // 2 - 3, 6, 6, color)
+    c.text(x + 32 + _mark_extra(label), y + 5, label, BADGE_SCALE, color, 2)
 
 
 def _badges(row: dict) -> list[tuple[str, tuple[int, int, int]]]:
     # The explorer's tags in the explorer's colours (index.html TAGS): the
     # envelope first — NATIVE green, ORDINAL orange, neither while it is
-    # unknown, since the two are never guessed from each other — then how it
-    # was issued (blue), what it refers to (grey), and its size (yellow).
+    # unknown, since the two are never guessed from each other — then
+    # FAIRMINTER rose, REINSCRIBE red, what it refers to grey, its size yellow.
     out = []
     if row.get("envelope") == "counterparty":
         out.append(("NATIVE", PATINA))
     if row.get("envelope") == "counterparty/ord":
         out.append(("ORDINAL", COPPER2))
     if row.get("kind") == "fairminter":
-        out.append(("FAIRMINTER", SKY))
+        out.append(("FAIRMINTER", ROSE))
     if row.get("original") is False:
-        out.append(("REINSCRIBE", SKY))
+        out.append(("REINSCRIBE", RED))
     if row.get("is_pointer_like"):
         out.append(("POINTER", DIM))
     size = row.get("size") or 0
