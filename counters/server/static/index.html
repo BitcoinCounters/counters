@@ -814,8 +814,9 @@ function card(c){
 // #/?only=native,large&hide=pointer,delegate[&p=2], so a view can be shared
 // and Back undoes a tick.
 //
-// native and ordinal are the two envelopes, so ticking both asks for either;
-// every other switch narrows what is shown.
+// Every switch narrows what is shown, with no exceptions: a counter has to
+// satisfy all that are ticked. So native and ordinal together show nothing —
+// they are the two envelopes, and no counter travelled in both.
 const SHOWN=['native','ordinal','stamp','large','reinscribe'], SWITCHES=[...SHOWN,'refs'];
 function parseFilters(q){
   const p=new URLSearchParams(q||''), only=(p.get('only')||'').split(','), hide=(p.get('hide')||'').split(',');
@@ -834,7 +835,8 @@ function filterHash(F,page){
   return '#/?'+q.join('&');
 }
 function shows(c,F){
-  if((F.native||F.ordinal)&&!((F.native&&c.envelope==='counterparty')||(F.ordinal&&c.envelope==='counterparty/ord')))return false;
+  if(F.native&&c.envelope!=='counterparty')return false;
+  if(F.ordinal&&c.envelope!=='counterparty/ord')return false;
   if(F.stamp&&!c.stamp_mime)return false;
   if(F.large&&!(c.size>LARGE_BYTES))return false;          // whole blocks are large too
   if(F.reinscribe&&c.original!==false)return false;
