@@ -49,7 +49,7 @@ from ..ids import format_id
 from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
                        sniff_media, stamp_image)
 from ..counterparty import CounterpartyClient, CounterpartyError
-from ..reveal import envelope_style
+from ..reveal import ENVELOPE_VERSION, envelope_style
 from ..store import Store
 
 log = logging.getLogger("counters")
@@ -407,8 +407,9 @@ def _card_info(store: Store, row: sqlite3.Row) -> dict:
 
     Deliberately no bitcoind or Counterparty calls: a link crawler must not be
     able to make this server go out to its backends, and the card stays
-    renderable (and testable) with neither reachable. That costs the `ordinal`
-    badge, which is a serve-time bitcoind lookup on the detail page.
+    renderable (and testable) with neither reachable. The envelope badge
+    comes from the cached verdict (warm_envelopes_once), so it shows once the
+    reveal has been classified and is simply absent until then.
     """
     siblings = store.get_counters_by_asset(row["asset"])
     first = siblings[0]["number"] if siblings else row["number"]
@@ -420,6 +421,7 @@ def _card_info(store: Store, row: sqlite3.Row) -> dict:
         "block": row["block_index"],
         "owner": row["source"],
         "kind": row["kind"],
+        "envelope": store.get_envelope(row["mint_txid"], ENVELOPE_VERSION),
         "is_pointer_like": bool(row["is_pointer_like"]),
         "original": row["number"] == first,
         "supply": row["supply"],
@@ -474,10 +476,14 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         # §5.5: the event a delegate body names — {'id','number','content_type',
         # 'fragment'}, number None while unresolved — or null for a non-delegate.
         "delegate": _delegate_info(store, row),
-        # Envelope style is computed from the reveal tx (a bitcoind fetch), so
-        # it is filled only on the single-counter endpoint; null in lists
-        # (unknown, not "no"). Server-determined, never indexed.
-        "envelope": None,  # 'counterparty/ord' | 'counterparty'
+        # Envelope style is computed from the reveal tx (a bitcoind fetch).
+        # Lists never make that fetch: they carry the cached verdict
+        # (warm_envelopes fills it in the background), and null means
+        # unknown, not "no". Server-determined, never part of the index.
+        "envelope": store.get_envelope(row["mint_txid"], ENVELOPE_VERSION),
+        # N6: the lowest-numbered counter on an asset is its original; any
+        # later one is a reinscription.
+        "original": row["number"] == store.first_number(row["asset"]),
         "owner": owner if owner is not None else row["source"],
         "source": row["source"],
         "txid": row["mint_txid"],
@@ -649,9 +655,14 @@ class Handler(BaseHTTPRequestHandler):
             rec["block_time"] = _block_time(self.config, row["block_index"])
             # Envelope style (counterparty vs counterparty/ord) from the reveal tx — server-side,
             # serve-time; never indexed; never affects validity or numbering.
-            tx = self._reveal_tx(row)
-            if tx is not None:
-                rec["envelope"] = envelope_style(tx)      # 'counterparty/ord' | 'counterparty'
+            # The cached verdict stands (a reveal's witness cannot change);
+            # only an unknown one costs the bitcoind fetch, and is kept.
+            if rec["envelope"] is None:
+                tx = self._reveal_tx(row)
+                style = envelope_style(tx) if tx is not None else None
+                if style is not None:
+                    rec["envelope"] = style      # 'counterparty/ord' | 'counterparty'
+                    store.set_envelope(row["mint_txid"], style, ENVELOPE_VERSION)
             if rec["fee"] is None:
                 rec["fee"], rec["tx_size"] = self._ensure_fee(store, row)
             if rec["xcp_burned"] is None:
@@ -780,9 +791,9 @@ class Handler(BaseHTTPRequestHandler):
         Rendering costs real CPU (a 1.4 MB PNG has to be decoded, resized and
         re-encoded, maybe several times over to fit the byte budget), and
         crawlers refetch, so results are cached on disk under the data dir. The
-        key pins the content hash and both renderer versions, so a
-        re-inscription or a change to `card` or `picture` rebuilds it and a
-        stale image can never be served. The body may be PNG or JPEG whatever
+        key pins the content hash, the envelope verdict and both renderer
+        versions, so a re-inscription or a change to `card` or `picture`
+        rebuilds it and a stale image can never be served. The body may be PNG or JPEG whatever
         the path says; the Content-Type header is what crawlers go by.
         """
         store = Store(self.config)
@@ -790,7 +801,12 @@ class Handler(BaseHTTPRequestHandler):
             row = store.find(ident)
             if row is None:
                 return self._send(404, "text/plain; charset=utf-8", b"counter not found")
-            name = (f"{row['number']}-{row['content_sha256'][:16]}"
+            # The envelope is in the key because the card draws it as a
+            # badge: a card rendered before the reveal was classified must
+            # not outlive the verdict.
+            env = store.get_envelope(row["mint_txid"], ENVELOPE_VERSION)
+            mark = {"counterparty": "n", "counterparty/ord": "o"}.get(env, "u")
+            name = (f"{row['number']}-{row['content_sha256'][:16]}-{mark}"
                     f"-v{card.VERSION}.{picture.VERSION}.png")
             path = self.config.social_dir / name
             try:
@@ -1056,6 +1072,12 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
     ConnectionReset/BrokenPipe/Timeout errors are the peer's doing, not a
     server fault — real handler errors still print."""
 
+    def server_close(self) -> None:
+        stop = getattr(self, "envelope_warm_stop", None)
+        if stop is not None:
+            stop.set()
+        super().server_close()
+
     def handle_error(self, request, client_address) -> None:
         exc = sys.exc_info()[1]
         if isinstance(exc, (ConnectionError, BrokenPipeError, TimeoutError)):
@@ -1064,12 +1086,54 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+ENVELOPE_WARM_INTERVAL = 30.0   # seconds between looks for newly indexed reveals
+
+
+def warm_envelopes_once(config: Config, btc=None) -> int:
+    """Classify the envelope of every indexed reveal that has no cached
+    verdict yet, and keep it. Returns how many were filled.
+
+    This is what lets a list response carry `envelope` without ever calling
+    bitcoind itself: the whole index costs a few seconds once, a new counter
+    one fetch. Stops at the first failure — an unreachable node answers no
+    better for the next txid, and the next pass picks up where this one
+    stopped."""
+    store = Store(config)
+    try:
+        btc = btc if btc is not None else BitcoindClient(config)
+        filled = 0
+        for txid in store.reveals_without_envelope(ENVELOPE_VERSION):
+            style = envelope_style(btc.get_raw_transaction(txid, verbose=True))
+            if style is None:
+                continue        # not a reveal per bitcoind: leave it unknown
+            store.set_envelope(txid, style, ENVELOPE_VERSION)
+            filled += 1
+        return filled
+    finally:
+        store.close()
+
+
+def _warm_envelopes_forever(config: Config, stop: threading.Event) -> None:
+    while not stop.is_set():
+        try:
+            warm_envelopes_once(config)
+        except Exception:   # a backend down, a locked db: try again next pass
+            log.debug("envelope warm-up pass failed", exc_info=True)
+        stop.wait(ENVELOPE_WARM_INTERVAL)
+
+
 def make_server(config: Config, host: str = "127.0.0.1", port: int = 8081) -> ThreadingHTTPServer:
     """Build (but do not start) the explorer HTTP server. The caller drives it —
     either blocking via run() for a serve-only process, or on a background thread
     when `counters server` also runs the indexer in the foreground."""
     httpd = _QuietThreadingHTTPServer((host, port), Handler)
     httpd.config = config  # type: ignore[attr-defined]
+    # Background, daemon: it must never hold the process open or delay a
+    # request, and server_close() tells it to stop.
+    stop = threading.Event()
+    httpd.envelope_warm_stop = stop  # type: ignore[attr-defined]
+    threading.Thread(target=_warm_envelopes_forever, args=(config, stop),
+                     name="counters-envelopes", daemon=True).start()
     return httpd
 
 

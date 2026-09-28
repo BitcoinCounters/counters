@@ -446,8 +446,11 @@ exactly as counterparty-rs's `is_ord` does (third tapscript push == `"ord"`, fou
 `0x07`). Note that the *value* of the metaprotocol tag is never compared:
 counterparty-rs requires tag `0x07` to be present but never reads what follows
 it, so `xcp` is a convention of Core's composer, not a parser requirement.
-Because it costs a bitcoind fetch, `envelope` is filled only on the
-single-counter endpoint (null in list responses — unknown, not "no").
+Because it costs a bitcoind fetch, a server works `envelope` out once per
+reveal and keeps the verdict in a derived cache beside the index — keyed by
+the classifier's version, never hashed, safe to drop — so list responses
+carry it without a fetch of their own. It is `null` until a reveal has been
+classified: unknown, not "no".
 
 ### 10.2 `metadata_shape` (`counterparty/ord` only)
 

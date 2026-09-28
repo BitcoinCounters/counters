@@ -26,9 +26,13 @@ import math
 from . import glyphs, png
 
 # Bump on any change that alters rendered output, so cached cards are rebuilt.
-VERSION = 2
+VERSION = 3
 
 WIDTH, HEIGHT = 1200, 630
+
+# Size tags, in step with the explorer's LARGE_BYTES / WHOLE_BLOCK_BYTES.
+LARGE_BYTES = 400_000
+WHOLE_BLOCK_BYTES = 3_500_000
 
 # The explorer's palette (static/index.html `:root`), so a shared link looks
 # like the page it points at.
@@ -42,6 +46,8 @@ FAINT = (0x6E, 0x62, 0x53)
 COPPER = (0xE0, 0x68, 0x2F)
 COPPER2 = (0xF3, 0x90, 0x5A)
 PATINA = (0x5B, 0xB3, 0x94)
+GOLD = (0xD9, 0xA4, 0x41)
+SKY = (0x7F, 0xA9, 0xD8)
 
 PAD = 40
 GUTTER = 40
@@ -225,15 +231,26 @@ def _badge(c: Canvas, x: int, y: int, label: str,
 
 
 def _badges(row: dict) -> list[tuple[str, tuple[int, int, int]]]:
-    out = [("VALID", PATINA)]
-    if row.get("kind") == "fairminter":
-        out.append(("FAIRMINTER", COPPER2))
-    if row.get("original") is False:
-        out.append(("REINSCRIBE", COPPER2))
-    if row.get("is_pointer_like"):
-        out.append(("POINTER", COPPER2))
+    # The explorer's tags in the explorer's colours (index.html TAGS): the
+    # envelope first — NATIVE green, ORDINAL orange, neither while it is
+    # unknown, since the two are never guessed from each other — then how it
+    # was issued (blue), what it refers to (grey), and its size (yellow).
+    out = []
+    if row.get("envelope") == "counterparty":
+        out.append(("NATIVE", PATINA))
     if row.get("envelope") == "counterparty/ord":
         out.append(("ORDINAL", COPPER2))
+    if row.get("kind") == "fairminter":
+        out.append(("FAIRMINTER", SKY))
+    if row.get("original") is False:
+        out.append(("REINSCRIBE", SKY))
+    if row.get("is_pointer_like"):
+        out.append(("POINTER", DIM))
+    size = row.get("size") or 0
+    if size > WHOLE_BLOCK_BYTES:
+        out.append(("WHOLE BLOCK", GOLD))
+    elif size > LARGE_BYTES:
+        out.append(("LARGE", GOLD))
     return out
 
 
@@ -336,13 +353,15 @@ def render(info: dict) -> bytes:
     y += glyphs.CELL_H * scale + 20
 
     bx = x
-    for label, color in _badges(info):
+    badges = _badges(info)
+    for label, color in badges:
         w = _badge_width(label)
         if bx > x and bx + w > RIGHT_X + RIGHT_W:
             bx, y = x, y + BADGE_H + 12
         _badge(c, bx, y, label, color)
         bx += w + BADGE_GAP
-    y += BADGE_H + 26
+    # A counter with no badge gives the row's height to its facts.
+    y += BADGE_H + 26 if badges else 6
 
     _facts(c, x, y, RIGHT_W, BODY_Y + BODY_H, info)
     return c.to_png()

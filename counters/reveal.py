@@ -136,6 +136,11 @@ def is_taproot_reveal(tx: dict) -> bool:
     return len(witness) == 3
 
 
+# Bump when envelope_style's rule changes: servers cache its answer per reveal
+# keyed by this, so a new rule re-derives instead of trusting an old verdict.
+ENVELOPE_VERSION = 1
+
+
 def envelope_style(tx: dict) -> str | None:
     """'counterparty/ord' | 'counterparty' for a taproot reveal, None for non-reveals.
 
