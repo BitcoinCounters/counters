@@ -28,6 +28,7 @@ services:
       COUNTER_DATA_DIR: /data
       COUNTER_POLL_INTERVAL: ${COUNTER_POLL_INTERVAL:-15}
       COUNTER_CONFIRMATIONS: ${COUNTER_CONFIRMATIONS:-0}
+      COUNTER_PREVIEW_ORIGIN: ${COUNTER_PREVIEW_ORIGIN:-}
     # Lets the container reach services running on the host (Linux).
     extra_hosts:
       - "host.docker.internal:host-gateway"

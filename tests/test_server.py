@@ -119,6 +119,10 @@ def test_api_and_static():
         assert rec["kind"] == "issuance"
         assert rec["size"] == 2
         assert rec["body"] == "hi"           # small text inlined
+        # body=0: the same records without the inlined text (the grid's form)
+        lean = json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]
+        assert [r["number"] for r in lean] == [r["number"] for r in data["counters"]]
+        assert all(r["body"] is None for r in lean)
         assert rec["block"] == 902005 and rec["msg_index"] == 0
         assert rec["tx_index"] == 1   # → tokenscan.io/tx/<tx_index>
         assert rec["fee"] == 333 and rec["tx_size"] == 111
@@ -145,6 +149,11 @@ def test_api_and_static():
         assert st["version"] == __version__
         assert st["commit"]
         assert "updated" in st
+        # Previews come from this origin unless a second one is configured.
+        assert st["preview_origin"] is None
+        httpd.config.preview_origin = "https://frames.example"
+        assert json.loads(_get(base, "/status")[2])["preview_origin"] == "https://frames.example"
+        httpd.config.preview_origin = ""
 
         # --- /block/<height>: counters minted in a block ---
         status, _, body = _get(base, "/block/902005")
@@ -338,7 +347,7 @@ def test_delegation():
             status, _, body = _get(base, f"/counter/{n}")
             d = json.loads(body)["delegate"]
             assert d == {"id": token, "number": 0, "content_type": "text/plain",
-                         "fragment": None}, n
+                         "size": len(b"hello-target-bytes"), "fragment": None}, n
         assert json.loads(_get(base, "/counter/0")[2])["delegate"] is None
 
         # display fragment: on the reference itself, or inherited from the
@@ -377,3 +386,26 @@ def test_delegation():
         assert json.loads(_get(base, "/counter/5")[2])["delegate"]["number"] == 1
     finally:
         httpd.shutdown()
+
+
+def test_preview_origin_is_a_bare_origin():
+    """COUNTER_PREVIEW_ORIGIN lands in every preview frame's src, so only a
+    bare origin is accepted — anything else is dropped, never repaired."""
+    import os
+    from counters.config import Config
+
+    def read(value):
+        os.environ["COUNTER_PREVIEW_ORIGIN"] = value
+        try:
+            return Config().preview_origin
+        finally:
+            del os.environ["COUNTER_PREVIEW_ORIGIN"]
+
+    assert read("https://frames.example") == "https://frames.example"
+    assert read("https://frames.example/") == "https://frames.example"
+    assert read("http://localhost:8099") == "http://localhost:8099"
+    for bad in ("frames.example", "https://frames.example/path",
+                "https://frames.example?x=1", 'https://a.example" onload="x',
+                "javascript:alert(1)", "https://a.example b.example", ""):
+        assert read(bad) == "", bad
+    assert Config().preview_origin == ""
