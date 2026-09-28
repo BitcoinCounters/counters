@@ -213,11 +213,13 @@
   /* Whole block shares large's yellow; its size is what tells them apart. */
   .dots i.big{width:12px;height:12px}
   /* ---------- filters ----------
-     Two switches, on a line of their own under the heading. Each takes the
-     colour of what it is about: native green, references neutral. */
+     A few switches, on a line of their own under the heading. Each takes the
+     colour of the tag it is about — native green, ordinal orange, stamp
+     blue, large yellow — and the one that hides rather than shows stays
+     neutral. */
   .filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px 24px;margin:-4px 0 16px}
   .only{--tag:var(--patina);display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);cursor:pointer;user-select:none;white-space:nowrap}
-  .only.refs{--tag:var(--ink)}
+  .only.ordinal{--tag:var(--copper2)} .only.stamp{--tag:var(--sky)} .only.large{--tag:var(--gold)} .only.refs{--tag:var(--ink)}
   .only:hover{color:var(--ink)}
   .only input{appearance:none;-webkit-appearance:none;margin:0;width:16px;height:16px;border:1px solid var(--faint);border-radius:4px;background:var(--bg2);display:inline-grid;place-content:center;cursor:pointer;transition:.15s;flex:none}
   .only input::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--tag);box-shadow:0 0 8px var(--tag);transform:scale(0);transition:transform .15s}
@@ -387,9 +389,12 @@
   <div class="wrap" style="padding-top:30px">
     <div class="synced" id="synced"></div>
     <div class="sechead"><h2>Counters</h2><div class="rule"></div><div class="meta" id="latest-meta"></div></div>
-    <div class="filters">
-      <label class="only" title="show only counters in Counterparty's own envelope, without an ordinals inscription"><input type="checkbox" id="native-only">native only</label>
-      <label class="only refs" title="hide counters whose content is a link to a file, or a reference to another counter's file"><input type="checkbox" id="hide-refs">hide pointers/delegates</label>
+    <div class="filters" id="filters">
+      <label class="only" title="counters in Counterparty's own envelope, without an ordinals inscription"><input type="checkbox" id="f-native">native</label>
+      <label class="only ordinal" title="counters that are also an ordinals inscription"><input type="checkbox" id="f-ordinal">ordinal</label>
+      <label class="only stamp" title="counters that are also a Bitcoin Stamp"><input type="checkbox" id="f-stamp">stamp</label>
+      <label class="only large" title="counters over 400 KB, whole blocks included"><input type="checkbox" id="f-large">large</label>
+      <label class="only refs" title="hide counters whose content is a link to a file, or a reference to another counter's file"><input type="checkbox" id="f-refs">hide pointers/delegates</label>
     </div>
     <div class="grid" id="grid"></div>
     <div id="emptystate"></div>
@@ -782,29 +787,41 @@ function card(c){
 }
 
 /* ============================================================
-   FILTERS — native only · hide pointers/delegates
+   FILTERS — native · ordinal · stamp · large · hide pointers/delegates
    ============================================================ */
 // Numbers are gap-free over ALL counters, so a filtered set cannot be asked
 // for a page at a time by number. The whole index is small enough to take at
 // once instead (/facets — every counter as the few fields a card needs, ~6 KB
 // on the wire for 500) and is filtered here. The switches live in the link,
-// #/?only=native&hide=pointer,delegate[&p=2], so a view can be shared and
-// Back undoes a tick.
+// #/?only=native,large&hide=pointer,delegate[&p=2], so a view can be shared
+// and Back undoes a tick.
+//
+// native and ordinal are the two envelopes, so ticking both asks for either;
+// every other switch narrows what is shown.
+const SHOWN=['native','ordinal','stamp','large'], SWITCHES=[...SHOWN,'refs'];
 function parseFilters(q){
-  const p=new URLSearchParams(q||''), hide=(p.get('hide')||'').split(',');
-  return {native:p.get('only')==='native',
-          refs:hide.includes('pointer')||hide.includes('delegate'),
-          page:Math.max(0,(parseInt(p.get('p'),10)||1)-1)};
+  const p=new URLSearchParams(q||''), only=(p.get('only')||'').split(','), hide=(p.get('hide')||'').split(',');
+  const F={refs:hide.includes('pointer')||hide.includes('delegate'),
+           page:Math.max(0,(parseInt(p.get('p'),10)||1)-1)};
+  for(const k of SHOWN)F[k]=only.includes(k);
+  return F;
 }
+const filtering=F=>SWITCHES.some(k=>F[k]);
 function filterHash(F,page){
-  const q=[];
-  if(F.native)q.push('only=native');
+  const q=[], only=SHOWN.filter(k=>F[k]);
+  if(only.length)q.push('only='+only.join(','));
   if(F.refs)q.push('hide=pointer,delegate');
   if(!q.length)return '#/';
   if(page)q.push('p='+(page+1));
   return '#/?'+q.join('&');
 }
-const shows=(c,F)=>(!F.native||c.envelope==='counterparty')&&(!F.refs||!(c.delegate||c.is_pointer_like));
+function shows(c,F){
+  if((F.native||F.ordinal)&&!((F.native&&c.envelope==='counterparty')||(F.ordinal&&c.envelope==='counterparty/ord')))return false;
+  if(F.stamp&&!c.stamp_mime)return false;
+  if(F.large&&!(c.size>LARGE_BYTES))return false;          // whole blocks are large too
+  return !F.refs||!(c.delegate||c.is_pointer_like);
+}
+const setSwitches=F=>{for(const k of SWITCHES)el('f-'+k).checked=!!(F&&F[k]);};
 let FACETS=null, facetsAt=0, facetsLoading=null;
 function loadFacets(){
   if(!API)return Promise.resolve([]);
@@ -823,8 +840,10 @@ function loadFacets(){
     })
     .finally(()=>{facetsLoading=null;}));
 }
-for(const id of ['native-only','hide-refs'])el(id).addEventListener('change',()=>
-  go(filterHash({native:el('native-only').checked,refs:el('hide-refs').checked})));
+el('filters').addEventListener('change',()=>{
+  const F={}; for(const k of SWITCHES)F[k]=el('f-'+k).checked;
+  go(filterHash(F));
+});
 
 /* ============================================================
    VIEWS
@@ -860,7 +879,7 @@ const statusSoon=()=>lastStatus&&Date.now()-lastStatusAt<15000?Promise.resolve(l
 async function renderFiltered(F){
   const me=++nav;
   showView('explore');
-  el('native-only').checked=F.native; el('hide-refs').checked=F.refs;
+  setSwitches(F);
   el('grid').innerHTML=skeleton(24);
   el('emptystate').innerHTML='';
   el('latest-meta').textContent='loading…';
@@ -906,7 +925,7 @@ async function renderExplore(page){
   const me=++nav;
   showView('explore');
   const latest=(page==null);
-  el('native-only').checked=el('hide-refs').checked=false;
+  setSwitches(null);
   lastTally=-1;
   // Answer the click before the network does: the old page goes (and with it
   // every document it was still loading), a skeleton stands in, and the pager
@@ -1089,7 +1108,7 @@ function route(){
   if(m=h.match(/^#\/c\/(.+)$/)){renderDetail(decodeURIComponent(m[1]));}   // legacy hash links still work
   else if(m=h.match(/^#\/\?(.*)$/)){
     const F=parseFilters(m[1]);
-    F.native||F.refs ? renderFiltered(F) : renderExplore();
+    filtering(F) ? renderFiltered(F) : renderExplore();
   }
   else if(m=h.match(/^#\/p\/(\d+)$/)){renderExplore(+m[1]);}
   else if(m=h.match(/^#\/b\/(\d+)$/)){renderBlock(m[1]);}
