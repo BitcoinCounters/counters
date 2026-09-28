@@ -6,8 +6,10 @@ Serves two things from one origin:
   2. A small JSON API backed by the index Store:
 
        GET /status                      -> {"indexed": H, "count": N, "genesis": 0,
-                                            "version": V, "commit": SHA, "updated": ISO}
+                                            "version": V, "commit": SHA, "updated": ISO,
+                                            "preview_origin": URL|null}
        GET /counters?before=N&limit=K   -> {"counters": [record, ...]}  newest-first
+                                           (&body=0 leaves `body` null)
        GET /counter/<number|asset>      -> a single record (404 if unknown)
        GET /block/<height>              -> {"block": H, "count": K, "counters": [...]}
        GET /content/<number>            -> the raw file bytes, with its stored MIME
@@ -44,7 +46,8 @@ from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..ids import format_id
-from ..content import classify_mime_type, delegate_ref, sniff_media, stamp_image
+from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
+                       sniff_media, stamp_image)
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import envelope_style
 from ..store import Store
@@ -323,15 +326,22 @@ def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
 
 
 def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
-    """{'id','number','content_type','fragment'} for a delegate-like counter
-    (build ref v3 §5.5): the named event, resolved against the local index
-    ONLY — number/content_type are None while the target is not an indexed
-    counter. The fragment is the display fragment the explorer appends to the
+    """{'id','number','content_type','size','fragment'} for a delegate-like
+    counter (build ref v3 §5.5): the named event, resolved against the local
+    index ONLY — number/content_type/size are None while the target is not an
+    indexed counter. `size` is the TARGET's byte length: what a frame showing
+    this counter actually downloads, which the delegate's own ~1 KB says
+    nothing about (300 editions of one 4 MB file are 300 x 4 MB to a grid).
+    The fragment is the display fragment the explorer appends to the
     target's preview URL (an SVG edition selector); charset-validated in
     content.py, so it is URL- and attribute-safe as-is. None for a
     non-delegate. Serve-time, like the stamp tag; never indexed."""
     ct = row["content_type"] or "text/plain"
     if classify_mime_type(ct, row["block_index"]) != "text":
+        return None
+    # §5.5: a body over the cap is never a delegate — so don't pull a
+    # multi-megabyte SVG off disk just to have delegate_ref say so.
+    if row["content_length"] > DELEGATE_MAX_BYTES:
         return None
     blob = store.read_blob(row["content_sha256"])
     if blob is None:
@@ -345,6 +355,7 @@ def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
         "id": format_id(txid, msg_index),
         "number": target["number"] if target is not None else None,
         "content_type": target["content_type"] if target is not None else None,
+        "size": target["content_length"] if target is not None else None,
         "fragment": fragment,
     }
 
@@ -566,6 +577,9 @@ class Handler(BaseHTTPRequestHandler):
                 "version": __version__,
                 "commit": GIT_COMMIT,
                 "updated": GIT_UPDATED,
+                # Where the explorer loads preview frames from, when that is
+                # not this origin (COUNTER_PREVIEW_ORIGIN); null = here.
+                "preview_origin": self.config.preview_origin or None,
             }
         finally:
             store.close()
@@ -595,13 +609,18 @@ class Handler(BaseHTTPRequestHandler):
                 before = int(before)
             except ValueError:
                 return self._json({"error": "before must be an integer"}, status=400)
+        # body=0 leaves the inlined text out: the explorer's grid draws every
+        # card through /preview/<n> and never reads it, and a page of small
+        # text counters is mostly bodies by weight.
+        with_body = qs.get("body", ["1"])[0] != "0"
         store = Store(self.config)
         try:
             if before not in (None, "", "null"):
                 rows = store.list_before(before, limit)
             else:
                 rows = store.list_recent(limit)
-            payload = {"counters": [record_dict(store, r) for r in rows]}
+            payload = {"counters": [record_dict(store, r, with_body=with_body)
+                                    for r in rows]}
         finally:
             store.close()
         self._json(payload)

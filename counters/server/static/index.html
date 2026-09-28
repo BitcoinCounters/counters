@@ -150,7 +150,19 @@
   .render{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
   .render svg,.render img{width:100%;height:100%;object-fit:contain;display:block}
   .render iframe.sandboxed{width:100%;height:100%;border:0;display:block;background:#fff}
-  .card .thumb iframe.sandboxed{pointer-events:none}
+  .card .thumb iframe.sandboxed{pointer-events:none;position:absolute;inset:0}
+  /* A card's preview before (and while) its document loads: the frame stays
+     hidden until it has something to show, so a slow file is a quiet
+     placeholder rather than a white square. */
+  .render.wait iframe.sandboxed{opacity:0}
+  .render .ph{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);display:none}
+  .render.wait .ph{display:block;animation:breathe 1.6s ease-in-out infinite}
+  .card.skel{cursor:default;pointer-events:none}
+  .card.skel .thumb,.skelbar{animation:breathe 1.6s ease-in-out infinite}
+  .skelbar{display:block;height:1.1em;border-radius:5px;background:var(--line2)}
+  @keyframes breathe{0%,100%{opacity:.45}50%{opacity:1}}
+  .pager.busy a{opacity:.35;pointer-events:none}
+  @media (prefers-reduced-motion:reduce){.render.wait .ph,.card.skel .thumb,.skelbar{animation:none}}
   .render .txt{font-family:var(--mono);color:var(--ink);padding:16px;text-align:center;line-height:1.35;max-width:100%;max-height:100%;overflow:hidden;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical}
   .render .blob{display:flex;flex-direction:column;align-items:center;gap:9px;color:var(--faint);font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
 
@@ -408,15 +420,27 @@ const API = location.protocol.startsWith('http') ? location.origin : null;
 // genesis — while #/ is a sliding window over the latest PAGE counters,
 // so the front page is always full.
 const PAGE = 100;
-async function fetchPage(page, count){
+// body=0: the grid draws every card through /preview/<n> and never reads the
+// inlined text, which is most of a page's weight.
+//
+// A page is asked for by its own bounds alone and trimmed here, rather than
+// clamped to the index's count first: that way it needs nothing from /status
+// and the two requests go out together. A FULL page is permanent (numbers are
+// gap-free and append-only), so it is kept for the session and paging back
+// over it costs no request at all.
+const pageCache = new Map();
+async function fetchPage(page){
+  if(pageCache.has(page)) return pageCache.get(page);
   const start = page * PAGE;
-  const n = Math.min(PAGE, count - start);         // clamp so the top page never spills over
-  if(n <= 0) return [];
-  const r = await fetch(`${API}/counters?before=${start + PAGE}&limit=${n}`);
-  return (await r.json()).counters;                // newest-first within the page
+  const r = await fetch(`${API}/counters?before=${start + PAGE}&limit=${PAGE}&body=0`);
+  if(!r.ok) throw new Error(`counters: ${r.status}`);
+  const list = (await r.json()).counters.filter(c => c.number >= start);  // the top page never spills over
+  if(list.length === PAGE) pageCache.set(page, list);
+  return list;                                     // newest-first within the page
 }
 async function fetchLatest(){
-  const r = await fetch(`${API}/counters?limit=${PAGE}`);
+  const r = await fetch(`${API}/counters?limit=${PAGE}&body=0`);
+  if(!r.ok) throw new Error(`counters: ${r.status}`);
   return (await r.json()).counters;                // newest-first
 }
 async function fetchCounter(id){
@@ -447,8 +471,21 @@ async function getCounter(id){
 async function listCounters(){
   return [structuredClone(ZERO)];   // file:// sample; live pages come from fetchPage
 }
+// Where preview frames load from. The server may name a second hostname for
+// itself on another site (/status preview_origin): a cross-site frame gets a
+// process of its own, so heavy documents parse and run off this page's thread.
+// Until /status has answered — and whenever it names none — that is here.
+let PREVIEW = API;
+let previewKnown = null;
+function previewReady(){ return previewKnown || (previewKnown = getStatus().catch(()=>null)); }
 async function getStatus(){
-  if(API){ const r=await fetch(`${API}/status`); return await r.json(); }
+  if(API){
+    const r=await fetch(`${API}/status`);
+    if(!r.ok) throw new Error(`status: ${r.status}`);
+    const st=await r.json();
+    try{ PREVIEW = st.preview_origin ? new URL(st.preview_origin).origin : API; }catch(_){ PREVIEW = API; }
+    return st;
+  }
   return {indexed:ZERO.block, count:1, genesis:0};
 }
 async function getBlock(h){
@@ -505,9 +542,146 @@ function renderContent(c,detail){
     const sandbox=ct==='application/pdf'
                  ?'allow-scripts allow-same-origin allow-downloads'
                  :active?'allow-scripts':'allow-same-origin';
-    return `<div class="render"><iframe class="sandboxed" ${detail?`id="cframe" data-sandbox="${sandbox}" data-frag="${frag}" `:''}sandbox="${sandbox}" referrerpolicy="no-referrer" loading="lazy" title="counter ${c.number}" src="${API}/preview/${c.number}${frag}"></iframe></div>`;
+    const src=`${PREVIEW}/preview/${c.number}${frag}`;
+    if(detail) return `<div class="render"><iframe class="sandboxed" id="cframe" data-sandbox="${sandbox}" data-frag="${frag}" sandbox="${sandbox}" referrerpolicy="no-referrer" title="counter ${c.number}" src="${src}"></iframe></div>`;
+    // A card gets no frame yet, only the description of one: thumbs (below)
+    // mounts it when the card is near the viewport. What it will download is
+    // the TARGET's size for a resolved delegate — its own body is a ~1 KB
+    // reference to a file that may fill a block.
+    const bytes=(c.delegate&&c.delegate.number!=null&&c.delegate.size!=null)?c.delegate.size:c.size;
+    const heavy=bytes>=HEAVY_BYTES;
+    return `<div class="render wait" data-src="${src}" data-sandbox="${sandbox}" data-n="${c.number}"${heavy?' data-heavy="1"':''}><span class="ph">${heavy?fmtSize(bytes):'…'}</span></div>`;
   }
   return sampleRender(c);   // file:// has no server: render the bundled sample inline
+}
+
+/* ============================================================
+   THUMBNAILS — live previews, mounted only where they are looked at
+   ============================================================ */
+// Every card is a live sandboxed document, and a document is not a thumbnail.
+// An active one (HTML, SVG) runs under an opaque origin, which the browser's
+// HTTP cache keys per document: 300 editions delegating to one 4 MB SVG are
+// 300 separate 4 MB downloads, each parsed and scripted on this page's own
+// thread. Mounting a page of them at once (native loading=lazy reaches
+// thousands of pixels ahead) fetched 345 MB and froze the explorer for
+// seconds at a time. So:
+//
+//   * a card mounts its frame only once it is within NEAR of the viewport;
+//   * at most MAX_LOADING documents load at a time, nearest the middle of
+//     the screen first, so what is being looked at arrives first and the
+//     connection and the main thread are never swamped;
+//   * heavy ones load MAX_HEAVY_LOADING at a time with a BREATH between
+//     them: parsing a 4 MB document holds this thread for ~150 ms, and back
+//     to back those add up to a page that ignores clicks;
+//   * at most MAX_HEAVY_LIVE heavy documents stay mounted — scrolling on
+//     releases the ones left behind (never one still near the viewport);
+//   * leaving a view releases everything, which also cancels the downloads.
+const HEAVY_BYTES=256*1000;
+const NEAR='25% 0px';
+const MAX_LOADING=3;
+const MAX_HEAVY_LOADING=2;
+const BREATH=80;                 // ms this thread is left alone after a heavy load
+const MAX_HEAVY_LIVE=12;
+const LOAD_TIMEOUT=20000;        // a frame that never fires `load` gives its slot back
+const thumbs={wanted:new Set(),queue:[],live:new Set(),loading:0,heavyLoading:0,restUntil:0,timer:0,io:null};
+
+function thumbsPump(){
+  const mid=innerHeight/2;
+  while(thumbs.loading<MAX_LOADING && thumbs.queue.length){
+    // Heavy documents wait their turn; light ones pass them in the queue.
+    const rest=thumbs.restUntil-performance.now();
+    const heavyOk=thumbs.heavyLoading<MAX_HEAVY_LOADING&&rest<=0;
+    let best=-1,bestD=Infinity,held=false;
+    for(let i=thumbs.queue.length-1;i>=0;i--){
+      const b=thumbs.queue[i];
+      if(!thumbs.wanted.has(b)||!b.isConnected){b._queued=false;thumbs.queue.splice(i,1);if(best>i)best--;continue;}
+      if(b.dataset.heavy&&!heavyOk){held=true;continue;}
+      const r=b.getBoundingClientRect(),d=Math.abs((r.top+r.bottom)/2-mid);
+      if(d<bestD){bestD=d;best=i;}
+    }
+    if(best<0){
+      // Only resting heavy documents are left: come back when the breath is over
+      // (a finishing load pumps by itself).
+      if(held&&rest>0&&!thumbs.timer)thumbs.timer=setTimeout(()=>{thumbs.timer=0;thumbsPump();},rest+1);
+      return;
+    }
+    const box=thumbs.queue.splice(best,1)[0];
+    box._queued=false;
+    thumbMount(box);
+  }
+}
+function thumbMount(box){
+  const f=document.createElement('iframe');
+  f.className='sandboxed';
+  f.setAttribute('sandbox',box.dataset.sandbox);
+  f.setAttribute('referrerpolicy','no-referrer');
+  f.title=`counter ${box.dataset.n}`;
+  const heavy=!!box.dataset.heavy;
+  let held=true;
+  const release=shown=>{
+    if(!held)return;
+    held=false;clearTimeout(timer);thumbs.loading--;
+    if(heavy){thumbs.heavyLoading--;if(shown)thumbs.restUntil=performance.now()+BREATH;}
+    if(shown)box.classList.remove('wait');
+    thumbsPump();
+  };
+  const timer=setTimeout(()=>release(true),LOAD_TIMEOUT);
+  f.addEventListener('load',()=>release(true),{once:true});
+  box._release=release;
+  thumbs.loading++;
+  if(heavy)thumbs.heavyLoading++;
+  thumbs.live.add(box);
+  f.src=box.dataset.src;
+  box.appendChild(f);
+  if(box.dataset.heavy)thumbsEvict();
+}
+function thumbUnmount(box){
+  const f=box.querySelector('iframe');
+  if(f)f.remove();                       // also cancels a download in flight
+  box.classList.add('wait');
+  thumbs.live.delete(box);
+  if(box._release){const r=box._release;box._release=null;r(false);}
+}
+function thumbsEvict(){
+  // Set order is mount order, so this lets go of the oldest first.
+  let heavy=0;
+  for(const b of thumbs.live)if(b.dataset.heavy)heavy++;
+  for(const b of thumbs.live){
+    if(heavy<=MAX_HEAVY_LIVE)break;
+    if(b.dataset.heavy&&!thumbs.wanted.has(b)){thumbUnmount(b);heavy--;}
+  }
+}
+function thumbWant(box){
+  thumbs.wanted.add(box);
+  if(!thumbs.live.has(box)&&!box._queued){box._queued=true;thumbs.queue.push(box);}
+}
+function thumbsWatch(root){
+  const boxes=root.querySelectorAll('.render[data-src]');
+  if(!('IntersectionObserver' in window)){boxes.forEach(thumbWant);thumbsPump();return;}
+  if(!thumbs.io)thumbs.io=new IntersectionObserver(entries=>{
+    for(const e of entries){
+      if(e.isIntersecting)thumbWant(e.target);
+      else thumbs.wanted.delete(e.target);
+    }
+    thumbsPump();
+  },{rootMargin:NEAR});
+  boxes.forEach(b=>thumbs.io.observe(b));
+}
+function thumbsReset(){
+  if(thumbs.io)thumbs.io.disconnect();
+  // Empty the queue BEFORE letting go of the frames: each release pumps, and
+  // would mount the next card in line into the view being left.
+  for(const b of thumbs.queue)b._queued=false;
+  thumbs.queue.length=0;
+  thumbs.wanted.clear();
+  clearTimeout(thumbs.timer);thumbs.timer=0;thumbs.restUntil=0;
+  for(const b of [...thumbs.live])thumbUnmount(b);
+}
+function skeleton(n){
+  return Array.from({length:n},()=>`<div class="card skel"><div class="thumb"></div><div class="cfoot"><span class="skelbar" style="width:40%"></span><span class="skelbar" style="width:75%"></span></div></div>`).join('');
+}
+function loadFailed(what){
+  return `<div class="empty"><b>Couldn't load ${what}</b>The server didn't answer. <a style="cursor:pointer;text-decoration:underline" onclick="route()">Try again</a></div>`;
 }
 function sampleRender(c){
   const t=c.content_type;
@@ -546,25 +720,60 @@ function card(c){
    ============================================================ */
 const views={explore:el('view-explore'),detail:el('view-detail'),block:el('view-block'),docs:el('view-docs')};
 function el(id){return document.getElementById(id);}
-function showView(v){for(const k in views)views[k].classList.toggle('hidden',k!==v);
+// Every navigation bumps `nav`: a render that was still waiting on the network
+// when the next click landed finds the number moved on and lets go, so quick
+// paging never paints an older answer over a newer one.
+let nav=0;
+function showView(v){
+  // Live previews belong to the view being left: a hidden grid's documents
+  // would go on downloading and running behind whatever is shown next.
+  thumbsReset();
+  for(const k in views)views[k].classList.toggle('hidden',k!==v);
   document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.r===v||((v==='detail'||v==='block')&&a.dataset.r==='explore')));
   if(v!=='detail')document.title='Bitcoin Counters — Explorer';   // renderDetail sets the per-counter title after
   window.scrollTo(0,0);
 }
 
 async function renderExplore(page){
+  const me=++nav;
   showView('explore');
-  const st=await getStatus();
+  const latest=(page==null);
+  // Answer the click before the network does: the old page goes (and with it
+  // every document it was still loading), a skeleton stands in, and the pager
+  // holds still until there is a page to move from.
+  el('grid').innerHTML=skeleton(24);
+  el('emptystate').innerHTML='';
+  el('latest-meta').textContent='loading…';
+  el('pager').classList.add('busy');
+  let st,list;
+  try{
+    [st,list]=await Promise.all([
+      getStatus(),
+      API ? (latest ? fetchLatest() : fetchPage(page)) : listCounters(),
+    ]);
+  }catch(_){
+    if(me!==nav)return;
+    el('grid').innerHTML='';el('latest-meta').textContent='';
+    el('emptystate').innerHTML=loadFailed('this page');
+    el('pager').classList.remove('busy');
+    return;
+  }
+  if(me!==nav)return;
   el('synced').innerHTML = (st && st.indexed>=0)
     ? `<span class="lab">Latest synced block</span>`
       +`<a class="blk" onclick="go('#/b/${st.indexed}')" title="view this block">${meterDigits(st.indexed)}</a>`
       +`<span class="tick">${st.count} counter${st.count===1?'':'s'} detected</span>`
     : '';
   const pages=Math.max(1, Math.ceil((st.count||1)/PAGE));
-  const latest=(page==null);
   const cur=latest ? pages-1 : Math.min(Math.max(0, page), pages-1);
-  const list=API ? (latest ? await fetchLatest() : await fetchPage(cur, st.count)) : await listCounters();
+  if(API && !latest && cur!==page){
+    // A page number past the end (a stale link): show the last real page.
+    try{list=await fetchPage(cur);}catch(_){list=[];}
+    if(me!==nav)return;
+  }
   el('grid').innerHTML=list.map(card).join('');
+  el('pager').classList.remove('busy');
+  thumbsWatch(el('grid'));
   const oldest=list.length ? list[list.length-1].number : 0;
   el('latest-meta').textContent=list.length
     ? `#${oldest}\u2013#${list[0].number} \u00b7 ${latest ? `latest ${list.length}` : `page ${cur+1} of ${pages}`}` : '';
@@ -581,9 +790,17 @@ async function renderExplore(page){
 }
 
 async function renderDetail(id){
-  const c=await getCounter(id);
+  const me=++nav;
   RAW=false;
+  // The record waits on live backend lookups (owner, supply, envelope), so
+  // the view changes first and the facts fill in when they arrive.
   showView('detail');
+  el('detail').innerHTML=`<div class="stage"><div class="frame"><div class="render wait"><span class="ph">loading…</span></div></div></div>
+    <div class="dbody"><span class="skelbar" style="width:45%;height:2em"></span></div>`;
+  let c;
+  try{[c]=await Promise.all([getCounter(id),previewReady()]);}
+  catch(_){if(me===nav)el('detail').innerHTML=loadFailed('this counter');return;}
+  if(me!==nav)return;
   document.title = c ? `Counter #${c.number} · ${c.asset} — Bitcoin Counters` : 'Bitcoin Counters — Explorer';
   if(!c){el('detail').innerHTML=`<div class="empty"><b>No counter found</b>Nothing matches “${esc(id)}”. Try a counter number or an asset name.</div>`;return;}
   const mp=`https://explore.block.space/tx/${c.txid}`;
@@ -648,9 +865,21 @@ async function renderDetail(id){
     </div>`;
 }
 async function renderBlock(h){
+  const me=++nav;
   showView('block');
-  const b=await getBlock(h);
   el('block-title').textContent=`Block ${Number(h).toLocaleString()}`;
+  el('block-meta').textContent='loading…';
+  el('block-grid').innerHTML=skeleton(6);
+  el('block-empty').innerHTML='';
+  let b;
+  try{[b]=await Promise.all([getBlock(h),previewReady()]);}
+  catch(_){
+    if(me!==nav)return;
+    el('block-meta').textContent='';el('block-grid').innerHTML='';
+    el('block-empty').innerHTML=loadFailed('this block');
+    return;
+  }
+  if(me!==nav)return;
   if(!b || !b.counters || !b.counters.length){
     el('block-meta').textContent='0 counters';
     el('block-grid').innerHTML='';
@@ -660,6 +889,7 @@ async function renderBlock(h){
   el('block-empty').innerHTML='';
   el('block-meta').textContent=`${b.count} counter${b.count===1?'':'s'} in this block`;
   el('block-grid').innerHTML=b.counters.map(card).join('');
+  thumbsWatch(el('block-grid'));
 }
 const short=s=>!s?'—':(s.length>22?s.slice(0,10)+'…'+s.slice(-8):s);
 function fact(k,v,copyable,raw){
@@ -681,7 +911,7 @@ function toggleRaw(n){
   const f=el('cframe'),b=el('rawbtn');
   if(!f)return;
   f.setAttribute('sandbox',RAW?'allow-same-origin':f.dataset.sandbox);
-  f.src=`${API}/preview/${n}${RAW?'?raw=1':(f.dataset.frag||'')}`;
+  f.src=`${PREVIEW}/preview/${n}${RAW?'?raw=1':(f.dataset.frag||'')}`;
   if(b){b.textContent=RAW?'rendered':'raw';b.title=RAW?'show the rendered view':'show the canonical on-chain bytes';}
 }
 function go(h){

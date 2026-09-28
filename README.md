@@ -155,6 +155,7 @@ Core running on the host.
 | `COUNTER_START_HEIGHT` | `902000` | first block a fresh scan starts at (never below genesis) |
 | `COUNTER_CONFIRMATIONS` | `0` | blocks behind tip to stay (6 recommended for near-final numbering) |
 | `COUNTER_POLL_INTERVAL` | `15` | seconds between tip polls in `index` |
+| `COUNTER_PREVIEW_ORIGIN` | — | a second hostname for this same server, on a **different site**, that the explorer loads preview frames from (see "Heavy counters") |
 
 > A fresh scan starts at the protocol genesis (block **902,000**, Counterparty
 > v11's `taproot_support` activation) — by rule N3 nothing can qualify
@@ -555,6 +556,31 @@ redesign invalidates them and the directory is safe to delete at any time.
 
 Telegram and WhatsApp cache a link's preview on their side too. To refresh one
 in Telegram, send the link to @WebpageBot.
+
+## Heavy counters
+
+Every card in the explorer is a live sandboxed document, and a document is not
+a thumbnail. An HTML or SVG counter runs under an opaque origin, which the
+browser's HTTP cache keys per document — so 300 editions delegating to one
+4 MB SVG are 300 separate 4 MB downloads, each parsed on the explorer's own
+thread. Mounted all at once, one page of them fetched 345 MB and held the page
+for 18 seconds. Two things keep the explorer answering while files load:
+
+* **Frames mount where they are looked at.** A card gets its frame only near
+  the viewport, at most three documents load at a time (two heavy ones, the
+  nearest to the middle of the screen first), and heavy frames left behind by
+  scrolling are released. Changing page drops the old page's frames — and
+  their downloads — before it asks for the new one, and shows a skeleton
+  until it arrives.
+* **`COUNTER_PREVIEW_ORIGIN` moves them off the page's thread.** A browser
+  gives a *cross-site* frame a process of its own; a same-site frame shares
+  the page's thread however it is sandboxed. Point a second hostname on
+  another registrable domain (not a subdomain — `frames.example` for an
+  explorer on `counters.example`) at this same server and name it here: the
+  explorer then loads every preview from it. Measured on that same page,
+  main-thread stalls went from 8.2 s to 0.06 s. Nothing else changes: the
+  frames keep their sandbox, and `/content`, `/preview` and the JSON API
+  answer on both hostnames.
 
 ## PDFs
 

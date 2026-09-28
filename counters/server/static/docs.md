@@ -121,7 +121,7 @@ counters wallet --name me inscribe --file v2.png --asset MYCOUNTER
 This explorer reads these endpoints from `counters server`:
 
 - `GET /status` — latest synced block + total counter count
-- `GET /counters?before=N&limit=K` — recent counters
+- `GET /counters?before=N&limit=K` — recent counters (`&body=0` omits inlined text)
 - `GET /counter/<number|asset|inscription id>` — one counter's record
 - `GET /block/<height>` — counters minted in a block
 - `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing

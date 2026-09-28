@@ -7,6 +7,7 @@ against a local node now and a different backend later.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,18 @@ def _env_int(name: str, default: int) -> int:
 
 def _env_float(name: str, default: float) -> float:
     return float(os.environ.get(name, default))
+
+
+_ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+
+
+def _env_origin(name: str) -> str:
+    """A bare web origin (`https://host[:port]`) from the environment, or ""
+    when unset or not one. Strict on purpose: the value ends up in the `src`
+    of every preview frame, so anything with a path, a query or a stray
+    character is dropped rather than repaired."""
+    value = os.environ.get(name, "").strip().rstrip("/")
+    return value if _ORIGIN_RE.match(value) else ""
 
 
 # --- Protocol constants (build reference v3 §13) -----------------------------
@@ -116,6 +129,15 @@ class Config:
 
     # HTTP
     http_timeout: float = field(default_factory=lambda: _env_float("COUNTER_HTTP_TIMEOUT", 30.0))
+
+    # Explorer: a second hostname for this same server, on a DIFFERENT SITE
+    # (another registrable domain, not a subdomain), that the explorer loads
+    # its preview frames from. A browser gives a cross-site frame a process of
+    # its own, so a page of heavy documents parses and runs off the explorer's
+    # thread instead of freezing it; same-site frames share that thread
+    # however they are sandboxed. Empty: previews come from the explorer's own
+    # origin, as before.
+    preview_origin: str = field(default_factory=lambda: _env_origin("COUNTER_PREVIEW_ORIGIN"))
 
     def __post_init__(self) -> None:
         # N3: nothing can qualify before genesis, so the floor travels with the
