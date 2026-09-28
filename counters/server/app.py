@@ -10,6 +10,9 @@ Serves two things from one origin:
                                             "preview_origin": URL|null}
        GET /counters?before=N&limit=K   -> {"counters": [record, ...]}  newest-first
                                            (&body=0 leaves `body` null)
+       GET /facets                      -> {"count": N, "fields": [...], "rows": [[...], ...]}
+                                           every counter, oldest first, as the
+                                           few fields a card and a filter need
        GET /counter/<number|asset>      -> a single record (404 if unknown)
        GET /block/<height>              -> {"block": H, "count": K, "counters": [...]}
        GET /content/<number>            -> the raw file bytes, with its stored MIME
@@ -27,6 +30,8 @@ worker threads and SQLite connections are not shareable across threads.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import html
 import json
 import logging
@@ -510,6 +515,49 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
     }
 
 
+# The explorer's filters work on the WHOLE index at once: every chip shows a
+# live count, and a click must not cost a round trip. So the index travels
+# once, as the few fields a card and a filter need — a row per counter, an
+# array per row, the field names said once. 521 counters are 30 KB (5 KB
+# gzipped) and take 30 ms to build; the result is kept until what it is a
+# function of changes (Store.facets_signature).
+FACET_FIELDS = ("number", "asset", "content_type", "size", "kind", "original",
+                "is_pointer_like", "envelope", "locked", "stamp_mime", "delegate")
+FACETS_MAX_AGE = 15
+
+_facets_cache: dict[str, tuple[tuple, str, bytes]] = {}   # db path -> (sig, etag, body)
+_facets_guard = threading.Lock()
+
+
+def _facet_row(rec: dict) -> list:
+    d = rec["delegate"]
+    row = [rec[f] for f in FACET_FIELDS[:-1]]
+    # A delegate travels as what a card draws from it: the target's number,
+    # type and size, and the display fragment. Null for a non-delegate.
+    row.append(None if d is None
+               else [d["number"], d["content_type"], d["size"], d["fragment"]])
+    return row
+
+
+def build_facets(store: Store) -> tuple[str, bytes]:
+    """(etag, json body) of the facet index, rebuilt only when its signature
+    has moved."""
+    key = str(store.db.execute("PRAGMA database_list").fetchone()["file"])
+    sig = store.facets_signature(ENVELOPE_VERSION)
+    with _facets_guard:
+        hit = _facets_cache.get(key)
+        if hit is not None and hit[0] == sig:
+            return hit[1], hit[2]
+    rows = [_facet_row(record_dict(store, r, with_body=False))
+            for r in store.list_all()]
+    body = json.dumps({"count": len(rows), "fields": FACET_FIELDS, "rows": rows},
+                      separators=(",", ":")).encode()
+    etag = '"' + hashlib.sha256(repr(sig).encode()).hexdigest()[:20] + '"'
+    with _facets_guard:
+        _facets_cache[key] = (sig, etag, body)
+    return etag, body
+
+
 # A per-counter endpoint accepts a number or an inscription ID (§6.1); asset
 # names stay on /counter/ and /c/, which resolve any identifier via find().
 _IDENT = r"\d+|[0-9a-fA-F]{64}i\d+"
@@ -533,6 +581,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._status()
             if path == "/counters":
                 return self._api_list(parse_qs(parsed.query))
+            if path == "/facets":
+                return self._facets()
             m = re.fullmatch(r"/counter/(.+)", path)
             if m:
                 return self._api_counter(unquote(m.group(1)))
@@ -635,6 +685,29 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             store.close()
         self._json(payload)
+
+    def _facets(self) -> None:
+        store = Store(self.config)
+        try:
+            etag, body = build_facets(store)
+        finally:
+            store.close()
+        headers = [("ETag", etag), ("Vary", "Accept-Encoding")]
+        if etag in (self.headers.get("If-None-Match") or ""):
+            self.send_response(304)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", f"public, max-age={FACETS_MAX_AGE}")
+            for name, value in headers:
+                self.send_header(name, value)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if "gzip" in (self.headers.get("Accept-Encoding") or "").lower():
+            # mtime=0: the same index compresses to the same bytes.
+            body = gzip.compress(body, compresslevel=6, mtime=0)
+            headers.append(("Content-Encoding", "gzip"))
+        self._send(200, "application/json; charset=utf-8", body,
+                   max_age=FACETS_MAX_AGE, extra_headers=headers)
 
     def _api_counter(self, ident: str) -> None:
         store = Store(self.config)

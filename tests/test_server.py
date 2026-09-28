@@ -535,3 +535,74 @@ def test_lists_carry_the_cached_supply_lock():
         assert locks() == {0: None, 1: None, 2: None}
     finally:
         httpd.shutdown()
+
+
+def test_facets_is_the_whole_index_in_one_response():
+    """/facets carries every counter, oldest first, as the fields a card and
+    a filter need — cached until the index or a tag cache changes."""
+    import gzip
+    import urllib.request
+    from counters.reveal import ENVELOPE_VERSION
+
+    httpd, base = _run_server()
+    try:
+        def fetch(headers=None):
+            req = urllib.request.Request(base + "/facets", headers=headers or {})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status, dict(r.headers), r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, dict(e.headers), e.read()
+
+        status, headers, body = fetch()
+        assert status == 200 and "application/json" in headers["Content-Type"]
+        data = json.loads(body)
+        assert data["count"] == 3 and data["fields"] == list(appmod.FACET_FIELDS)
+        recs = [dict(zip(data["fields"], row)) for row in data["rows"]]
+        assert [r["number"] for r in recs] == [0, 1, 2]           # oldest first
+        assert recs[0]["asset"] == "TESTASSET" and recs[0]["size"] == 2
+        assert [r["original"] for r in recs] == [True, False, True]
+        assert recs[2]["stamp_mime"] == "image/gif"
+        assert all(r["envelope"] is None and r["locked"] is None for r in recs)
+        assert all(r["delegate"] is None for r in recs)
+
+        # Unchanged index: the same ETag, and a conditional request is a 304.
+        etag = headers["ETag"]
+        status, headers2, body2 = fetch({"If-None-Match": etag})
+        assert status == 304 and body2 == b"" and headers2["ETag"] == etag
+
+        # gzip when the client takes it; the same JSON underneath.
+        status, headers3, zipped = fetch({"Accept-Encoding": "gzip"})
+        assert headers3["Content-Encoding"] == "gzip"
+        assert gzip.decompress(zipped) == body
+
+        # A tag cache filling in changes the index, so the ETag moves.
+        store = Store(httpd.config)
+        try:
+            store.set_envelope("aa" * 32, "counterparty", ENVELOPE_VERSION)
+            store.set_locked("TESTASSET", False, 1000)
+        finally:
+            store.close()
+        status, headers4, body4 = fetch({"If-None-Match": etag})
+        assert status == 200 and headers4["ETag"] != etag
+        recs = [dict(zip(data["fields"], row)) for row in json.loads(body4)["rows"]]
+        assert recs[0]["envelope"] == "counterparty" and recs[1]["envelope"] is None
+        assert [r["locked"] for r in recs] == [False, False, None]
+    finally:
+        httpd.shutdown()
+
+
+def test_facets_carries_a_delegate_as_its_target():
+    tmp = tempfile.mkdtemp()
+    cfg = _seed_delegate_store(tmp)
+    store = Store(cfg)
+    try:
+        data = json.loads(appmod.build_facets(store)[1])
+    finally:
+        store.close()
+    recs = {row[0]: dict(zip(data["fields"], row)) for row in data["rows"]}
+    assert recs[0]["delegate"] is None
+    # [target number, target type, target size, display fragment]
+    assert recs[1]["delegate"] == [0, "text/plain", len(b"hello-target-bytes"), None]
+    assert recs[6]["delegate"][0] == 0 and recs[6]["delegate"][3] == "edition-69"
+    assert recs[4]["delegate"][:3] == [None, None, None]      # unresolved

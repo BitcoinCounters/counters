@@ -413,6 +413,23 @@ class Store:
             return self.get_counter_by_event(*event)
         return self.get_counter_by_asset(token)
 
+    def list_all(self) -> list[sqlite3.Row]:
+        """Every counter, oldest first."""
+        return self.db.execute("SELECT * FROM counters ORDER BY number").fetchall()
+
+    def facets_signature(self, envelope_version: int) -> tuple:
+        """What a facet index is a function of, cheaply: the counters (their
+        count and the tip of the rolling hash, which moves on any reorg) and
+        the two derived caches its tags read. Equal signatures, equal index."""
+        env = self.db.execute(
+            "SELECT COUNT(*) AS c FROM envelopes WHERE version = ?", (envelope_version,)
+        ).fetchone()["c"]
+        lock = self.db.execute(
+            "SELECT COUNT(*) AS c, COALESCE(SUM(locked), 0) AS s FROM asset_locks"
+        ).fetchone()
+        return (self.count(), self.last_rolling_hash().hex(), envelope_version,
+                env, lock["c"], lock["s"])
+
     def list_recent(self, limit: int = 20) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM counters ORDER BY number DESC LIMIT ?", (limit,)
