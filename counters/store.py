@@ -10,12 +10,20 @@ every row extends the rolling consensus-hash chain (build ref v3 §7).
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ROLLING_HASH_GENESIS_TAG, Config
 from .ids import parse_id
+
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _like(text: str) -> str:
+    """Escape a literal for SQL LIKE … ESCAPE '\\'."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS counters (
@@ -47,6 +55,8 @@ CREATE TABLE IF NOT EXISTS counters (
 CREATE INDEX IF NOT EXISTS idx_counters_asset ON counters(asset);
 CREATE INDEX IF NOT EXISTS idx_counters_block ON counters(block_index);
 CREATE INDEX IF NOT EXISTS idx_counters_sha   ON counters(content_sha256);
+CREATE INDEX IF NOT EXISTS idx_counters_longname ON counters(asset_longname);
+CREATE INDEX IF NOT EXISTS idx_counters_source   ON counters(source);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     id              INTEGER PRIMARY KEY CHECK (id = 1),
@@ -399,19 +409,92 @@ class Store:
 
     def find(self, identifier: str) -> sqlite3.Row | None:
         """Resolve a counter by number (all-digit), inscription ID
-        (`<txid>i<msg_index>`, ids.py §6.1), or asset name/longname.
+        (`<txid>i<msg_index>`, ids.py §6.1), bare reveal txid (its first
+        event), content sha256 (the lowest-numbered counter carrying it), or
+        asset name/long name — exact spelling first, then case-insensitive.
 
         The forms cannot collide: asset names never begin with a digit (named
         are A-Z; numeric display is 'A'+int; subassets contain a '.'), and
-        none is 64 hex characters followed by 'i'.
+        none is 64 hex characters, with or without 'i' and an index.
         """
-        token = str(identifier)
-        if token.isdigit():
-            return self.get_counter(int(token))
+        token = str(identifier).strip()
         event = parse_id(token)
         if event is not None:
             return self.get_counter_by_event(*event)
-        return self.get_counter_by_asset(token)
+        if _HEX64.match(token):            # before isdigit(): a hash may be all digits
+            rows = self.get_counters_by_txid(token.lower()) or self.get_counters_by_sha(token.lower())
+            return rows[0] if rows else None
+        if token.isdigit():
+            return self.get_counter(int(token)) if len(token) <= 12 else None
+        return self.get_counter_by_asset(token) or self.get_counter_by_asset_nocase(token)
+
+    def get_counter_by_asset_nocase(self, name: str) -> sqlite3.Row | None:
+        """get_counter_by_asset for a reader who did not match the on-chain
+        case; an exact-case hit is tried first by find()."""
+        return self.db.execute(
+            "SELECT * FROM counters WHERE upper(asset) = ? OR upper(asset_longname) = ? "
+            "ORDER BY number LIMIT 1",
+            (name.upper(), name.upper()),
+        ).fetchone()
+
+    def get_counters_by_txid(self, txid: str) -> list[sqlite3.Row]:
+        """Every counter minted in one reveal transaction, by event index."""
+        return self.db.execute(
+            "SELECT * FROM counters WHERE mint_txid = ? ORDER BY msg_index",
+            (txid,),
+        ).fetchall()
+
+    def get_counters_by_sha(self, sha256: str) -> list[sqlite3.Row]:
+        """Every counter whose content is these bytes, oldest first."""
+        return self.db.execute(
+            "SELECT * FROM counters WHERE content_sha256 = ? ORDER BY number",
+            (sha256,),
+        ).fetchall()
+
+    def count_by_source(self, source: str) -> int:
+        return self.db.execute(
+            "SELECT COUNT(*) AS c FROM counters WHERE source = ?", (source,)
+        ).fetchone()["c"]
+
+    def family_count(self, parent: str) -> int:
+        """How many counters are subassets of `parent` (long name PARENT.x),
+        case-insensitively."""
+        return self.db.execute(
+            "SELECT COUNT(*) AS c FROM counters WHERE upper(asset_longname) LIKE ? ESCAPE '\\'",
+            (_like(parent.upper()) + ".%",),
+        ).fetchone()["c"]
+
+    def search_names(self, variants: list[str], limit: int) -> tuple[list[sqlite3.Row], int]:
+        """Counters whose asset or long name contains any of `variants`
+        (upper-cased spellings of one query), ranked: exact, then a subasset
+        of it, then beginning with it, then containing it; ties by number.
+        Returns (rows up to limit, total matched)."""
+        vs = [v.upper() for v in variants if v]
+        if not vs:
+            return [], 0
+        esc = [_like(v) for v in vs]
+        cols = ("upper(asset)", "upper(asset_longname)")
+        def any_of(pattern: str) -> str:
+            return "(" + " OR ".join(f"{c} LIKE ? ESCAPE '\\'" for _ in vs for c in cols) + ")"
+        def params(fmt) -> list[str]:
+            return [fmt(e) for e in esc for _ in cols]
+        exact_sql  = "(" + " OR ".join(f"{c} = ?" for _ in vs for c in cols) + ")"
+        exact_p    = [v for v in vs for _ in cols]
+        family_sql = "(" + " OR ".join("upper(asset_longname) LIKE ? ESCAPE '\\'" for _ in vs) + ")"
+        family_p   = [e + ".%" for e in esc]
+        prefix_sql, prefix_p = any_of("prefix"), params(lambda e: e + "%")
+        within_sql, within_p = any_of("within"), params(lambda e: "%" + e + "%")
+        rank = (f"CASE WHEN {exact_sql} THEN 0 WHEN {family_sql} THEN 1 "
+                f"WHEN {prefix_sql} THEN 2 ELSE 3 END")
+        rows = self.db.execute(
+            f"SELECT *, {rank} AS rank FROM counters WHERE {within_sql} "
+            f"ORDER BY rank, number LIMIT ?",
+            exact_p + family_p + prefix_p + within_p + [limit],
+        ).fetchall()
+        total = self.db.execute(
+            f"SELECT COUNT(*) AS c FROM counters WHERE {within_sql}", within_p
+        ).fetchone()["c"]
+        return rows, total
 
     def list_all(self) -> list[sqlite3.Row]:
         """Every counter, oldest first."""

@@ -123,7 +123,8 @@ This explorer reads these endpoints from `counters server`:
 - `GET /status` — latest synced block + total counter count
 - `GET /counters?before=N&limit=K` — recent counters (`&body=0` omits inlined text)
 - `GET /facets` — every counter as the few fields a filter needs (number, asset, type, size, tags), in one response
-- `GET /counter/<number|asset|inscription id>` — one counter's record
+- `GET /search?q=<text>&limit=N` — what the search box asks. The text may be a counter number, an asset or subasset name, a family (`DEGENT` finds every `DEGENT.x`), an inscription id, a bare reveal txid, a content sha256, a minting address, or a URL from this explorer, ordinals.com, xchain or a block explorer carrying one of those. Case does not matter. The answer names what the text was (`kind`), the exact hit if there is one, the matches ranked exact → family → prefix → substring, how many matched in all, and the family when the text names one
+- `GET /counter/<number|asset|inscription id|txid|sha256>` — one counter's record; names match in any case, a bare txid gives its first event, a content hash its lowest-numbered carrier
 - `GET /block/<height>` — counters minted in a block
 - `GET /content/<number|inscription id>` — the raw file, served with its stored MIME. Honours `Range`, so a reader can pull one piece of a large inscription (a PDF page, a seek in a long audio file) instead of the whole thing Sandboxed even when opened directly, so a counter's scripts never run as this site. Each counter's page links to it by inscription id.
 - `GET /preview/<number|inscription id>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view

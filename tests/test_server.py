@@ -250,8 +250,10 @@ if __name__ == "__main__":
 
 def test_inscription_id_addressing():
     """§6.1: every record carries its inscription id, and the per-counter
-    endpoints accept one wherever they accept a number. A bare txid is never
-    an identifier — the index is load-bearing."""
+    endpoints accept one wherever they accept a number. The index is
+    load-bearing on the byte endpoints (/content, /preview, /stamp): a bare
+    txid matches no route there. /counter/ and /c/ are where a reader
+    types, so a bare txid resolves to the transaction's first event."""
     httpd, base = _run_server()
     try:
         status, _, body = _get(base, "/counter/0")
@@ -282,10 +284,12 @@ def test_inscription_id_addressing():
         # unknown event: a valid ID shape that names nothing → 404, not 500
         status, _, _ = _get(base, "/counter/" + "ee" * 32 + "i0")
         assert status == 404
-        # a bare txid matches no route (content) and no identifier (counter)
+        # a bare txid matches no byte route; on /counter/ it is the first event
         status, _, _ = _get(base, "/content/" + "aa" * 32)
         assert status == 404
-        status, _, _ = _get(base, "/counter/" + "aa" * 32)
+        status, _, body = _get(base, "/counter/" + "aa" * 32)
+        assert status == 200 and json.loads(body)["number"] == 0
+        status, _, _ = _get(base, "/counter/" + "ee" * 32)      # a txid that minted nothing
         assert status == 404
     finally:
         httpd.shutdown()

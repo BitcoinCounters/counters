@@ -52,6 +52,7 @@ from .. import __version__
 from ..bitcoind import BitcoindClient
 from ..config import Config
 from ..ids import format_id
+from .. import search as searchmod
 from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
                        sniff_media, stamp_image)
 from ..counterparty import CounterpartyClient, CounterpartyError
@@ -604,6 +605,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_list(parse_qs(parsed.query))
             if path == "/facets":
                 return self._facets()
+            if path == "/search":
+                return self._search(parse_qs(parsed.query))
             m = re.fullmatch(r"/counter/(.+)", path)
             if m:
                 return self._api_counter(unquote(m.group(1)))
@@ -703,6 +706,27 @@ class Handler(BaseHTTPRequestHandler):
                 rows = store.list_recent(limit)
             payload = {"counters": [record_dict(store, r, with_body=with_body)
                                     for r in rows]}
+        finally:
+            store.close()
+        self._json(payload)
+
+    def _search(self, qs: dict[str, list[str]]) -> None:
+        """GET /search?q=<text>[&limit=N] — what the explorer's box asks.
+        The text may be a number, an asset or subasset name (or a family
+        such as DEGENT), an inscription id, a bare reveal txid, a content
+        sha256, a minting address, or a pasted URL carrying one of those;
+        search.py classifies it and ranks the answer. Records are the list
+        shape (no inlined body), like /counters?body=0."""
+        q = qs.get("q", [""])[0]
+        try:
+            limit = max(1, min(int(qs.get("limit", ["48"])[0]), 500))
+        except ValueError:
+            limit = 48
+        store = Store(self.config)
+        try:
+            payload = searchmod.run(
+                store, q, limit,
+                lambda row: record_dict(store, row, with_body=False))
         finally:
             store.close()
         self._json(payload)
