@@ -25,3 +25,7 @@ reveal-*.hex
 venv/
 .DS_Store
 .claude/
+
+# never commit a GitHub token
+githubcode.txt
+*.token
