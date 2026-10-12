@@ -1,0 +1,180 @@
+<title>Ignored Reveals Ledger</title>
+<style>
+/* Layout: one wide data table, header strip above, txid appendix below. */
+:root {
+  --bg:#f7f6f2; --fg:#1d1c19; --muted:#6b675d; --line:#d9d5ca; --head:#ece9e0;
+  --act:#fff1d6; --act-fg:#7a4a00; --deg:#f1efe9; --accent:#8a3b12; --code:#efede6;
+  --display:"IBM Plex Serif",Georgia,serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#16171a; --fg:#e8e6df; --muted:#9b978c; --line:#33353a; --head:#1f2024;
+  --act:#3a2a0c; --act-fg:#f0c06a; --deg:#1c1d20; --accent:#e08a5a; --code:#232428; color-scheme:dark } }
+:root[data-theme="dark"] {
+  --bg:#16171a; --fg:#e8e6df; --muted:#9b978c; --line:#33353a; --head:#1f2024;
+  --act:#3a2a0c; --act-fg:#f0c06a; --deg:#1c1d20; --accent:#e08a5a; --code:#232428; color-scheme:dark }
+body{background:var(--bg);color:var(--fg);font-family:var(--body);padding-block:28px;padding-inline:16px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;display:grid;gap:20px}
+h1{font-family:var(--display);font-weight:500;font-size:clamp(1.5rem,3vw,2.1rem);margin:0;text-wrap:balance}
+.sub{color:var(--muted);max-width:68ch;margin:0}
+.kpis{display:flex;flex-wrap:wrap;gap:24px;font-variant-numeric:tabular-nums}
+.kpis div span{display:block;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.kpis div b{font-size:1.25rem;font-weight:600}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;min-width:1100px;font-size:.86rem;font-variant-numeric:tabular-nums}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+th{background:var(--head);font-weight:600;font-size:.74rem;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);position:sticky;top:0}
+th.grp{text-align:center;border-left:1px solid var(--line)}
+td.n,th.n{text-align:right}
+tr.act td{background:var(--act);color:var(--act-fg)}
+tr.deg td{background:var(--deg)}
+code{font-family:var(--mono);font-size:.82em;background:var(--code);padding:1px 4px;border-radius:3px}
+tr.act code{background:transparent;padding:0}
+.notes{display:grid;gap:8px;max-width:72ch;margin:0;padding-left:1.2em;color:var(--fg)}
+details{border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;color:var(--accent);font-weight:600}
+details ol{display:grid;gap:10px;padding-left:1.2em;font-size:.85rem;word-break:break-all}
+.block{display:grid;gap:14px;border-top:1px solid var(--line);padding-top:22px}
+h2{font-family:var(--display);font-weight:500;font-size:1.3rem;margin:0;text-wrap:balance}
+.ok{color:#2b6e3a;font-weight:600}.bad{color:var(--accent);font-weight:600}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .ok{color:#7ccf8a}}
+:root[data-theme="dark"] .ok{color:#7ccf8a}
+.legend{font-size:.8rem;color:var(--muted)}
+.legend i{display:inline-block;width:12px;height:12px;vertical-align:-2px;border:1px solid var(--line);margin-right:4px}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Serif:wght@500&family=IBM+Plex+Mono&display=swap">
+<div class="wrap">
+<header>
+<h1>Assets on old-consensus explorers that v11.5.0 nodes do not have</h1>
+<p class="sub">Every taproot reveal that Counterparty Core v11.5.0 ignored under <code>require_reveal_source_signature</code>, mainnet, as of block 971,049 (12 Oct 2026). tokenscan.io and counters.gallery still list all fifteen; the local node, api.counterparty.io and xcp.io do not. Times are UTC, 2026. Fees are commit + reveal in sats.</p>
+</header>
+<div class="kpis">
+<div><span>Ignored reveals</span><b>15</b></div>
+<div><span>Distinct sources</span><b>5</b></div>
+<div><span>Fees spent</span><b>10,157,355 sats</b></div>
+<div><span>First commit after activation</span><b>+168 blocks</b></div>
+<div><span>Proof of completeness</span><b>tx_index gap = 15</b></div>
+</div>
+<div class="scroll"><table>
+<thead><tr><th class="n">#</th><th>Asset</th><th class="n">Gallery #</th><th>Source</th><th>Content</th><th class="n grp">Commit block</th><th>Commit time</th><th class="n grp">Reveal block</th><th>Reveal time</th><th class="n grp">Fees (sats)</th><th>Txids (commit → reveal)</th></tr></thead>
+<tbody>
+<tr class="act"><td></td><td colspan="4"><b>Activation</b> · <code>require_reveal_source_signature</code> · Core v11.5.0</td><td class="n"><b>969,320</b></td><td>Sep 30 16:48</td><td colspan="4"></td></tr><tr><td class="n">1</td><td><b>PEPEMAXXER</b></td><td class="n">#532</td><td><code title="bc1q4j2gh7cvw8fazvxje5d7l2r0tkhuqa0m5xa2lx">bc1q4j2gh7cv…</code></td>
+<td>jpeg · 61 KB</td>
+<td class="n">969,518</td><td>Oct 02 01:35</td>
+<td class="n">969,525</td><td>Oct 02 02:42</td>
+<td class="n">4,654</td>
+<td><code title="commit 0a97410e2a2c2bb5ce6c8cfd361c8e441aabc1e6886f748826581850650e2ad8">0a97410e2a…</code> → <code title="reveal afa122ca8aeaaed9fcf40619b0b949d6037ffcf8ebcbcceb8efd216bc9c48e83">afa122ca8a…</code></td></tr><tr class="deg"><td class="n">2</td><td><b>DEGENT.3</b></td><td class="n">#533</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.95 MB</td>
+<td class="n">969,488</td><td>Oct 01 19:59</td>
+<td class="n">969,683</td><td>Oct 03 05:51</td>
+<td class="n">1,004,164</td>
+<td><code title="commit 2ef8f20ac575f2d4c4288c67f7f0fac6392af9836cdf07c83c597d08e9984247">2ef8f20ac5…</code> → <code title="reveal 7d640bf0a0d3a99042af72010f58c2d13d1a3e039fa08101d8bde6bca17dd93c">7d640bf0a0…</code></td></tr><tr><td class="n">3</td><td><b>A13034237042982401926</b></td><td class="n">#534</td><td><code title="bc1qcx8cjuxyfff84wsymp74lcak8qrq6np7ds7tze">bc1qcx8cjuxy…</code></td>
+<td>png · 395 KB</td>
+<td class="n">969,697</td><td>Oct 03 07:26</td>
+<td class="n">969,697</td><td>Oct 03 07:26</td>
+<td class="n">59,762</td>
+<td><code title="commit 2e3f4616391f089ac46f5ed43a5262468dc179fffcbd0673c7abff0f344a53a8">2e3f461639…</code> → <code title="reveal bd1f913c44197452e8c03d581684bf710c3e0d3fb94843cd0789b5651f7eea1c">bd1f913c44…</code></td></tr><tr class="deg"><td class="n">4</td><td><b>DEGENT.5</b></td><td class="n">#540</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">969,919</td><td>Oct 04 23:28</td>
+<td class="n">1,002,861</td>
+<td><code title="commit 35960a2ddbfa0faf89c81a6ea420d849ed0139941558d1206370bb8ae98356da">35960a2ddb…</code> → <code title="reveal f34bf01e2fb093669f577bb3868c57d991ca4e1988fc1662436e0eb06c664201">f34bf01e2f…</code></td></tr><tr class="deg"><td class="n">5</td><td><b>DEGENT.4</b></td><td class="n">#541</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.95 MB</td>
+<td class="n">969,488</td><td>Oct 01 19:59</td>
+<td class="n">969,958</td><td>Oct 05 04:59</td>
+<td class="n">1,002,550</td>
+<td><code title="commit fcff198e110dc97cfb2e02d1c2bdc2cd2ba349d9a903856297bf1f8f156286fb">fcff198e11…</code> → <code title="reveal ea72e53473ce46f14fb2bcabc6d2c1bce888ec4219623daba1be6b8d771f746c">ea72e53473…</code></td></tr><tr><td class="n">6</td><td><b>NINESIX</b></td><td class="n">#542</td><td><code title="bc1prx0khuanz4ae0pyn455n53hzhp6057z0nfw7dcf3epscpu0jfjaqu8tvtp">bc1prx0khuan…</code></td>
+<td>jpeg · 352 KB</td>
+<td class="n">969,970</td><td>Oct 05 06:46</td>
+<td class="n">969,970</td><td>Oct 05 06:46</td>
+<td class="n">35,493</td>
+<td><code title="commit df57eec1083a15f29dfcb6cc71615060204602e28946925b239c0c145fca8ea0">df57eec108…</code> → <code title="reveal 19d2e817f4b3c855004e216477ecbdd3356bf7d80a0e794758946da1cd21cb28">19d2e817f4…</code></td></tr><tr><td class="n">7</td><td><b>NINESIXNINE</b></td><td class="n">#543</td><td><code title="bc1prx0khuanz4ae0pyn455n53hzhp6057z0nfw7dcf3epscpu0jfjaqu8tvtp">bc1prx0khuan…</code></td>
+<td>jpeg · 366 KB</td>
+<td class="n">969,970</td><td>Oct 05 06:46</td>
+<td class="n">969,970</td><td>Oct 05 06:46</td>
+<td class="n">36,901</td>
+<td><code title="commit 3449ab122780efdf846d8df6a23c3d78b812a86c9a62c4d51ecd94d507ff7056">3449ab1227…</code> → <code title="reveal b27384b622582c47efdea7b650fa8392848411a7dbea0bc57dadc8b6532ccc91">b27384b622…</code></td></tr><tr class="deg"><td class="n">8</td><td><b>DEGENT.6</b></td><td class="n">#547</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,195</td><td>Oct 06 15:57</td>
+<td class="n">1,002,102</td>
+<td><code title="commit 7855cfdd4237ac032eca4f036d5a5cd7c8e824eebc79250ecc2eef48690b1eda">7855cfdd42…</code> → <code title="reveal b02f497d20ed488a9427d941ba9695c5e10fd8473c8b206c0b6bb60c98cba0e6">b02f497d20…</code></td></tr><tr><td class="n">9</td><td><b>RAREBLOCKS</b></td><td class="n">#548</td><td><code title="bc1p050y4cencweq36kqa5cr43zr9ydtehqcmlk0plp7fy70xp3zmzfs6wa4tq">bc1p050y4cen…</code></td>
+<td>svg+xml · 48 KB</td>
+<td class="n">970,297</td><td>Oct 07 05:41</td>
+<td class="n">970,297</td><td>Oct 07 05:41</td>
+<td class="n">18,808</td>
+<td><code title="commit f92ff0e3297f75a88a53e92aaf51bfebdb0759a107d1b5e80e004c7ce47721c2">f92ff0e329…</code> → <code title="reveal b1d677c671f9e073d7f47bba8ba453b93a334a2d90a4ab0b5c7d63880a9c8d70">b1d677c671…</code></td></tr><tr class="deg"><td class="n">10</td><td><b>DEGENT.7</b></td><td class="n">#552</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.95 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,578</td><td>Oct 09 03:37</td>
+<td class="n">1,000,173</td>
+<td><code title="commit 4bd00f72a412cf088256587e65c970ea97a1375d81101e5d8233c0f08fd9f604">4bd00f72a4…</code> → <code title="reveal c1730efbdfd1c783c2c0d2033b8d263a2df16acd637f45e56b697bd217eb8973">c1730efbdf…</code></td></tr><tr class="deg"><td class="n">11</td><td><b>DEGENT.8</b></td><td class="n">#554</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,705</td><td>Oct 10 01:29</td>
+<td class="n">1,000,098</td>
+<td><code title="commit 91ba64217c7daa6249a84bc3bdbe2c4b9905db78d5e7bdd87a70559a92263d91">91ba64217c…</code> → <code title="reveal 8383fd5a0f02b51ad9d31704ae8117e94de6ad19ba6d81118e19ddfb330912e1">8383fd5a0f…</code></td></tr><tr class="deg"><td class="n">12</td><td><b>DEGENT.10</b></td><td class="n">#555</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,765</td><td>Oct 10 12:34</td>
+<td class="n">997,982</td>
+<td><code title="commit 1fcae0c9c4891f9e6809526f2a742cd3a79fcaba5c8ccbc53e73c789dc8276ea">1fcae0c9c4…</code> → <code title="reveal c63b570221c5ae05706aee479d175aee960098c4e7a1176470ecdd9a83b15000">c63b570221…</code></td></tr><tr class="deg"><td class="n">13</td><td><b>DEGENT.9</b></td><td class="n">#556</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.95 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,842</td><td>Oct 10 23:17</td>
+<td class="n">997,972</td>
+<td><code title="commit 2ebf1cd0721324a07d2f2d5f74f2e1406eb03ee9485acaaec0ceeaf02ec6f570">2ebf1cd072…</code> → <code title="reveal 3d7a29c39d89b1839f9e625d2ef3cedff79c04dedda97e0cb2eb6536926ae5ed">3d7a29c39d…</code></td></tr><tr class="deg"><td class="n">14</td><td><b>DEGENT.11</b></td><td class="n">#557</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,843</td><td>Oct 10 23:19</td>
+<td class="n">997,266</td>
+<td><code title="commit 75b11754da7115f40dbed4e179f42e82742da2bb38532d3ab356cb6cb8e4e078">75b11754da…</code> → <code title="reveal 24720cfeab130156fc32d095c2dd7b64d544160226a9d231e7d95e10757b26e8">24720cfeab…</code></td></tr><tr class="deg"><td class="n">15</td><td><b>DEGENT.12</b></td><td class="n">#558</td><td><code title="bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad">bc1qznsu8jwt…</code></td>
+<td>jpeg · 3.96 MB</td>
+<td class="n">969,497</td><td>Oct 01 22:34</td>
+<td class="n">970,858</td><td>Oct 11 01:57</td>
+<td class="n">996,569</td>
+<td><code title="commit 7d03b4aa7631b6ada85ce36180aa2cb2d07deb6a7db138d48641f94ae09992a4">7d03b4aa76…</code> → <code title="reveal 92fd95caccd78d8baff153354c8d0e61763e57914765ac344e5551c14ad720a5">92fd95cacc…</code></td></tr>
+</tbody></table></div>
+<p class="legend"><i style="background:var(--act)"></i> activation boundary &nbsp; <i style="background:var(--deg)"></i> DEGENT issuer bc1qznsu8… (10 of 15, 99% of fees) &nbsp; · hover a txid or source for the full value</p>
+<ul class="notes">
+<li>Every commit was broadcast after block 969,320. The earliest, DEGENT.3 and DEGENT.4 in block 969,488, came 27 hours after activation, so nothing was in flight across the boundary.</li>
+<li>Rows are in reveal order, which is why DEGENT.10 precedes DEGENT.9. The ten DEGENT commits were made in two batches on 1 Oct (blocks 969,488 and 969,497) and revealed one at a time over ten days.</li>
+<li>Four reveals (A1303…, NINESIX, NINESIXNINE, RAREBLOCKS) were committed and revealed in the same block; PEPEMAXXER seven blocks apart. That is the normal wallet flow.</li>
+<li>PEPEMAXXER was later registered on consensus by a different address (bc1q6yk75w0…, block 969,628, supply 69). Old explorers show the wrong owner for that name.</li>
+<li>Completeness: tokenscan's tx_index minus the local node's is 0 at DEGENT.2 (pre-fork), 7 at block 970,096 and exactly 15 from block 970,858 through the tip, so no other transaction of any type differs.</li>
+</ul>
+
+<section class="block">
+<h2>DEGENT.x: every subasset, same wallet, before and after the cutoff</h2>
+<p class="sub">All thirteen DEGENT subassets inscribed by bc1qznsu8jwtas… (each a ~3.95 MB jpeg). The first three were revealed before the rule took effect and are valid; the next ten were committed on 1 Oct, after activation, with the old throwaway-key flow and every reveal was ignored. Rows in reveal order.</p>
+<div class="kpis">
+<div><span>Valid</span><b>3 of 13</b></div>
+<div><span>Ignored</span><b>10 of 13</b></div>
+<div><span>Fees on ignored</span><b>10,001,737 sats</b></div>
+<div><span>Block space on ignored</span><b>39.5 MB</b></div>
+<div><span>Longest commit→reveal wait</span><b>1,361 blocks</b></div>
+</div>
+<div class="scroll"><table>
+<thead><tr><th>Asset</th><th class="n grp">Commit block</th><th>Commit time</th><th class="n grp">Reveal block</th><th>Reveal time</th><th class="n">Wait (blocks)</th><th>Size</th><th class="n">Fees (sats)</th><th>Status under v11.5.0</th><th>Txids (commit → reveal)</th></tr></thead>
+<tbody><tr><td><b>DEGENT.0</b></td><td class="n">967,378</td><td>Sep 17 07:30</td><td class="n">967,440</td><td>Sep 17 16:35</td><td class="n">62</td><td>3.95 MB</td><td class="n">994,379</td><td><span class="ok">valid · Counter #204</span></td><td><code title="commit 3157874eb8927afc90fb25bd1f533ff4ff2c6314eba1fd995d9e238c3edd5eed">3157874eb8…</code> → <code title="reveal 6ee76abd8d268c32b9e9fa2ae7e0faa7775ca38bd76223e6dd4c79008d73ed2a">6ee76abd8d…</code></td></tr><tr><td><b>DEGENT.1</b></td><td class="n">967,380</td><td>Sep 17 07:45</td><td class="n">967,766</td><td>Sep 20 00:39</td><td class="n">386</td><td>3.95 MB</td><td class="n">993,322</td><td><span class="ok">valid · Counter #216</span></td><td><code title="commit d21054e96b510bf1134b8f4cc0b5aaaa7238f19512c336ca2590c94e62c89a63">d21054e96b…</code> → <code title="reveal 86fcf12d18ae860d6e5db08c3162ed12c010ab5e50498e7db3d7ce6932820817">86fcf12d18…</code></td></tr><tr><td><b>DEGENT.2</b></td><td class="n">967,787</td><td>Sep 20 03:03</td><td class="n">967,926</td><td>Sep 21 02:09</td><td class="n">139</td><td>3.95 MB</td><td class="n">993,494</td><td><span class="ok">valid · Counter #217</span></td><td><code title="commit 4d68308319added24213db48fa2da8da19d27d48ad5120eca46e344617cd0546">4d68308319…</code> → <code title="reveal 6557c3f6a1aa4778e62297328f353bcbf1a61568e85ece531fb4ec2a1d91b1d5">6557c3f6a1…</code></td></tr><tr class="act"><td><b>Activation</b></td><td colspan="2"><code>require_reveal_source_signature</code></td><td class="n"><b>969,320</b></td><td>Sep 30 16:48</td><td colspan="5">everything above was committed and revealed with the cutoff still nine days away; everything below was committed more than a day after it</td></tr><tr class="deg"><td><b>DEGENT.3</b></td><td class="n">969,488</td><td>Oct 01 19:59</td><td class="n">969,683</td><td>Oct 03 05:51</td><td class="n">195</td><td>3.95 MB</td><td class="n">1,004,164</td><td><span class="bad">ignored · gallery #533</span></td><td><code title="commit 2ef8f20ac575f2d4c4288c67f7f0fac6392af9836cdf07c83c597d08e9984247">2ef8f20ac5…</code> → <code title="reveal 7d640bf0a0d3a99042af72010f58c2d13d1a3e039fa08101d8bde6bca17dd93c">7d640bf0a0…</code></td></tr><tr class="deg"><td><b>DEGENT.5</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">969,919</td><td>Oct 04 23:28</td><td class="n">422</td><td>3.96 MB</td><td class="n">1,002,861</td><td><span class="bad">ignored · gallery #540</span></td><td><code title="commit 35960a2ddbfa0faf89c81a6ea420d849ed0139941558d1206370bb8ae98356da">35960a2ddb…</code> → <code title="reveal f34bf01e2fb093669f577bb3868c57d991ca4e1988fc1662436e0eb06c664201">f34bf01e2f…</code></td></tr><tr class="deg"><td><b>DEGENT.4</b></td><td class="n">969,488</td><td>Oct 01 19:59</td><td class="n">969,958</td><td>Oct 05 04:59</td><td class="n">470</td><td>3.95 MB</td><td class="n">1,002,550</td><td><span class="bad">ignored · gallery #541</span></td><td><code title="commit fcff198e110dc97cfb2e02d1c2bdc2cd2ba349d9a903856297bf1f8f156286fb">fcff198e11…</code> → <code title="reveal ea72e53473ce46f14fb2bcabc6d2c1bce888ec4219623daba1be6b8d771f746c">ea72e53473…</code></td></tr><tr class="deg"><td><b>DEGENT.6</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,195</td><td>Oct 06 15:57</td><td class="n">698</td><td>3.96 MB</td><td class="n">1,002,102</td><td><span class="bad">ignored · gallery #547</span></td><td><code title="commit 7855cfdd4237ac032eca4f036d5a5cd7c8e824eebc79250ecc2eef48690b1eda">7855cfdd42…</code> → <code title="reveal b02f497d20ed488a9427d941ba9695c5e10fd8473c8b206c0b6bb60c98cba0e6">b02f497d20…</code></td></tr><tr class="deg"><td><b>DEGENT.7</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,578</td><td>Oct 09 03:37</td><td class="n">1,081</td><td>3.95 MB</td><td class="n">1,000,173</td><td><span class="bad">ignored · gallery #552</span></td><td><code title="commit 4bd00f72a412cf088256587e65c970ea97a1375d81101e5d8233c0f08fd9f604">4bd00f72a4…</code> → <code title="reveal c1730efbdfd1c783c2c0d2033b8d263a2df16acd637f45e56b697bd217eb8973">c1730efbdf…</code></td></tr><tr class="deg"><td><b>DEGENT.8</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,705</td><td>Oct 10 01:29</td><td class="n">1,208</td><td>3.96 MB</td><td class="n">1,000,098</td><td><span class="bad">ignored · gallery #554</span></td><td><code title="commit 91ba64217c7daa6249a84bc3bdbe2c4b9905db78d5e7bdd87a70559a92263d91">91ba64217c…</code> → <code title="reveal 8383fd5a0f02b51ad9d31704ae8117e94de6ad19ba6d81118e19ddfb330912e1">8383fd5a0f…</code></td></tr><tr class="deg"><td><b>DEGENT.10</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,765</td><td>Oct 10 12:34</td><td class="n">1,268</td><td>3.96 MB</td><td class="n">997,982</td><td><span class="bad">ignored · gallery #555</span></td><td><code title="commit 1fcae0c9c4891f9e6809526f2a742cd3a79fcaba5c8ccbc53e73c789dc8276ea">1fcae0c9c4…</code> → <code title="reveal c63b570221c5ae05706aee479d175aee960098c4e7a1176470ecdd9a83b15000">c63b570221…</code></td></tr><tr class="deg"><td><b>DEGENT.9</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,842</td><td>Oct 10 23:17</td><td class="n">1,345</td><td>3.95 MB</td><td class="n">997,972</td><td><span class="bad">ignored · gallery #556</span></td><td><code title="commit 2ebf1cd0721324a07d2f2d5f74f2e1406eb03ee9485acaaec0ceeaf02ec6f570">2ebf1cd072…</code> → <code title="reveal 3d7a29c39d89b1839f9e625d2ef3cedff79c04dedda97e0cb2eb6536926ae5ed">3d7a29c39d…</code></td></tr><tr class="deg"><td><b>DEGENT.11</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,843</td><td>Oct 10 23:19</td><td class="n">1,346</td><td>3.96 MB</td><td class="n">997,266</td><td><span class="bad">ignored · gallery #557</span></td><td><code title="commit 75b11754da7115f40dbed4e179f42e82742da2bb38532d3ab356cb6cb8e4e078">75b11754da…</code> → <code title="reveal 24720cfeab130156fc32d095c2dd7b64d544160226a9d231e7d95e10757b26e8">24720cfeab…</code></td></tr><tr class="deg"><td><b>DEGENT.12</b></td><td class="n">969,497</td><td>Oct 01 22:34</td><td class="n">970,858</td><td>Oct 11 01:57</td><td class="n">1,361</td><td>3.96 MB</td><td class="n">996,569</td><td><span class="bad">ignored · gallery #558</span></td><td><code title="commit 7d03b4aa7631b6ada85ce36180aa2cb2d07deb6a7db138d48641f94ae09992a4">7d03b4aa76…</code> → <code title="reveal 92fd95caccd78d8baff153354c8d0e61763e57914765ac344e5551c14ad720a5">92fd95cacc…</code></td></tr></tbody></table></div>
+<ul class="notes">
+<li>DEGENT.3 and DEGENT.4 share commit block 969,488 (1 Oct 19:59). DEGENT.5 through DEGENT.12 share commit block 969,497 (1 Oct 22:34). Both batches are about 170 blocks past the cutoff, so they were composed with a pre-11.5.0 node after the rule was already live.</li>
+<li>The reveals then trickled out one per day or so; the last, DEGENT.12, at 970,858 on 11 Oct. The same wallet composed each reveal with the old flow every time, so whatever tool it uses has not been updated.</li>
+<li>Total spent by this wallet on all thirteen: 12,982,932 sats, of which 10,001,737 bought nothing on consensus. The ignored subassets cannot be made valid retroactively; they would have to be re-inscribed with a reveal signed by the source key.</li>
+</ul>
+</section>
+<details><summary>Full transaction ids (ignored reveals)</summary><ol><li><b>PEPEMAXXER</b><br>commit <code>0a97410e2a2c2bb5ce6c8cfd361c8e441aabc1e6886f748826581850650e2ad8</code><br>reveal <code>afa122ca8aeaaed9fcf40619b0b949d6037ffcf8ebcbcceb8efd216bc9c48e83</code></li>
+<li><b>DEGENT.3</b><br>commit <code>2ef8f20ac575f2d4c4288c67f7f0fac6392af9836cdf07c83c597d08e9984247</code><br>reveal <code>7d640bf0a0d3a99042af72010f58c2d13d1a3e039fa08101d8bde6bca17dd93c</code></li>
+<li><b>A13034237042982401926</b><br>commit <code>2e3f4616391f089ac46f5ed43a5262468dc179fffcbd0673c7abff0f344a53a8</code><br>reveal <code>bd1f913c44197452e8c03d581684bf710c3e0d3fb94843cd0789b5651f7eea1c</code></li>
+<li><b>DEGENT.5</b><br>commit <code>35960a2ddbfa0faf89c81a6ea420d849ed0139941558d1206370bb8ae98356da</code><br>reveal <code>f34bf01e2fb093669f577bb3868c57d991ca4e1988fc1662436e0eb06c664201</code></li>
+<li><b>DEGENT.4</b><br>commit <code>fcff198e110dc97cfb2e02d1c2bdc2cd2ba349d9a903856297bf1f8f156286fb</code><br>reveal <code>ea72e53473ce46f14fb2bcabc6d2c1bce888ec4219623daba1be6b8d771f746c</code></li>
+<li><b>NINESIX</b><br>commit <code>df57eec1083a15f29dfcb6cc71615060204602e28946925b239c0c145fca8ea0</code><br>reveal <code>19d2e817f4b3c855004e216477ecbdd3356bf7d80a0e794758946da1cd21cb28</code></li>
+<li><b>NINESIXNINE</b><br>commit <code>3449ab122780efdf846d8df6a23c3d78b812a86c9a62c4d51ecd94d507ff7056</code><br>reveal <code>b27384b622582c47efdea7b650fa8392848411a7dbea0bc57dadc8b6532ccc91</code></li>
+<li><b>DEGENT.6</b><br>commit <code>7855cfdd4237ac032eca4f036d5a5cd7c8e824eebc79250ecc2eef48690b1eda</code><br>reveal <code>b02f497d20ed488a9427d941ba9695c5e10fd8473c8b206c0b6bb60c98cba0e6</code></li>
+<li><b>RAREBLOCKS</b><br>commit <code>f92ff0e3297f75a88a53e92aaf51bfebdb0759a107d1b5e80e004c7ce47721c2</code><br>reveal <code>b1d677c671f9e073d7f47bba8ba453b93a334a2d90a4ab0b5c7d63880a9c8d70</code></li>
+<li><b>DEGENT.7</b><br>commit <code>4bd00f72a412cf088256587e65c970ea97a1375d81101e5d8233c0f08fd9f604</code><br>reveal <code>c1730efbdfd1c783c2c0d2033b8d263a2df16acd637f45e56b697bd217eb8973</code></li>
+<li><b>DEGENT.8</b><br>commit <code>91ba64217c7daa6249a84bc3bdbe2c4b9905db78d5e7bdd87a70559a92263d91</code><br>reveal <code>8383fd5a0f02b51ad9d31704ae8117e94de6ad19ba6d81118e19ddfb330912e1</code></li>
+<li><b>DEGENT.10</b><br>commit <code>1fcae0c9c4891f9e6809526f2a742cd3a79fcaba5c8ccbc53e73c789dc8276ea</code><br>reveal <code>c63b570221c5ae05706aee479d175aee960098c4e7a1176470ecdd9a83b15000</code></li>
+<li><b>DEGENT.9</b><br>commit <code>2ebf1cd0721324a07d2f2d5f74f2e1406eb03ee9485acaaec0ceeaf02ec6f570</code><br>reveal <code>3d7a29c39d89b1839f9e625d2ef3cedff79c04dedda97e0cb2eb6536926ae5ed</code></li>
+<li><b>DEGENT.11</b><br>commit <code>75b11754da7115f40dbed4e179f42e82742da2bb38532d3ab356cb6cb8e4e078</code><br>reveal <code>24720cfeab130156fc32d095c2dd7b64d544160226a9d231e7d95e10757b26e8</code></li>
+<li><b>DEGENT.12</b><br>commit <code>7d03b4aa7631b6ada85ce36180aa2cb2d07deb6a7db138d48641f94ae09992a4</code><br>reveal <code>92fd95caccd78d8baff153354c8d0e61763e57914765ac344e5551c14ad720a5</code></li></ol></details>
+</div>
