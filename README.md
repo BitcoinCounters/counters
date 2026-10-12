@@ -468,9 +468,9 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 >
 > Slipstream has no package endpoint, so the commit and reveal are submitted
 > individually, commit first. If the commit is accepted and the reveal is not,
-> the reveal hex is printed loudly: Counterparty signed that reveal with an
-> ephemeral key it discarded, making it the only transaction that can ever spend
-> the commit output — it cannot be re-composed, fee-bumped, or replaced.
+> the reveal hex is printed loudly: it is the only transaction prepared to spend
+> the commit output, and nothing in this tool rebuilds or re-signs one yet — it
+> cannot be fee-bumped or replaced, so keep that hex.
 
 > **Dispensers cannot be paid with a plain BTC send.** Since Counterparty's
 > `disable_vanilla_btc_dispense` (block 866,000) a payment carrying no
@@ -501,9 +501,11 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > signed hex for direct submission, since no ordinary node will relay it.
 
 > **A reveal can never be replaced, and only a `counterparty/ord` one can be sped up.**
-> Counterparty signs the reveal with an ephemeral envelope key it discards, so
-> it can never be re-signed: no RBF, in either style. CPFP, however, depends on
-> the envelope. A `counterparty` reveal spends its whole input to fee and emits only
+> Since Counterparty Core v11.5.0 the reveal is signed by the source's own key
+> (`counters` exports it from Bitcoin Core for that one signature; see
+> `counters/revealsign.py`), but it is signed once, with a 64-byte
+> `SIGHASH_DEFAULT` signature, and this tool does not rebuild one: no RBF, in
+> either style. CPFP, however, depends on the envelope. A `counterparty` reveal spends its whole input to fee and emits only
 > an `OP_RETURN`, so there is no output to attach a child to. A `counterparty/ord` reveal
 > additionally carries the dust output Core adds for an ordinals envelope
 > (v11.0.0: "when using an Ordinals envelope script, add a dust output for the
