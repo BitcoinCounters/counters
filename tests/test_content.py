@@ -23,6 +23,8 @@ from counters.content import (  # noqa: E402
     sniff_image,
     sniff_media,
     stamp_image,
+    asset_info_image,
+    decoded_image,
 )
 
 PRE = GENESIS_HEIGHT          # 902000: before the extended-MIME gate
@@ -147,6 +149,87 @@ def test_stamp_image_rejects():
     text_b64 = base64.b64encode(b"hello world, not an image").decode()
     assert stamp_image(f"STAMP:{text_b64}".encode(), True) is None
     assert stamp_image(b"STAMP:\xff\xfe", True) is None          # not UTF-8
+
+
+# --- inline asset-info JSON (§5.4, second shape; counter #560) --------------
+
+def _asset_info(image: object = None, images: object = None, **extra) -> bytes:
+    info: dict = {"asset": "PEPEMEMECOIN.S1N7", "title": "21 A Kek Odyssey"}
+    if image is not None:
+        info["image"] = image
+    if images is not None:
+        info["images"] = images
+    info.update(extra)
+    return b"data:application/json," + json.dumps(info).encode()
+
+
+def test_asset_info_image():
+    import base64
+
+    b64 = base64.b64encode(_GIF).decode()
+    uri = f"data:image/gif;base64,{b64}"
+    assert asset_info_image(_asset_info(image=uri), True) == (_GIF, "image/gif")
+    # the picture's own bytes decide the type, not the URI's label
+    assert asset_info_image(_asset_info(image=f"data:image/webp;base64,{b64}"), True) == (_GIF, "image/gif")
+    # scheme and mime are case-insensitive; a charset parameter is allowed;
+    # whitespace around the whole body is tolerated (as for STAMP:)
+    body = b"DATA:APPLICATION/JSON;charset=utf-8," + json.dumps({"asset": "X", "image": uri}).encode()
+    assert asset_info_image(body + b"\n", True) == (_GIF, "image/gif")
+    # #560's real shape: `image` inline, `images` entries hosted (ignored)
+    hosted = [{"type": "icon", "size": "48x48", "data": "https://x.ar.io/icon.png"},
+              {"type": "high_def", "data": "https://x.ar.io/hd.png"}]
+    assert asset_info_image(_asset_info(image=uri, images=hosted), True) == (_GIF, "image/gif")
+    # `image` hosted, `images[].data` inline: the array entry is used
+    assert asset_info_image(
+        _asset_info(image="https://xcp.fun/icon.png",
+                    images=[{"type": "icon", "data": "https://x/i.png"},
+                            {"type": "standard", "data": uri}]),
+        True) == (_GIF, "image/gif")
+    # the pretty-printed JSON with \r\n and spaces that #560 actually carries
+    body = (b'data:application/json,{"asset":"PEPEMEMECOIN.S1N7", "title":"21 A Kek Odyssey",\r\n'
+            b'"artist":"Memeticx",  "image":"' + uri.encode() + b'"}')
+    assert asset_info_image(body, True) == (_GIF, "image/gif")
+    # decoded_image is the union: STAMP: first, then asset info
+    assert decoded_image(f"STAMP:{b64}".encode(), True) == (_GIF, "image/gif")
+    assert decoded_image(_asset_info(image=uri), True) == (_GIF, "image/gif")
+    assert decoded_image(b"just text", True) is None
+
+
+def test_asset_info_image_rejects():
+    import base64
+
+    b64 = base64.b64encode(_GIF).decode()
+    uri = f"data:image/gif;base64,{b64}"
+    assert asset_info_image(_asset_info(image=uri), False) is None       # binary content
+    assert asset_info_image(b"STAMP:" + b64.encode(), True) is None       # not this shape
+    assert asset_info_image(json.dumps({"image": uri}).encode(), True) is None  # bare JSON, no data: wrapper
+    # a hosted picture is a pointer (rule 4): never fetched, shown as text
+    assert asset_info_image(_asset_info(image="https://xcp.fun/full/X.png"), True) is None
+    assert asset_info_image(_asset_info(images=[{"type": "standard", "data": "ipfs://Qm"}]), True) is None
+    # no picture at all
+    assert asset_info_image(_asset_info(), True) is None
+    # base64 without the data: prefix is not a URI we recognize (no guessing)
+    assert asset_info_image(_asset_info(image=b64), True) is None
+    # a data: image that is not base64-encoded
+    assert asset_info_image(_asset_info(image="data:image/svg+xml,<svg/>"), True) is None
+    # JSON that is not an object, or does not parse
+    assert asset_info_image(b"data:application/json,[1,2]", True) is None
+    assert asset_info_image(b"data:application/json,{not json", True) is None
+    # other data: mimes are not asset info
+    assert asset_info_image(b"data:text/plain,hello", True) is None
+    assert asset_info_image(b"data:application/json;base64," + base64.b64encode(b"{}"), True) is None
+    # Rule 3 strictness carries over: damaged base64 is text, not repaired
+    spaced = b64[:10] + " " + b64[10:]
+    assert asset_info_image(_asset_info(image=f"data:image/gif;base64,{spaced}"), True) is None
+    assert asset_info_image(_asset_info(image=f"data:image/gif;base64,{b64.rstrip('=')}"), True) is None
+    # the first candidate decides: a damaged `image` is not rescued by `images`
+    assert asset_info_image(
+        _asset_info(image=f"data:image/gif;base64,{spaced}",
+                    images=[{"type": "standard", "data": uri}]), True) is None
+    # decodes, but not a recognized image -> text
+    text_b64 = base64.b64encode(b"hello world, not an image").decode()
+    assert asset_info_image(_asset_info(image=f"data:image/gif;base64,{text_b64}"), True) is None
+    assert asset_info_image(b"data:application/json,\xff\xfe", True) is None  # not UTF-8
 
 
 if __name__ == "__main__":

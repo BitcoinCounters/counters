@@ -325,3 +325,83 @@ def stamp_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
     if mime is None:
         return None
     return raw, mime
+
+
+# Asset-info-like content (build ref v3 §5.4, second shape): Counterparty's
+# Enhanced Asset Info JSON — normally hosted at a URL the description points
+# to — carried *in* the description as a `data:application/json,` URI, with
+# the picture itself a `data:image/*;base64,` URI inside it (the `image`
+# field, or an entry of XChain's `images` array extension). First seen on
+# counter #560 PEPEMEMECOIN.S1N7. Like `STAMP:` this is display metadata
+# only, and decode-or-text under the same strictness: the base64 must be
+# clean and the bytes must carry a known image magic. Hosted URLs in the
+# same JSON are references, never fetched (rule 4).
+_JSON_DATA_URI_RE = re.compile(
+    r"^data:application/json(?:;charset=utf-8)?,", re.IGNORECASE)
+_IMAGE_DATA_URI_RE = re.compile(r"^data:image/[\w.+-]+;base64,", re.IGNORECASE)
+
+# Decoding a JSON wrapper this large is cheap; the point of the cap is a
+# bound on serve-time work, not a judgement about the content.
+DECODE_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _image_data_uris(info: dict) -> list[str]:
+    """Candidate inline-image fields in spec order: `image`, then each
+    `images[].data` (XChain extension). Anything that is not a string
+    starting `data:image/...;base64,` is skipped — a hosted URL is a pointer."""
+    out: list[str] = []
+    image = info.get("image")
+    if isinstance(image, str):
+        out.append(image)
+    images = info.get("images")
+    if isinstance(images, list):
+        for entry in images:
+            if isinstance(entry, dict) and isinstance(entry.get("data"), str):
+                out.append(entry["data"])
+    return [u for u in out if _IMAGE_DATA_URI_RE.match(u)]
+
+
+def asset_info_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
+    """Decode an inline-asset-info payload to `(image bytes, sniffed mime)`,
+    or None (display as text): not textual, not a `data:application/json,`
+    URI, JSON that does not parse to an object, no inline image field, base64
+    that is not strictly well-formed, or bytes that are not a recognized
+    image. The first candidate field decides — no fallthrough to a later
+    field after a damaged one, and no repair."""
+    if not textual or len(content) > DECODE_MAX_BYTES:
+        return None
+    try:
+        text = content.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    m = _JSON_DATA_URI_RE.match(text)
+    if m is None:
+        return None
+    try:
+        info = json.loads(text[m.end():])
+    except ValueError:
+        return None
+    if not isinstance(info, dict):
+        return None
+    candidates = _image_data_uris(info)
+    if not candidates:
+        return None
+    b64 = candidates[0].split(",", 1)[1]
+    if not _STRICT_BASE64_RE.match(b64):
+        return None
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    mime = sniff_image(raw)
+    if mime is None:
+        return None
+    return raw, mime
+
+
+def decoded_image(content: bytes, textual: bool) -> tuple[bytes, str] | None:
+    """The image a textual counter *encodes*, if any: a `STAMP:<base64>`
+    payload or an inline-asset-info JSON (§5.4). None means display the text
+    as-is. This is what `stamp_mime` and `/stamp/<n>` report — "stamp" is the
+    name of the channel, after the shape that got there first."""
+    return stamp_image(content, textual) or asset_info_image(content, textual)

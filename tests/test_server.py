@@ -84,6 +84,35 @@ def _seed_store(data_dir: str) -> Config:
     return cfg
 
 
+def _seed_asset_info(cfg: Config) -> None:
+    """Counter #3 for the tests that need it: inline asset-info JSON (§5.4,
+    rule 3b). Kept out of `_seed_store` so the other tests' head counts and
+    envelope passes stay as they are."""
+    store = Store(cfg)
+    # Inline asset-info JSON (§5.4, rule 3b): a `data:application/json,` body
+    # whose `image` is a data: URI holding the same GIF. Padded past the 256 KB
+    # inline cap, as #560's 347 KB is: the decoder has its own, larger cap.
+    info = {"asset": "INFOTEST", "title": "inline",
+            "image": "data:image/gif;base64," + base64.b64encode(GIF).decode(),
+            "images": [{"type": "high_def", "data": "https://x.ar.io/hd.png"}],
+            "description": "x" * (300 * 1024)}
+    info_text = b"data:application/json," + json.dumps(info).encode()
+    sha4 = store.store_blob(info_text)
+    store.add_counter(
+        3,
+        CounterRecord(
+            asset="INFOTEST", asset_id="789", asset_longname=None,
+            kind="issuance", content_type="text/plain", content_type_raw=None,
+            content_sha256=sha4, content_length=len(info_text),
+            is_pointer_like=False,
+            mint_txid="dd" * 32, msg_index=0, block_index=902006,
+            cp_tx_index=4, source="bc1pstored", divisible=False, supply=1,
+        ),
+    )
+    store.commit()
+    store.close()
+
+
 def _get(base: str, path: str):
     try:
         with urllib.request.urlopen(base + path, timeout=5) as r:
@@ -92,9 +121,11 @@ def _get(base: str, path: str):
         return e.code, e.headers.get("Content-Type", ""), e.read()
 
 
-def _run_server():
+def _run_server(asset_info: bool = False):
     tmp = tempfile.mkdtemp()
     cfg = _seed_store(tmp)
+    if asset_info:
+        _seed_asset_info(cfg)
     # Keep the test offline: never call Counterparty for live asset info.
     appmod._live_asset = lambda config, asset: {}
     appmod._asset_burned = lambda config, asset: 100 if asset == "TESTASSET" else None
@@ -105,13 +136,13 @@ def _run_server():
 
 
 def test_api_and_static():
-    httpd, base = _run_server()
+    httpd, base = _run_server(asset_info=True)
     try:
         # --- /counters list ---
         status, ctype, body = _get(base, "/counters?limit=5")
         assert status == 200 and "application/json" in ctype
         data = json.loads(body)
-        assert len(data["counters"]) == 3     # original + later event (N6) + stamp
+        assert len(data["counters"]) == 4     # original + later event (N6) + stamp + asset info
         recs = {r["number"]: r for r in data["counters"]}
         rec = recs[0]
         assert rec["number"] == 0
@@ -138,11 +169,17 @@ def test_api_and_static():
         assert stamp_rec["stamp_mime"] == "image/gif"
         assert stamp_rec["body"] == "STAMP:" + base64.b64encode(GIF).decode()
 
+        # --- inline asset-info counter (rule 3b): flagged like a stamp; the
+        # 300 KB body is past the inline cap but not the decoder's ---
+        info_rec = recs[3]
+        assert info_rec["stamp_mime"] == "image/gif"
+        assert info_rec["body"] is None and info_rec["size"] > 256 * 1024
+
         # --- /status: latest synced height + total count ---
         status, ctype, body = _get(base, "/status")
         assert status == 200 and "application/json" in ctype
         st = json.loads(body)
-        assert st["count"] == 3 and st["indexed"] == 902006
+        assert st["count"] == 4 and st["indexed"] == 902006
         # Release identity the footer renders: our version (which mirrors the
         # Counterparty Core series we target), the build's commit, and when the
         # deployed code last changed (null when no git dir / CI stamp exists).
@@ -205,6 +242,14 @@ def test_api_and_static():
         status, ctype, body = _get(base, "/preview/2")
         assert status == 200 and "text/html" in ctype
         assert b"/stamp/2" in body and b"<img" in body
+        # the asset-info counter: same channel, raw bytes untouched (rule 3b)
+        status, ctype, body = _get(base, "/stamp/3")
+        assert status == 200 and ctype == "image/gif" and body == GIF
+        status, ctype, body = _get(base, "/content/3")
+        assert status == 200 and body.startswith(b"data:application/json,") and ctype.startswith("text/plain")
+        status, ctype, body = _get(base, "/preview/3")
+        assert status == 200 and "text/html" in ctype
+        assert b"/stamp/3" in body and b"<img" in body
         # a plain-text counter still previews as text
         status, _, body = _get(base, "/preview/0")
         assert status == 200 and b"<pre>hi</pre>" in body

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
-from ..content import classify_mime_type, stamp_image
+from ..content import DECODE_MAX_BYTES, classify_mime_type, decoded_image
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..ids import format_id, parse_id
 from ..ledger import CounterpartyLedger
@@ -209,12 +209,13 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
             commit = commit_txid(tx)
             envelope = envelope_style(tx)  # 'counterparty/ord' | 'counterparty'
         # Stamp tag mirrors the explorer: a textual counter whose payload
-        # decodes as a STAMP: image (display metadata only, §5.4).
+        # decodes as an image — STAMP: or inline asset-info JSON (display
+        # metadata only, §5.4).
         ct_class = classify_mime_type(row["content_type"] or "text/plain",
                                       row["block_index"])
-        if ct_class == "text" and row["content_length"] <= 256 * 1024:
+        if ct_class == "text" and row["content_length"] <= DECODE_MAX_BYTES:
             blob = store.read_blob(row["content_sha256"])
-            decoded = stamp_image(blob, textual=True) if blob else None
+            decoded = decoded_image(blob, textual=True) if blob else None
             stamp_mime = decoded[1] if decoded else None
         asset_numbers = [r["number"] for r in store.get_counters_by_asset(row["asset"])]
 
@@ -233,7 +234,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
     if detailed and envelope:
         print(f"envelope     : {'counterparty + ord' if envelope == 'counterparty/ord' else 'counterparty native'}")
     if detailed and stamp_mime:
-        print(f"stamp        : {stamp_mime} (decodes as a stamp image)")
+        print(f"stamp        : {stamp_mime} (text decodes to an image)")
     print(f"size         : {row['content_length']} bytes")
     if detailed:
         if row["is_pointer_like"]:

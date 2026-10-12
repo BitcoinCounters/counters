@@ -54,7 +54,7 @@ from ..config import Config
 from ..ids import format_id
 from .. import search as searchmod
 from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
-                       sniff_media, stamp_image)
+                       sniff_media, decoded_image, DECODE_MAX_BYTES)
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import ENVELOPE_VERSION, envelope_style
 from ..store import Store
@@ -340,17 +340,20 @@ def _block_time(config: Config, height: int) -> int | None:
 
 
 def _stamp_payload(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
-    """Decoded (image bytes, mime) for a stamp-like counter, else None (build
-    ref v3 §5.4 — display metadata only, derived at serve time)."""
+    """Decoded (image bytes, mime) for a counter whose text encodes an image —
+    a `STAMP:` payload or inline asset-info JSON — else None (build ref v3
+    §5.4 — display metadata only, derived at serve time). The cap is the
+    decoder's own, not BODY_MAX_BYTES: #560's JSON wrapper is 347 KB of text
+    around a 260 KB WebP, well past what a list would inline."""
     ct = row["content_type"] or "text/plain"
     if classify_mime_type(ct, row["block_index"]) != "text":
         return None
-    if row["content_length"] > BODY_MAX_BYTES:
+    if row["content_length"] > DECODE_MAX_BYTES:
         return None
     blob = store.read_blob(row["content_sha256"])
     if blob is None:
         return None
-    return stamp_image(blob, textual=True)
+    return decoded_image(blob, textual=True)
 
 
 def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
