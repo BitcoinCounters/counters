@@ -173,13 +173,20 @@ server already does this · **FIX**: server needs the rule below.
 | 82 | OTFS | text/plain | pointer | 4 | OK |
 | 83–84 | A120…/STAMPINAL | text/plain | decoded GIF (`STAMP:`; also cursed stamps) | 3 | OK |
 | 85–86 | XCPBULL/THEFIVEOFUS | text/plain | pointer | 4 | OK |
+| 122 | NICENUMBER | text/plain | **text** — `STAMP:` base64 has stray spaces and a character count that is 1 mod 4 | 3 | OK |
+| 161 | GREENER | text/plain | **text** — `STAMP:` base64 has a stray space and a character count that is 1 mod 4 | 3 | OK |
 | 560 | PEPEMEMECOIN.S1N7 | text/plain | decoded WebP (inline asset-info JSON) | 3b | OK |
 
 Totals: 87 counters — 46 pointers, 19 text (incl. #54/#59 damaged stamps →
 text), 11 images, 3 audio, 4 HTML, 6 shown-image stamps.
 
-#560 is listed out of sequence: it is the counter that added rule 3b
-(2026-10-12), and the only one of its shape at the time.
+#122, #161 and #560 are listed out of sequence, from a sweep of all 561
+counters on 2026-10-12 (the day rule 3b was added): the two damaged stamps
+are the only textual counters after #86 that *look* decodable and are not,
+and #560 was the only one of its shape. Every other counter above #86 is a
+pointer, a hosted-URL JSON, a clean image, SVG, HTML, text, or a decoded
+stamp. xcp.io repairs #54, #59 and #122 into pictures and shows a
+placeholder for #161; under rule 3 all four are text.
 
 ## Implementation notes
 
