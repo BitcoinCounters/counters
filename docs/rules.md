@@ -47,6 +47,22 @@ everywhere an image would be; `/content/<n>` stays the raw text. Anything else
 — malformed base64, non-image bytes — is shown as plain text. **No character
 substitution, no prefix surgery, no repair of damaged data.**
 
+**3b — Inline asset info is decode-or-text, the same way.** A text body that
+is a `data:application/json,` URI carrying [Enhanced Asset Info](https://docs.counterparty.io/docs/basics/assets/enhanced-asset/)
+JSON — the token-info file the spec normally hosts at a URL, written into the
+description itself — renders as the picture that JSON carries **only if** the
+picture is itself on chain: an `image` field (or, failing that, the first
+`images[].data` entry of XChain's extension) that is a `data:image/*;base64,`
+URI, decoded under exactly rule 3's conditions (strict base64, recognized
+image signature). The first inline candidate decides; a damaged one is not
+rescued by the next. Hosted `image`/`images` URLs in the same JSON are
+pointers (rule 4): the picture is only the bytes in the description. The
+decoded image is served at `/stamp/<n>` and flagged by `stamp_mime`, as for a
+stamp — one channel for "this text encodes an image", whichever wrapper. The
+JSON's other fields (title, artist, links) are not rendered. Counter #560
+PEPEMEMECOIN.S1N7 is the first in this shape: 347 KB of text around a
+1060×1484 WebP.
+
 **4 — Pointers are text, and never fetched.** A body that is a single URI
 token (`ipfs:`, `ipfs://`, `ar://`, `http(s)://`) is a *reference*, not an
 on-chain file — only the pointer is on chain. Show the pointer text (with a
@@ -157,9 +173,13 @@ server already does this · **FIX**: server needs the rule below.
 | 82 | OTFS | text/plain | pointer | 4 | OK |
 | 83–84 | A120…/STAMPINAL | text/plain | decoded GIF (`STAMP:`; also cursed stamps) | 3 | OK |
 | 85–86 | XCPBULL/THEFIVEOFUS | text/plain | pointer | 4 | OK |
+| 560 | PEPEMEMECOIN.S1N7 | text/plain | decoded WebP (inline asset-info JSON) | 3b | OK |
 
 Totals: 87 counters — 46 pointers, 19 text (incl. #54/#59 damaged stamps →
 text), 11 images, 3 audio, 4 HTML, 6 shown-image stamps.
+
+#560 is listed out of sequence: it is the counter that added rule 3b
+(2026-10-12), and the only one of its shape at the time.
 
 ## Implementation notes
 
@@ -189,5 +209,10 @@ way; rule 2's sniffed type just makes the displayed label honest.
   (space→`+`; drop a stray prefix), but recovery is a per-server guess, not a
   rule others can reproduce. Under rule 3 they show as text. We render what is
   cleanly on chain, not what we can reconstruct.
+- **No bare base64, no other wrappers.** Rule 3b decodes one documented
+  shape. A JSON `image` holding base64 with no `data:` prefix, a
+  base64-encoded JSON wrapper (`data:application/json;base64,`), or a data
+  URI with a non-base64 picture are shown as text until a real counter makes
+  the case for them — each is a new rule, not a tolerance.
 - **No pointer dereferencing** (rule 4) and **no gateway fetches for recursive
   HTML** (rule 5): a server only ever serves bytes that are on chain.

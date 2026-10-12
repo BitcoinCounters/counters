@@ -229,6 +229,16 @@ on API records; the decoded image at `/stamp/<n>`). The canonical content
 bytes, sha256, and rolling hash remain those of the *text* per §5.1; a
 payload that fails to decode to a recognized image simply displays as text.
 
+A second textual shape is treated the same way: a description that is a
+`data:application/json,` URI carrying Counterparty **Enhanced Asset Info**
+JSON (the token-info document the spec normally hosts at a URL) whose `image`
+field — or, failing that, an `images[].data` entry of XChain's extension — is
+a `data:image/*;base64,` URI. The base64 and image-magic conditions are those
+above; hosted URLs in the same JSON are references (§5.3) and are never
+fetched. Such an event reports the decoded picture through the same
+`stamp_mime` / `/stamp/<n>` channel. First seen on counter #560
+PEPEMEMECOIN.S1N7 (block 971,044).
+
 ### 5.5 Delegate-like content (informational)
 
 A textual body that **names another counter's event** is a **delegate**: a
