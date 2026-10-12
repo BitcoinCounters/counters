@@ -1,0 +1,152 @@
+[
+ {
+  "asset": "PEPEMAXXER",
+  "commit_tx": "0a97410e2a2c2bb5ce6c8cfd361c8e441aabc1e6886f748826581850650e2ad8",
+  "commit_block": 969518,
+  "commit_time": "Oct 02 01:35",
+  "reveal_tx": "afa122ca8aeaaed9fcf40619b0b949d6037ffcf8ebcbcceb8efd216bc9c48e83",
+  "reveal_block": 969525,
+  "reveal_time": "Oct 02 02:42",
+  "source": "bc1q4j2gh7cvw8fazvxje5d7l2r0tkhuqa0m5xa2lx"
+ },
+ {
+  "asset": "DEGENT.3",
+  "commit_tx": "2ef8f20ac575f2d4c4288c67f7f0fac6392af9836cdf07c83c597d08e9984247",
+  "commit_block": 969488,
+  "commit_time": "Oct 01 19:59",
+  "reveal_tx": "7d640bf0a0d3a99042af72010f58c2d13d1a3e039fa08101d8bde6bca17dd93c",
+  "reveal_block": 969683,
+  "reveal_time": "Oct 03 05:51",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "A13034237042982401926",
+  "commit_tx": "2e3f4616391f089ac46f5ed43a5262468dc179fffcbd0673c7abff0f344a53a8",
+  "commit_block": 969697,
+  "commit_time": "Oct 03 07:26",
+  "reveal_tx": "bd1f913c44197452e8c03d581684bf710c3e0d3fb94843cd0789b5651f7eea1c",
+  "reveal_block": 969697,
+  "reveal_time": "Oct 03 07:26",
+  "source": "bc1qcx8cjuxyfff84wsymp74lcak8qrq6np7ds7tze"
+ },
+ {
+  "asset": "DEGENT.5",
+  "commit_tx": "35960a2ddbfa0faf89c81a6ea420d849ed0139941558d1206370bb8ae98356da",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "f34bf01e2fb093669f577bb3868c57d991ca4e1988fc1662436e0eb06c664201",
+  "reveal_block": 969919,
+  "reveal_time": "Oct 04 23:28",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.4",
+  "commit_tx": "fcff198e110dc97cfb2e02d1c2bdc2cd2ba349d9a903856297bf1f8f156286fb",
+  "commit_block": 969488,
+  "commit_time": "Oct 01 19:59",
+  "reveal_tx": "ea72e53473ce46f14fb2bcabc6d2c1bce888ec4219623daba1be6b8d771f746c",
+  "reveal_block": 969958,
+  "reveal_time": "Oct 05 04:59",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "NINESIX",
+  "commit_tx": "df57eec1083a15f29dfcb6cc71615060204602e28946925b239c0c145fca8ea0",
+  "commit_block": 969970,
+  "commit_time": "Oct 05 06:46",
+  "reveal_tx": "19d2e817f4b3c855004e216477ecbdd3356bf7d80a0e794758946da1cd21cb28",
+  "reveal_block": 969970,
+  "reveal_time": "Oct 05 06:46",
+  "source": "bc1prx0khuanz4ae0pyn455n53hzhp6057z0nfw7dcf3epscpu0jfjaqu8tvtp"
+ },
+ {
+  "asset": "NINESIXNINE",
+  "commit_tx": "3449ab122780efdf846d8df6a23c3d78b812a86c9a62c4d51ecd94d507ff7056",
+  "commit_block": 969970,
+  "commit_time": "Oct 05 06:46",
+  "reveal_tx": "b27384b622582c47efdea7b650fa8392848411a7dbea0bc57dadc8b6532ccc91",
+  "reveal_block": 969970,
+  "reveal_time": "Oct 05 06:46",
+  "source": "bc1prx0khuanz4ae0pyn455n53hzhp6057z0nfw7dcf3epscpu0jfjaqu8tvtp"
+ },
+ {
+  "asset": "DEGENT.6",
+  "commit_tx": "7855cfdd4237ac032eca4f036d5a5cd7c8e824eebc79250ecc2eef48690b1eda",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "b02f497d20ed488a9427d941ba9695c5e10fd8473c8b206c0b6bb60c98cba0e6",
+  "reveal_block": 970195,
+  "reveal_time": "Oct 06 15:57",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "RAREBLOCKS",
+  "commit_tx": "f92ff0e3297f75a88a53e92aaf51bfebdb0759a107d1b5e80e004c7ce47721c2",
+  "commit_block": 970297,
+  "commit_time": "Oct 07 05:41",
+  "reveal_tx": "b1d677c671f9e073d7f47bba8ba453b93a334a2d90a4ab0b5c7d63880a9c8d70",
+  "reveal_block": 970297,
+  "reveal_time": "Oct 07 05:41",
+  "source": "bc1p050y4cencweq36kqa5cr43zr9ydtehqcmlk0plp7fy70xp3zmzfs6wa4tq"
+ },
+ {
+  "asset": "DEGENT.7",
+  "commit_tx": "4bd00f72a412cf088256587e65c970ea97a1375d81101e5d8233c0f08fd9f604",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "c1730efbdfd1c783c2c0d2033b8d263a2df16acd637f45e56b697bd217eb8973",
+  "reveal_block": 970578,
+  "reveal_time": "Oct 09 03:37",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.8",
+  "commit_tx": "91ba64217c7daa6249a84bc3bdbe2c4b9905db78d5e7bdd87a70559a92263d91",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "8383fd5a0f02b51ad9d31704ae8117e94de6ad19ba6d81118e19ddfb330912e1",
+  "reveal_block": 970705,
+  "reveal_time": "Oct 10 01:29",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.10",
+  "commit_tx": "1fcae0c9c4891f9e6809526f2a742cd3a79fcaba5c8ccbc53e73c789dc8276ea",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "c63b570221c5ae05706aee479d175aee960098c4e7a1176470ecdd9a83b15000",
+  "reveal_block": 970765,
+  "reveal_time": "Oct 10 12:34",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.9",
+  "commit_tx": "2ebf1cd0721324a07d2f2d5f74f2e1406eb03ee9485acaaec0ceeaf02ec6f570",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "3d7a29c39d89b1839f9e625d2ef3cedff79c04dedda97e0cb2eb6536926ae5ed",
+  "reveal_block": 970842,
+  "reveal_time": "Oct 10 23:17",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.11",
+  "commit_tx": "75b11754da7115f40dbed4e179f42e82742da2bb38532d3ab356cb6cb8e4e078",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "24720cfeab130156fc32d095c2dd7b64d544160226a9d231e7d95e10757b26e8",
+  "reveal_block": 970843,
+  "reveal_time": "Oct 10 23:19",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ },
+ {
+  "asset": "DEGENT.12",
+  "commit_tx": "7d03b4aa7631b6ada85ce36180aa2cb2d07deb6a7db138d48641f94ae09992a4",
+  "commit_block": 969497,
+  "commit_time": "Oct 01 22:34",
+  "reveal_tx": "92fd95caccd78d8baff153354c8d0e61763e57914765ac344e5551c14ad720a5",
+  "reveal_block": 970858,
+  "reveal_time": "Oct 11 01:57",
+  "source": "bc1qznsu8jwtaslycnpv7lvu6aqfamy6utdyuhztad"
+ }
+]
