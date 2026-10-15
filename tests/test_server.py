@@ -773,3 +773,91 @@ def test_asset_locks_gains_the_description_lock_in_place():
         assert store.get_locks("TESTASSET") == (True, False)
     finally:
         store.close()
+
+
+def test_icon_is_read_from_the_chain_through_this_node():
+    """§5.6: a JSON counter naming an icon inscription carries its id as
+    `icon`, and /icon/<n> serves that inscription's bytes out of the reveal
+    witness — from bitcoind, cached on disk, never from ordinals.com."""
+    from test_ordenv import envelope, tx_with
+
+    httpd, base = _run_server()
+    txid = "a21364e1e3d21bcc258a6f16b5193426077c969a1626fdd6674cd38d9a078dcd"
+    body = json.dumps({"asset": "ICONTEST", "delegate": "aa" * 32 + "i0",
+                       "images": [{"type": "icon", "size": "48x48",
+                                   "data": f"https://ordinals.com/content/{txid}i1?.png"}]}).encode()
+    store = Store(httpd.config)
+    try:
+        sha = store.store_blob(body)
+        store.add_counter(3, CounterRecord(
+            asset="ICONTEST", asset_id="999", asset_longname=None,
+            kind="issuance", content_type="application/json", content_type_raw=None,
+            content_sha256=sha, content_length=len(body), is_pointer_like=False,
+            mint_txid="ee" * 32, msg_index=0, block_index=902007,
+            cp_tx_index=5, source="bc1pstored", divisible=False, supply=1))
+        store.commit()
+    finally:
+        store.close()
+
+    calls = []
+
+    class FakeBtc:
+        def __init__(self, config):
+            pass
+
+        def get_raw_transaction(self, want, verbose=True):
+            # Other lookups (the reveal's fee, its envelope) find the node
+            # away, as the other tests do; only the icon's reveal is served.
+            if want != txid:
+                raise ConnectionError("down")
+            calls.append(want)
+            # i0 is text, i1 the PNG icon, i2 a picture too big to be one.
+            return tx_with(envelope(b"text/plain", b"zero") + envelope(b"image/gif", GIF),
+                           envelope(b"image/png", b"\x89PNG\r\n\x1a\n" + b"\0" * (1024 * 1024)))
+
+    orig = appmod.BitcoindClient
+    appmod.BitcoindClient = FakeBtc
+    try:
+        rec = json.loads(_get(base, "/counter/3")[2])
+        assert rec["icon"] == f"{txid}i1"
+        assert json.loads(_get(base, "/counter/0")[2])["icon"] is None
+        lean = {r["number"]: r["icon"] for r in
+                json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]}
+        assert lean[3] == f"{txid}i1" and lean[2] is None
+
+        status, ctype, got = _get(base, "/icon/3")
+        assert status == 200 and ctype == "image/gif" and got == GIF
+        assert calls == [txid]
+        # Cached: the second read never asks the node.
+        status, ctype, got = _get(base, "/icon/3")
+        assert status == 200 and got == GIF and calls == [txid]
+        assert (httpd.config.icons_dir / f"{txid}i1").read_bytes() == GIF
+
+        assert _get(base, "/icon/0")[0] == 404                 # names no icon
+        assert _get(base, "/icon/999")[0] == 404
+        # The oversized picture: not an icon.
+        store = Store(httpd.config)
+        try:
+            big = body.replace(b"i1?.png", b"i2?.png")
+            sha = store.store_blob(big)
+            store.add_counter(4, CounterRecord(
+                asset="BIGICON", asset_id="998", asset_longname=None,
+                kind="issuance", content_type="application/json", content_type_raw=None,
+                content_sha256=sha, content_length=len(big), is_pointer_like=False,
+                mint_txid="ef" * 32, msg_index=0, block_index=902007,
+                cp_tx_index=6, source="bc1pstored", divisible=False, supply=1))
+            store.commit()
+        finally:
+            store.close()
+        assert _get(base, "/icon/4")[0] == 415
+
+        # The node away: 502, and nothing cached as if it were an answer.
+        class DownBtc(FakeBtc):
+            def get_raw_transaction(self, want, verbose=True):
+                raise ConnectionError("down")
+        appmod.BitcoindClient = DownBtc
+        (httpd.config.icons_dir / f"{txid}i1").unlink()
+        assert _get(base, "/icon/3")[0] == 502
+    finally:
+        appmod.BitcoindClient = orig
+        httpd.shutdown()

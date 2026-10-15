@@ -130,6 +130,7 @@ This explorer reads these endpoints from `counters server`:
 - `GET /preview/<number|inscription id>` — the sandboxed render used by this explorer's cards. PDFs get a page-by-page viewer that scrolls the whole document and paints pages as they come into view
 - `GET /stamp/<number|inscription id>` — the decoded image of a `STAMP:` counter
 - `GET /delegate/<number|inscription id>` — the bytes a delegate's target committed (one hop, from this index only); 404 for a non-delegate or an unresolved target
+- `GET /icon/<number|inscription id>` — the small picture an asset-info JSON counter names as its icon (the `images` entry of type `icon`, every RARE.PEPE edition has one): an ordinals inscription, read from its reveal's witness through this node and never from the gateway the URL names. Each record carries the inscription id as `icon`; 404 when it names none
 - `GET /preview/<number|inscription id>?raw=1` — the canonical on-chain bytes as inert text (the raw toggle) instead of any derived view
 
 Every counter record carries its **inscription id**: `<reveal txid>i<msg_index>` — the event's on-chain identity, in ordinals' syntax. The index is Counterparty's per-transaction event index (0 for every counter to date); for a counterparty + ord counter the string is byte-identical to the ordinals inscription id of the same reveal, so ord tooling can dereference it too. Numbers are this lens's handle; the inscription id means the same thing to any reader.

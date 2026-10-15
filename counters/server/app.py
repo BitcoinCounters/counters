@@ -54,7 +54,9 @@ from ..config import Config
 from ..ids import format_id
 from .. import search as searchmod
 from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
-                       sniff_media, decoded_image, DECODE_MAX_BYTES)
+                       icon_ref, sniff_image, sniff_media, decoded_image,
+                       DECODE_MAX_BYTES)
+from .. import ordenv
 from ..counterparty import CounterpartyClient, CounterpartyError
 from ..reveal import ENVELOPE_VERSION, envelope_style
 from ..store import Store
@@ -391,6 +393,59 @@ def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
     }
 
 
+def _icon_id(store: Store, row: sqlite3.Row) -> str | None:
+    """The inscription id an asset-info JSON body names as its icon (§5.6),
+    `<txid>i<n>`, or None. Shape only — whether the chain holds an image
+    there is /icon/<n>'s business. Serve-time, like the delegate."""
+    ct = row["content_type"] or "text/plain"
+    if classify_mime_type(ct, row["block_index"]) != "text":
+        return None
+    if row["content_length"] > DELEGATE_MAX_BYTES:
+        return None
+    blob = store.read_blob(row["content_sha256"])
+    if blob is None:
+        return None
+    ref = icon_ref(blob, textual=True)
+    return None if ref is None else format_id(*ref)
+
+
+# An icon is a small picture by construction; anything larger is not one.
+ICON_MAX_BYTES = 1024 * 1024
+
+
+def read_icon(config: Config, icon_id: str, btc=None) -> tuple[bytes, str] | None:
+    """(bytes, mime) of the inscription `icon_id` names, from the chain
+    through this node: the reveal's witness, parsed for ord envelopes. None
+    when the inscription is not there, is not an image, or is too big to be
+    an icon. Cached on disk by id — the bytes cannot change."""
+    path = config.icons_dir / icon_id
+    try:
+        cached = path.read_bytes()
+    except OSError:
+        cached = None
+    if cached is not None:
+        mime = sniff_image(cached)
+        if mime is not None:
+            return cached, mime
+    txid, _, index = icon_id.partition("i")
+    btc = btc if btc is not None else BitcoindClient(config)
+    tx = btc.get_raw_transaction(txid, verbose=True)
+    ins = ordenv.inscription(tx, int(index))
+    if ins is None or len(ins.body) > ICON_MAX_BYTES:
+        return None
+    mime = sniff_image(ins.body)
+    if mime is None:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(ins.body)
+        tmp.replace(path)
+    except OSError:
+        log.debug("could not cache icon %s", icon_id, exc_info=True)
+    return ins.body, mime
+
+
 def _effective_row(store: Store, row: sqlite3.Row) -> sqlite3.Row:
     """The row display draws from: a resolved delegate's target (rule 9, ONE
     hop — a delegate's own delegate is not followed, so its token shows as
@@ -509,6 +564,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         # §5.5: the event a delegate body names — {'id','number','content_type',
         # 'fragment'}, number None while unresolved — or null for a non-delegate.
         "delegate": _delegate_info(store, row),
+        # §5.6: the inscription id an asset-info body names as its icon, or
+        # null. /icon/<n> serves its bytes from the chain through this node.
+        "icon": _icon_id(store, row),
         # Envelope style is computed from the reveal tx (a bitcoind fetch).
         # Lists never make that fetch: they carry the cached verdict
         # (warm_envelopes fills it in the background), and null means
@@ -631,6 +689,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(rf"/stamp/({_IDENT})", path)
             if m:
                 return self._stamp(m.group(1))
+            m = re.fullmatch(rf"/icon/({_IDENT})", path)
+            if m:
+                return self._icon(m.group(1))
             m = re.fullmatch(rf"/social/({_IDENT})\.png", path)
             if m:
                 return self._social(m.group(1))
@@ -890,6 +951,34 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, mime, raw, max_age=DERIVED_MAX_AGE, extra_headers=content_headers(mime))
         finally:
             store.close()
+
+    def _icon(self, ident: str) -> None:
+        """The icon an asset-info body names (§5.6): an ordinals inscription's
+        bytes, read from the reveal's witness through this node — never from
+        the gateway the body's URL names. Immutable once found, so cached on
+        disk and sent as such; 404 for a counter that names no icon, 415 when
+        the inscription is not a small image, 502 when the node is away."""
+        store = Store(self.config)
+        try:
+            row = store.find(ident)
+            if row is None:
+                return self._send(404, "text/plain; charset=utf-8", b"counter not found")
+            icon_id = _icon_id(store, row)
+        finally:
+            store.close()
+        if icon_id is None:
+            return self._send(404, "text/plain; charset=utf-8", b"no icon")
+        try:
+            found = read_icon(self.config, icon_id)
+        except Exception:
+            log.warning("icon %s: bitcoind unavailable", icon_id, exc_info=True)
+            return self._send(502, "text/plain; charset=utf-8", b"bitcoind unavailable")
+        if found is None:
+            return self._send(415, "text/plain; charset=utf-8",
+                              b"the inscription named is not a small image")
+        body, mime = found
+        self._send(200, mime, body, immutable=True,
+                   extra_headers=[("X-Content-Type-Options", "nosniff")])
 
     def _delegate(self, ident: str) -> None:
         """The bytes a delegate's target committed — the one-hop resolution
