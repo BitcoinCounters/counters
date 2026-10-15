@@ -156,6 +156,12 @@ class Config:
         return Path(self.data_dir) / "blobs"
 
     @property
+    def icons_dir(self) -> Path:
+        """Icons read off the chain (ordenv.py), keyed by inscription id —
+        immutable bytes, cached once."""
+        return Path(self.data_dir) / "icons"
+
+    @property
     def social_dir(self) -> Path:
         """Rendered `og:image` cache. Derived, not consensus data: safe to wipe,
         and rebuilt on demand (keyed by content hash + renderer version)."""

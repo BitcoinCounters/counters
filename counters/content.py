@@ -249,6 +249,53 @@ def delegate_event(content: bytes, textual: bool) -> tuple[str, int] | None:
     return None if ref is None else ref[:2]
 
 
+# An ICON (build ref v3 §5.6): a small picture an asset-info JSON body names
+# for places too small for the file itself — a row in an order book, a badge
+# by a name. XChain's `images` extension carries it as the entry whose `type`
+# is "icon"; its `data` names an ordinals inscription, either bare
+# (`<txid>i<n>`) or as an ordinals.com content URL, which is the shape in the
+# wild (every RARE.PEPE edition). Only the inscription id is taken from the
+# URL — the bytes are read from the chain through this node (ordenv.py), so
+# the host in the URL is never contacted. A hosted picture of any other shape
+# is a pointer and yields no icon. Shape only, like delegate_ref; the same
+# body cap applies.
+_ORDINALS_CONTENT_RE = re.compile(
+    r"^https?://(?:www\.)?ordinals\.com/(?:content|r/undelegated-content)/"
+    r"([0-9a-fA-F]{64})i(\d+)(?:[?#].*)?$")
+
+
+def icon_ref(content: bytes, textual: bool) -> tuple[str, int] | None:
+    """(txid, index) of the ordinals inscription an asset-info JSON body names
+    as its icon, else None."""
+    if not textual or len(content) > DELEGATE_MAX_BYTES:
+        return None
+    try:
+        text = content.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if text[:1] != "{":
+        return None
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return None
+    images = obj.get("images") if isinstance(obj, dict) else None
+    if not isinstance(images, list):
+        return None
+    for entry in images:
+        if not isinstance(entry, dict) or entry.get("type") != "icon":
+            continue
+        data = entry.get("data")
+        if not isinstance(data, str):
+            return None
+        data = data.strip()
+        m = _ORDINALS_CONTENT_RE.match(data)
+        if m:
+            return m.group(1).lower(), int(m.group(2))
+        return parse_id(data)      # bare id, or None for anything else
+    return None
+
+
 # Stamp-like content (build ref v3 §5.4): a Bitcoin Stamps payload —
 # `STAMP:<base64 image>` in a textual description. Like §5.3 this is display
 # metadata only; it never affects validity, numbering, content bytes, or the
