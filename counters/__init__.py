@@ -17,7 +17,7 @@ numbering, and storage. See docs/build-reference-v3.md.
 # The single source of truth: pyproject reads it from this attribute, the CLI
 # prints it for `counters --version`, and the server reports it on /status and
 # in the explorer footer.
-__version__ = "11.2.0"
+__version__ = "11.5.0"
 
 #: The Counterparty Core minor series this build targets ("11.2.0" -> "11.2").
 CP_SERIES = ".".join(__version__.split(".")[:2])
