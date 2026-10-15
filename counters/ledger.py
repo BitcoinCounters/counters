@@ -54,12 +54,23 @@ class CounterpartyLedger:
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        # isolation_level=None: no implicit transactions; _snapshot() BEGINs
-        # explicitly so each oracle call is one consistent read.
-        self._db = sqlite3.connect(
+
+    def _connect(self) -> sqlite3.Connection:
+        """A fresh read-only connection, opened per oracle call and closed by
+        _Snapshot on exit. Nothing is held between calls on purpose: Core's
+        server refuses to start while ANY process has its ledger's -wal file
+        open (database.check_wal_file scans every pid), so a long-lived
+        reader here would block a native Core from (re)starting. A per-call
+        connection keeps the file closed except for the milliseconds of a
+        read, and each read is still one WAL snapshot.
+
+        isolation_level=None: no implicit transactions; _snapshot() BEGINs
+        explicitly so each oracle call is one consistent read."""
+        db = sqlite3.connect(
             f"file:{self.path}?mode=ro", uri=True, isolation_level=None
         )
-        self._db.row_factory = sqlite3.Row
+        db.row_factory = sqlite3.Row
+        return db
 
     @classmethod
     def open(cls, config: Config) -> CounterpartyLedger | None:
@@ -68,23 +79,24 @@ class CounterpartyLedger:
         path = config.cp_db_path
         if not path or not Path(path).is_file():
             return None
+        ledger = cls(path)
         try:
-            ledger = cls(path)
-            ledger._db.execute("SELECT block_index FROM blocks LIMIT 1")
-            ledger._db.execute("SELECT tx_hash FROM issuances LIMIT 1")
-            ledger._db.execute("SELECT tx_hash FROM transactions LIMIT 1")
+            with ledger._snapshot() as db:
+                db.execute("SELECT block_index FROM blocks LIMIT 1")
+                db.execute("SELECT tx_hash FROM issuances LIMIT 1")
+                db.execute("SELECT tx_hash FROM transactions LIMIT 1")
         except sqlite3.Error as e:
             log.warning("ignoring ledger db %s: %s", path, e)
             return None
         return ledger
 
     def close(self) -> None:
-        self._db.close()
+        """Nothing is held open between calls (see _connect)."""
 
     # --- one consistent read per call ---------------------------------------
 
     def _snapshot(self):
-        return _Snapshot(self._db)
+        return _Snapshot(self._connect())
 
     # --- the oracle interface (mirrors CounterpartyClient) ------------------
 
@@ -237,5 +249,9 @@ class _Snapshot:
 
     def __exit__(self, *exc) -> None:
         # A read transaction has nothing to commit; ROLLBACK just releases the
-        # snapshot (and is what we want on an exception too).
-        self._db.execute("ROLLBACK")
+        # snapshot (and is what we want on an exception too). Closing then
+        # releases the ledger's -wal/-shm files (see CounterpartyLedger._connect).
+        try:
+            self._db.execute("ROLLBACK")
+        finally:
+            self._db.close()
