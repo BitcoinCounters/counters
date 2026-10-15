@@ -208,6 +208,7 @@ def test_api_and_static():
         assert c0["xcp_burned"] == 50000000
         assert c0["supply"] == 1 and c0["divisible"] is False
         assert c0["locked"] is None   # live lookup stubbed offline
+        assert c0["description_locked"] is None
         assert c0["burned"] == 100    # total destroyed, shown next to supply
         assert rec["burned"] is None  # list read BEFORE any view: no snapshot yet
         # The view persisted the asset snapshot (for the crawler-facing
@@ -535,42 +536,81 @@ def test_lists_carry_the_cached_envelope_and_original():
 
 
 def test_lists_carry_the_cached_supply_lock():
-    """`locked` in a list is what Counterparty last said, kept by the
-    background pass: null until checked, re-asked soon while unlocked (an
-    owner can lock at any moment), rarely once locked."""
+    """`locked` and `description_locked` in a list are what Counterparty last
+    said, kept by the background pass: null until checked, re-asked soon
+    while either is open (an owner can lock at any moment), rarely once both
+    are locked."""
     httpd, base = _run_server()
     try:
-        def locks():
+        def locks(field="locked"):
             recs = json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]
-            return {r["number"]: r["locked"] for r in recs}
+            return {r["number"]: r[field] for r in recs}
 
         assert locks() == {0: None, 1: None, 2: None}
+        assert locks("description_locked") == {0: None, 1: None, 2: None}
 
         class FakeCp:
-            def __init__(self, state):
+            def __init__(self, state, desc=None):
                 self.state, self.asked = state, []
+                self.desc = desc if desc is not None else {}
 
             def get_asset(self, asset):
                 self.asked.append(asset)
-                return {"locked": self.state[asset]} if asset in self.state else None
+                if asset not in self.state:
+                    return None
+                info = {"locked": self.state[asset]}
+                if asset in self.desc:
+                    info["description_locked"] = self.desc[asset]
+                return info
 
-        cp = FakeCp({"TESTASSET": False, "STAMPTEST": True})
+        both = {"TESTASSET": True, "STAMPTEST": True}
+        cp = FakeCp({"TESTASSET": False, "STAMPTEST": True}, both)
         assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000) == 2
         assert sorted(cp.asked) == ["STAMPTEST", "TESTASSET"]   # once per ASSET
         assert locks() == {0: False, 1: False, 2: True}          # siblings share it
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
 
         # Fresh answers are not re-asked...
-        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        cp = FakeCp(both, both)
         assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000 + 60) == 0
         # ...an unlocked asset goes stale quickly, and its lock is picked up...
         assert appmod.warm_locks_once(
             httpd.config, cp=cp, now=1000 + appmod.UNLOCKED_MAX_AGE) == 1
         assert cp.asked == ["TESTASSET"]
         assert locks() == {0: True, 1: True, 2: True}
-        # ...and a locked one only after a long while.
-        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        # ...and one locked both ways only after a long while.
+        cp = FakeCp(both, both)
         assert appmod.warm_locks_once(
             httpd.config, cp=cp, now=1000 + appmod.LOCKED_MAX_AGE) == 1
+        assert cp.asked == ["STAMPTEST"]
+
+        # An open description keeps a supply-locked asset on the quick cadence...
+        cp = FakeCp(both, {"TESTASSET": False, "STAMPTEST": True})
+        t = 1000 + 2 * appmod.LOCKED_MAX_AGE          # both long settled
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=t) == 2
+        assert locks("description_locked") == {0: False, 1: False, 2: True}
+        cp = FakeCp(both, both)
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=t + appmod.UNLOCKED_MAX_AGE) == 1
+        assert cp.asked == ["TESTASSET"]
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
+        # ...and an answer that leaves it out keeps what was last known, while
+        # a row that never learned it is asked again soon.
+        cp = FakeCp(both)
+        t += appmod.LOCKED_MAX_AGE + appmod.UNLOCKED_MAX_AGE
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=t) == 2
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
+        store = Store(httpd.config)
+        try:
+            store.db.execute("UPDATE asset_locks SET description_locked = NULL "
+                             "WHERE asset = 'STAMPTEST'")
+            store.db.commit()
+        finally:
+            store.close()
+        assert locks("description_locked") == {0: True, 1: True, 2: None}
+        cp = FakeCp(both, both)
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=t + appmod.UNLOCKED_MAX_AGE) == 1
         assert cp.asked == ["STAMPTEST"]
 
         # An asset Core does not know stays unknown rather than guessed.
@@ -706,3 +746,30 @@ def test_a_file_is_sandboxed_wherever_it_is_opened():
         assert "sandbox allow-scripts" not in csp(base, f"/content/{n + 1}")   # pdf
     finally:
         httpd.shutdown()
+
+
+def test_asset_locks_gains_the_description_lock_in_place():
+    """A database from before the description lock was kept grows the column
+    on open, and its rows read as 'never learned' rather than failing."""
+    import sqlite3
+    cfg = _seed_store(tempfile.mkdtemp())
+    db = sqlite3.connect(str(cfg.db_path))
+    db.execute("DROP TABLE asset_locks")
+    db.execute("CREATE TABLE asset_locks (asset TEXT PRIMARY KEY, "
+               "locked INTEGER NOT NULL, checked_at INTEGER NOT NULL)")
+    db.execute("INSERT INTO asset_locks VALUES ('TESTASSET', 1, 1000)")
+    db.commit()
+    db.close()
+    store = Store(cfg)
+    try:
+        assert store.get_locks("TESTASSET") == (True, None)
+        assert store.get_locked("TESTASSET") is True
+        # Never learned counts as open: asked again on the quick cadence.
+        assert "TESTASSET" not in store.assets_due_lock_check(1000 + 1, 10, 10 ** 6)
+        assert "TESTASSET" in store.assets_due_lock_check(1000 + 10, 10, 10 ** 6)
+        store.set_locked("TESTASSET", True, 2000, False)
+        assert store.get_locks("TESTASSET") == (True, False)
+        store.set_locked("TESTASSET", True, 3000)          # unknown keeps it
+        assert store.get_locks("TESTASSET") == (True, False)
+    finally:
+        store.close()

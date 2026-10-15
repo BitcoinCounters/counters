@@ -82,13 +82,16 @@ CREATE TABLE IF NOT EXISTS envelopes (
     version   INTEGER NOT NULL
 );
 
--- Serve-time DERIVED cache, not index data: whether an asset's SUPPLY is
--- locked, as Counterparty last reported it. Live state — an owner can lock
--- at any time — so every row carries when it was checked and is re-asked.
+-- Serve-time DERIVED cache, not index data: whether an asset's SUPPLY and
+-- its DESCRIPTION are locked, as Counterparty last reported them. Live state
+-- — an owner can lock either at any time — so every row carries when it was
+-- checked and is re-asked. description_locked is NULL until first learned
+-- (rows written before the column existed).
 CREATE TABLE IF NOT EXISTS asset_locks (
-    asset      TEXT    PRIMARY KEY,
-    locked     INTEGER NOT NULL,
-    checked_at INTEGER NOT NULL
+    asset              TEXT    PRIMARY KEY,
+    locked             INTEGER NOT NULL,
+    description_locked INTEGER,
+    checked_at         INTEGER NOT NULL
 );
 """
 
@@ -142,6 +145,9 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(counters)")}
         if "burned" not in cols:
             self.db.execute("ALTER TABLE counters ADD COLUMN burned INTEGER")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(asset_locks)")}
+        if "description_locked" not in cols:
+            self.db.execute("ALTER TABLE asset_locks ADD COLUMN description_locked INTEGER")
 
     def close(self) -> None:
         self.db.close()
@@ -374,35 +380,54 @@ class Store:
 
     # --- supply-lock cache (derived, serve-time) -----------------------------
 
+    def get_locks(self, asset: str) -> tuple[bool | None, bool | None]:
+        """(supply locked, description locked) as last checked; each None
+        while it never has been — the description lock also for a row kept
+        before it was recorded."""
+        row = self.db.execute(
+            "SELECT locked, description_locked FROM asset_locks WHERE asset = ?",
+            (asset,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        desc = row["description_locked"]
+        return bool(row["locked"]), (bool(desc) if desc is not None else None)
+
     def get_locked(self, asset: str) -> bool | None:
         """Whether the asset's supply was locked when last checked; None if
         it never has been."""
-        row = self.db.execute(
-            "SELECT locked FROM asset_locks WHERE asset = ?", (asset,)
-        ).fetchone()
-        return bool(row["locked"]) if row else None
+        return self.get_locks(asset)[0]
 
-    def set_locked(self, asset: str, locked: bool, now: int) -> None:
+    def set_locked(self, asset: str, locked: bool, now: int,
+                   description_locked: bool | None = None) -> None:
+        """Keep both locks as Counterparty just reported them. An unknown
+        description lock (None) leaves whatever was last known in place."""
+        desc = int(description_locked) if description_locked is not None else None
         self.db.execute(
-            "INSERT INTO asset_locks (asset, locked, checked_at) VALUES (?, ?, ?) "
+            "INSERT INTO asset_locks (asset, locked, description_locked, checked_at) "
+            "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(asset) DO UPDATE SET locked = excluded.locked, "
+            "description_locked = COALESCE(excluded.description_locked, "
+            "                              asset_locks.description_locked), "
             "checked_at = excluded.checked_at",
-            (asset, int(locked), now),
+            (asset, int(locked), desc, now),
         )
         self.db.commit()
 
     def assets_due_lock_check(self, now: int, unlocked_age: int,
                               locked_age: int, limit: int = 2000) -> list[str]:
         """Assets carrying a counter whose lock state is unknown or stale,
-        never-checked first. An unlocked asset can be locked at any moment, so
-        it goes stale quickly; a locked one stays locked, and is re-asked only
-        rarely (a reorg is the one thing that can take a lock back)."""
+        never-checked first. An open lock — supply or description — can be
+        closed at any moment, so the asset goes stale quickly; one with both
+        locked stays that way, and is re-asked only rarely (a reorg is the one
+        thing that can take a lock back). A description lock never recorded
+        (a row from before it was kept) counts as open, so it is learned soon."""
         return [r["asset"] for r in self.db.execute(
             "SELECT c.asset AS asset, MIN(c.number) AS n, l.checked_at AS t "
             "FROM counters c LEFT JOIN asset_locks l ON l.asset = c.asset "
             "WHERE l.asset IS NULL "
-            "   OR (l.locked = 0 AND l.checked_at <= ?) "
-            "   OR (l.locked = 1 AND l.checked_at <= ?) "
+            "   OR ((l.locked = 0 OR l.description_locked IS NOT 1) AND l.checked_at <= ?) "
+            "   OR (l.locked = 1 AND l.description_locked = 1 AND l.checked_at <= ?) "
             "GROUP BY c.asset ORDER BY (t IS NOT NULL), t, n LIMIT ?",
             (now - unlocked_age, now - locked_age, limit),
         )]

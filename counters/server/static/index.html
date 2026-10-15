@@ -530,7 +530,7 @@ const ZERO={
   id:"efeb4f6ad804a6716334de029788a1002933325f86c1e99132b32347ac6d7503i0",
   delegate:null,
   block:902005, tx_index:3030441, fee:null, tx_size:null, xcp_burned:50000000,
-  supply:10000, divisible:false, locked:false, is_pointer_like:false,
+  supply:10000, divisible:false, locked:false, description_locked:false, is_pointer_like:false,
   sha256:"806f58fc5f3d4db74df985debab79bad0f8ec1400a11aea349829414cd098287"
 };
 async function getCounter(id){
@@ -1067,7 +1067,8 @@ async function renderDetail(id){
         ${fact('asset', `<a href="${xcp}" target="_blank" rel="noopener" class="out">${esc(c.asset)} ↗</a>`)}
         ${fam ? fact('family', `<a class="blocklink" onclick="go('#/a/${encodeURIComponent(fam)}')">${esc(fam)}</a>`) : ''}
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
-        ${c.locked!=null ? fact('locked', c.locked ? 'yes' : 'no') : ''}
+        ${c.locked!=null ? fact('supply locked', c.locked ? 'yes' : 'no') : ''}
+        ${c.description_locked!=null ? fact('description locked', c.description_locked ? 'yes' : 'no') : ''}
         ${fact('content type', c.content_type)}
         ${fact('content', `<a href="${contentLink}" target="_blank" rel="noopener" class="out" style="white-space:nowrap" title="${contentLink}">/content/${c.id.slice(0,6)}…${c.id.slice(-6)} ↗</a>`, true, contentLink)}
         ${c.delegate ? fact('delegate', `${c.delegate.number!=null?`<a class="blocklink" onclick="go('#/c/${c.delegate.number}')">#${c.delegate.number}</a>`:`${short(c.delegate.id)} · not indexed`}${c.delegate.fragment?` · ${esc('#'+c.delegate.fragment)}`:''}${c.delegate.number!=null?` · <a href="${API}/delegate/${c.id}" target="_blank" rel="noopener" class="out" title="the file this counter renders: its target's">file ↗</a>`:''}`) : ''}
