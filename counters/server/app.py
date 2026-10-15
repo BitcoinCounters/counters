@@ -491,6 +491,7 @@ def render_social(store: Store, row: sqlite3.Row) -> bytes:
 def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
                 with_body: bool = True) -> dict:
     stamp = _stamp_payload(store, row)
+    locked, description_locked = store.get_locks(row["asset"])
     return {
         "number": row["number"],
         # §6.1: <reveal txid>i<msg_index> — the event's on-chain identity,
@@ -526,10 +527,11 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "rolling_hash": row["rolling_hash"],
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
-        # Supply lock. Mutable, so the single-counter endpoint asks
-        # Counterparty; lists carry what was last seen (warm_locks_once keeps
-        # it fresh), null while it never has been.
-        "locked": store.get_locked(row["asset"]),
+        # Supply and description locks. Mutable, so the single-counter
+        # endpoint asks Counterparty; lists carry what was last seen
+        # (warm_locks_once keeps them fresh), null while never checked.
+        "locked": locked,
+        "description_locked": description_locked,
         # Total destroyed: the stored snapshot (refreshed by detail views);
         # the single-counter endpoint overlays the live number.
         "burned": row["burned"],
@@ -768,7 +770,10 @@ class Handler(BaseHTTPRequestHandler):
             rec = record_dict(store, row, owner=owner)
             if info.get("locked") is not None:
                 rec["locked"] = bool(info["locked"])
-                store.set_locked(row["asset"], rec["locked"], int(time.time()))
+                if info.get("description_locked") is not None:
+                    rec["description_locked"] = bool(info["description_locked"])
+                store.set_locked(row["asset"], rec["locked"], int(time.time()),
+                                 rec["description_locked"])
             if info.get("supply") is not None:
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
@@ -1248,8 +1253,9 @@ LOCKED_MAX_AGE = 86400      # a locked one stays locked; only a reorg undoes it
 
 
 def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
-    """Ask Counterparty for the supply lock of every asset whose cached state
-    is unknown or stale, and keep the answers. Returns how many were checked.
+    """Ask Counterparty for the supply and description locks of every asset
+    whose cached state is unknown or stale, and keep the answers. Returns how
+    many were checked.
 
     Like the envelope, this is what lets a list carry `locked` without calling
     a backend itself. Stops at the first failure: while Core is catching up it
@@ -1263,7 +1269,9 @@ def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
             info = cp.get_asset(asset) or {}
             if info.get("locked") is None:
                 continue        # Core does not know the asset: leave it unknown
-            store.set_locked(asset, bool(info["locked"]), now)
+            desc = info.get("description_locked")
+            store.set_locked(asset, bool(info["locked"]), now,
+                             bool(desc) if desc is not None else None)
             checked += 1
         return checked
     finally:
