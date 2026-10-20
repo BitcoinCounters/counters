@@ -272,6 +272,43 @@ def _social_meta(*, title: str, description: str, url: str, image: str,
     )
 
 
+_DETAIL_SLOT = '<div class="dwrap" id="detail"></div>'
+
+
+def _with_record(page: str, rec: dict) -> str:
+    """The /c/<id> shell with the counter's facts already in the detail view,
+    so a reader that runs no script (a crawler, a text browser) gets a page
+    about this counter, and its links, rather than an empty app. The script
+    replaces the block with the full view as it does today."""
+    e = lambda v: html.escape(str(v), quote=True)
+    n = rec["number"]
+    facts = [
+        ("asset", rec["asset"]),
+        ("inscription id", rec["id"]),
+        ("type", rec["content_type"] or "unknown"),
+        ("size", f"{rec['size']:,} bytes"),
+        ("block", f"{rec['block']:,}"),
+        ("owner", rec["owner"]),
+        ("kind", rec["kind"]),
+    ]
+    body = (
+        f'<div class="dwrap" id="detail"><div class="ssr">'
+        f"<h1>Counter #{n} · {e(rec['asset'])}</h1>"
+        f"<p>A file inscribed in Bitcoin witness data and owned through the "
+        f"Counterparty asset {e(rec['asset'])}. Counters are numbered from zero.</p>"
+        "<dl>" + "".join(f"<dt>{e(k)}</dt><dd>{e(v)}</dd>" for k, v in facts) + "</dl>"
+        f'<p><a href="/content/{n}">the file</a> · '
+        f'<a href="https://explore.block.space/tx/{e(rec["txid"])}">the transaction</a> · '
+        f'<a href="/counter/{n}">the record as JSON</a> · '
+        f'<a href="/">every counter</a></p>'
+        "</div></div>"
+    )
+    page = page.replace(_DETAIL_SLOT, body, 1)
+    # Open on the detail view, as the router would.
+    page = page.replace('<main id="view-explore">', '<main id="view-explore" class="hidden">', 1)
+    return page.replace('<main id="view-detail" class="hidden">', '<main id="view-detail">', 1)
+
+
 def _display_name(row: sqlite3.Row) -> str:
     return row["asset_longname"] or row["asset"]
 
@@ -1057,7 +1094,8 @@ class Handler(BaseHTTPRequestHandler):
             page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
             row = store.find(ident)
             if row is not None:
-                host = self.headers.get("Host") or "counters.gallery"
+                # One canonical per counter: a www. alias names the apex.
+                host = (self.headers.get("Host") or "counters.gallery").removeprefix("www.")
                 proto = self.headers.get("X-Forwarded-Proto") or "https"
                 base = f"{proto}://{host}"
                 n = row["number"]
@@ -1106,6 +1144,7 @@ class Handler(BaseHTTPRequestHandler):
                     alt=alt, dims=dims, image_type=itype,
                 )
                 page = _SOCIAL_RE.sub(lambda _m: block, page, count=1)
+                page = _with_record(page, record_dict(store, row, with_body=False))
             self._send(200, "text/html; charset=utf-8", page.encode("utf-8"),
                        max_age=DERIVED_MAX_AGE)
         finally:

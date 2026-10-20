@@ -27,6 +27,11 @@
 <meta name="twitter:image" content="https://counters.gallery/counters-logo-512.png">
 <meta name="twitter:image:alt" content="Bitcoin Counters logo">
 <!-- social:end -->
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+ {"@type":"Organization","@id":"https://blockspace.holdings/#org","name":"Blockspace Holdings","url":"https://blockspace.holdings/"},
+ {"@type":"WebSite","@id":"https://counters.gallery/#website","url":"https://counters.gallery/","name":"Bitcoin Counters","description":"Bitcoin Counters explorer: numbered inscriptions in Bitcoin witness data, owned through Counterparty assets.","publisher":{"@id":"https://blockspace.holdings/#org"},"inLanguage":"en"}]}
+</script>
 
 <!-- absolute so they resolve under /c/<id> too (no <base> needed) -->
 <link rel="icon" type="image/svg+xml" href="/counters-icon.svg">
@@ -141,6 +146,13 @@
   .card .cfoot{padding:11px 12px;display:flex;flex-direction:column;gap:8px}
   .card .num{align-self:flex-start}
   .card .num .d{font-size:13px;width:1.05em;height:1.5em;color:var(--ink)}
+  a.asset{text-decoration:none}
+  a.asset:hover,a.asset:focus-visible{text-decoration:underline}
+  .ssr{padding:8px 0 40px;font-family:var(--mono);font-size:13px;color:var(--dim)}
+  .ssr h1{font-size:22px;color:var(--ink);margin:0 0 10px}
+  .ssr dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;margin:16px 0}
+  .ssr dt{color:var(--dim)}.ssr dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+  .ssr a{color:var(--copper2)}
   .card .asset{font-family:var(--mono);font-size:13px;color:var(--copper2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pager{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:14px;margin:28px 0 64px;font-family:var(--mono);font-size:12.5px}
   .pager a{color:var(--dim);border:1px solid var(--line);background:var(--card);padding:9px 18px;border-radius:9px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;transition:.15s}
@@ -387,7 +399,7 @@
     <nav id="nav">
       <a href="#/" data-r="explore">Explore</a>
       <a href="#/docs" data-r="docs">Docs</a>
-      <a href="https://proto.bitcoincounters.com" target="_blank" rel="noopener" title="Counters Proto — the original COUNT-envelope protocol">Proto ↗</a>
+      <a href="https://proto.counters.gallery" target="_blank" rel="noopener" title="Counters Proto — the original COUNT-envelope protocol">Proto ↗</a>
     </nav>
     <form class="search" onsubmit="return doSearch(event)">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -452,8 +464,15 @@
       <a href="#/">Latest counters</a>
       <a href="/c/0" onclick="goCounter('0');return false">Counter #0 · XDUALS</a>
       <a href="#/docs">Documentation</a>
-      <a href="https://proto.bitcoincounters.com" target="_blank" rel="noopener">Counters Proto ↗</a>
+      <a href="https://proto.counters.gallery" target="_blank" rel="noopener">Counters Proto ↗</a>
       <a href="https://t.me/BitcoinCounters" target="_blank" rel="noopener">Telegram ↗</a>
+    </div>
+    <div class="lk">
+      <b>Part of Blockspace Holdings</b>
+      <a href="https://blockspace.holdings/">Blockspace Holdings</a>
+      <a href="https://counters.fun/">counters.fun · pools</a>
+      <a href="https://block.space/">block.space · the meter</a>
+      <a href="https://blockspace.wiki/projects/counters.gallery/">On blockspace.wiki</a>
     </div>
     <div class="lk">
       <b>Server API</b>
@@ -793,11 +812,11 @@ const tagsOf=c=>TAGS.filter(t=>t.on(c));
 const dotClass=t=>`t-${t.family}${t.big?' big':''}${t.arrows?' arrows':''}`;
 function card(c){
   const tags=tagsOf(c);
-  return `<div class="card" onclick="goCounter('${c.number}')" tabindex="0" onkeydown="if(event.key==='Enter')goCounter('${c.number}')">
+  return `<div class="card" onclick="goCounter('${c.number}')">
     <div class="thumb">${renderContent(c)}</div>
     <div class="cfoot">
       <div class="numrow"><span class="num">${meterDigits(c.number)}</span>${tags.length?`<span class="dots" role="img" aria-label="${tags.map(t=>t.name).join(', ')}">${tags.map(t=>`<i class="${dotClass(t)}" title="${t.name}"></i>`).join('')}</span>`:''}</div>
-      <span class="asset">${esc(c.asset)}</span>
+      <a class="asset" href="/c/${c.number}" onclick="event.stopPropagation();goCounter('${c.number}');return false">${esc(c.asset)}</a>
     </div>
   </div>`;
 }
