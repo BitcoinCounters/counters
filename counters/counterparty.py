@@ -145,11 +145,26 @@ class CounterpartyClient:
         return self._paginate(f"/v2/blocks/{height}/issuances", missing_ok=False)
 
     def get_block_fairminters(self, height: int) -> list[dict]:
-        """All fairminter deploys parsed in a block. Rows carry tx_hash,
+        """The fairminter deploys made in a block. Rows carry tx_hash,
         tx_index, block_index, source, asset, asset_longname, description,
         mime_type, ... (no msg_index — deploys are one message per tx).
-        Raises for an unparsed block, like get_block_issuances."""
-        return self._paginate(f"/v2/blocks/{height}/fairminters", missing_ok=False)
+        Raises for an unparsed block, like get_block_issuances.
+
+        Read from the block's NEW_FAIRMINTER events, not from
+        `/v2/blocks/{h}/fairminters`: that endpoint serves Core's derived
+        state db, which keeps one row per deploy and moves its block_index to
+        the latest status change, so a deploy indexed after it opened or
+        closed would be numbered at that later block. An event belongs to the
+        block it was emitted in, forever — the same answer the ledger reader
+        gives (ledger.get_block_fairminters), through either door."""
+        events = self._paginate(f"/v2/blocks/{height}/events/NEW_FAIRMINTER",
+                                missing_ok=False)
+        rows = []
+        for ev in events:
+            row = dict(ev.get("params") or {})
+            row.setdefault("tx_hash", ev.get("tx_hash"))
+            rows.append(row)
+        return rows
 
     def get_issuances_by_tx(self, txid: str) -> list[dict]:
         """Issuance row(s) for a single transaction via /v2/issuances/<tx_hash>.
