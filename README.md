@@ -72,16 +72,16 @@ pass, so that line and the bar's target (`y` in `x/y`) tick with Core while
 waits, as before (or run Core with `--force`, which disables the not-ready
 gate — Core marks that option as not for production).
 
-One difference is deliberate. The API serves fairminters from Core's derived
-state db, which keeps a single row per deploy and **moves its `block_index`
-to the block of the latest status change** (pending → open → closed): a
-deploy shows up under `/v2/blocks/{h}/fairminters` at its deploy block only
-while it is still pending, and later under the block it opened or closed in.
-The ledger logs one row per change and the deploy row keeps the deploy
-block, so the ledger reader returns only deploy rows (joined to
-`transactions`). Through the ledger a deploy is therefore always numbered at
-its deploy block — which is also what the API path yields when the index is
-following live, but not when a stretch of blocks is indexed after the fact.
+Both doors number a fairminter deploy at its deploy block. The API's
+`/v2/blocks/{h}/fairminters` would not: it serves Core's derived state db,
+which keeps a single row per deploy and **moves its `block_index` to the
+block of the latest status change** (pending → open → closed). So the API
+client reads the block's `NEW_FAIRMINTER` events instead, which stay in the
+block they were emitted in. The ledger logs one row per change and the
+reader returns only deploy rows (joined to `transactions`). An index built
+before this change through the API, over a stretch of blocks indexed after
+their deploys had opened or closed, numbered those deploys at the later
+block and must resync from genesis.
 
 ## Requirements
 
