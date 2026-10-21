@@ -373,7 +373,7 @@ def render(info: dict) -> bytes:
 
     # Header: wordmark left, domain right, hairline under both.
     c.text(PAD, HEAD_Y, "BITCOIN COUNTERS", 2, DIM, 6)
-    domain = "bitcoincounters.com"
+    domain = "counters.gallery"
     c.text(WIDTH - PAD - text_width(domain, 2), HEAD_Y, domain, 2, FAINT)
     c.fill(PAD, BODY_Y - 22, WIDTH - 2 * PAD, 1, LINE)
 

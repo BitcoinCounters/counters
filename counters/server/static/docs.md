@@ -138,7 +138,7 @@ Served over HTTP by `counters server`, this explorer talks to its own origin; op
 
 ## Source {#source}
 
-Counters is open source — the indexer, CLI, and this explorer all live in one repository: [github.com/BitcoinCounters/counters ↗](https://github.com/BitcoinCounters/counters). The original protocol, Counters Proto, lives on at [proto.bitcoincounters.com ↗](https://proto.bitcoincounters.com).
+Counters is open source — the indexer, CLI, and this explorer all live in one repository: [github.com/BitcoinCounters/counters ↗](https://github.com/BitcoinCounters/counters). The original protocol, Counters Proto, lives on at [proto.counters.gallery ↗](https://proto.counters.gallery).
 
 ## Community {#community}
 
