@@ -58,6 +58,7 @@ from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
                        DECODE_MAX_BYTES)
 from .. import ordenv
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .. import teleburn
 from ..reveal import ENVELOPE_VERSION, envelope_style
 from ..store import Store
 
@@ -331,6 +332,42 @@ def _asset_burned(config: Config, asset: str) -> int | None:
         return None
 
 
+def _sink_balance(cp, asset: str) -> int | None:
+    """Raw units of `asset` at its own teleburn address, per Counterparty;
+    None when Core is unreachable (never a false zero) or the name cannot
+    derive one."""
+    try:
+        return cp.get_address_balance(teleburn.teleburn_address(asset), asset)
+    except (CounterpartyError, ValueError):
+        return None
+
+
+def _owner_burned(owner: str | None, asset: str) -> bool | None:
+    """Whether `owner` is `asset`'s teleburn address; None when the owner is
+    unknown (Core unreachable) so a page can tell "no" from "couldn't check"."""
+    if not owner:
+        return None
+    try:
+        return teleburn.is_teleburn_address(owner, asset)
+    except ValueError:
+        return None
+
+
+def teleburn_state(asset: str, supply: int | None, locked: bool | None,
+                   owner_burned: bool | None, sink_balance: int | None) -> dict:
+    """Build ref v3 §10.3: the asset's teleburn address and its burn flags.
+    `supply_burned` means no unit circulates outside the address (Core's
+    `supply` already excludes destroyed units, so a destroy counts too);
+    `burned` is all three flags, None while any is unknown and no known one
+    is False. Display state, never indexed."""
+    try:
+        address = teleburn.teleburn_address(asset)
+    except ValueError:
+        address = None
+    return {"address": address,
+            **teleburn.burn_state(supply, locked, owner_burned, sink_balance)}
+
+
 def _block_time(config: Config, height: int) -> int | None:
     """The counter's creation time = its block's timestamp, per Counterparty
     (best-effort, like _live_asset; None if Core is unreachable)."""
@@ -547,6 +584,8 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
                 with_body: bool = True) -> dict:
     stamp = _stamp_payload(store, row)
     locked, description_locked = store.get_locks(row["asset"])
+    owner_burned, sink_balance = store.get_burn(row["asset"])
+    tb = teleburn_state(row["asset"], row["supply"], locked, owner_burned, sink_balance)
     return {
         "number": row["number"],
         # §6.1: <reveal txid>i<msg_index> — the event's on-chain identity,
@@ -590,6 +629,12 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         # (warm_locks_once keeps them fresh), null while never checked.
         "locked": locked,
         "description_locked": description_locked,
+        # §10.3: the asset's teleburn address and whether its ownership and
+        # supply have gone there. Live state like the locks: lists carry what
+        # was last seen, the single-counter endpoint asks Counterparty.
+        # `teleburned` repeats the verdict flat, for the facet index.
+        "teleburn": tb,
+        "teleburned": tb["burned"],
         # Total destroyed: the stored snapshot (refreshed by detail views);
         # the single-counter endpoint overlays the live number.
         "burned": row["burned"],
@@ -607,7 +652,8 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
 # gzipped) and take 30 ms to build; the result is kept until what it is a
 # function of changes (Store.facets_signature).
 FACET_FIELDS = ("number", "asset", "content_type", "size", "kind", "original",
-                "is_pointer_like", "envelope", "locked", "stamp_mime", "delegate")
+                "is_pointer_like", "envelope", "locked", "stamp_mime", "teleburned",
+                "delegate")
 FACETS_MAX_AGE = 15
 
 _facets_cache: dict[str, tuple[tuple, str, bytes]] = {}   # db path -> (sig, etag, body)
@@ -829,16 +875,27 @@ class Handler(BaseHTTPRequestHandler):
             info = _live_asset(self.config, row["asset"])
             owner = info.get("owner") or row["source"]
             rec = record_dict(store, row, owner=owner)
+            # Teleburn state (§10.3) is read live with the locks: the owner
+            # from the asset info, the balance at the sink from Core.
+            owner_burned = _owner_burned(info.get("owner"), row["asset"])
+            sink = (_sink_balance(CounterpartyClient(self.config), row["asset"])
+                    if info else None)
             if info.get("locked") is not None:
                 rec["locked"] = bool(info["locked"])
                 if info.get("description_locked") is not None:
                     rec["description_locked"] = bool(info["description_locked"])
                 store.set_locked(row["asset"], rec["locked"], int(time.time()),
-                                 rec["description_locked"])
+                                 rec["description_locked"], owner_burned, sink)
             if info.get("supply") is not None:
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
+            if owner_burned is not None or sink is not None:
+                rec["teleburn"] = teleburn_state(
+                    row["asset"], rec["supply"], rec["locked"],
+                    owner_burned if owner_burned is not None else rec["teleburn"]["owner_burned"],
+                    sink if sink is not None else rec["teleburn"]["sink_balance"])
+                rec["teleburned"] = rec["teleburn"]["burned"]
             live_burned = _asset_burned(self.config, row["asset"])
             if live_burned is not None:
                 rec["burned"] = live_burned
@@ -1342,9 +1399,10 @@ LOCKED_MAX_AGE = 86400      # a locked one stays locked; only a reorg undoes it
 
 
 def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
-    """Ask Counterparty for the supply and description locks of every asset
-    whose cached state is unknown or stale, and keep the answers. Returns how
-    many were checked.
+    """Ask Counterparty for the live state of every asset whose cached state
+    is unknown or stale — the two locks, whether the owner is the teleburn
+    address, the balance at that address, and the supply it is measured
+    against — and keep the answers. Returns how many were checked.
 
     Like the envelope, this is what lets a list carry `locked` without calling
     a backend itself. Stops at the first failure: while Core is catching up it
@@ -1360,7 +1418,11 @@ def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
                 continue        # Core does not know the asset: leave it unknown
             desc = info.get("description_locked")
             store.set_locked(asset, bool(info["locked"]), now,
-                             bool(desc) if desc is not None else None)
+                             bool(desc) if desc is not None else None,
+                             _owner_burned(info.get("owner"), asset),
+                             _sink_balance(cp, asset))
+            if info.get("supply") is not None:
+                store.set_asset_snapshot(asset, info["supply"], None)
             checked += 1
         return checked
     finally:

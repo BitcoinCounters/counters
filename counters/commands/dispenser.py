@@ -18,7 +18,7 @@ dispenser sells in fixed lots, so the request must be a whole number of them —
 asking for a part-lot would have the dispenser keep the remainder, so we refuse
 instead.
 
-The operator side (`open-dispenser`, `refill-dispenser`, `close-dispenser`,
+The operator side (`dispense`, `refill-dispenser`, `close-dispenser`,
 `dispensers`) composes the `dispenser` message itself. Its ground rules, all
 enforced by Counterparty consensus:
 
@@ -492,7 +492,7 @@ def _locate_dispenser(btc, cp, wallet: str, asset: str, source: str | None):
             found.append((addr, row))
     if not found:
         print(f"wallet {wallet!r} has no open dispenser for {asset} — "
-              f"see `open-dispenser`", file=sys.stderr)
+              f"see `dispense`", file=sys.stderr)
         return None, None
     if len(found) > 1:
         print(f"{len(found)} wallet addresses run a {asset} dispenser — pick one "

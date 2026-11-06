@@ -198,7 +198,7 @@
   .t-native{--tag:var(--patina)} .t-ordinal{--tag:var(--copper2)}
   .t-fair{--tag:var(--rose)} .t-redo{--tag:var(--red)} .t-ref{--tag:var(--dim)}
   .t-stamp{--tag:var(--sky)} .t-size{--tag:var(--gold)}
-  .t-unlocked{--tag:var(--red)}
+  .t-unlocked{--tag:var(--red)} .t-burned{--tag:var(--copper)}
   .vbadge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--tag,var(--dim));border:1px solid var(--tag,var(--dim));border-radius:99px;padding:4px 11px}
   .vbadge .dot,.dots i{width:6px;height:6px;border-radius:99px;background:var(--tag,var(--dim));box-shadow:0 0 8px var(--tag,var(--dim));display:inline-block;flex:none}
   /* The row owns the spacing, so it holds whichever badge comes first — and
@@ -788,6 +788,7 @@ const TAGS=[
   {name:'whole block',family:'size', big:true, title:'over 3.5 MB \u2014 the inscription fills an entire Bitcoin block',               on:c=>c.size>WHOLE_BLOCK_BYTES},
   {name:'large',      family:'size',    title:'over 400 KB \u2014 bigger than standard relay allows; mined by direct miner submission', on:c=>c.size>LARGE_BYTES&&c.size<=WHOLE_BLOCK_BYTES},
   {name:'unlocked',   family:'unlocked',title:'supply unlocked \u2014 the owner can still issue more',                 on:c=>c.locked===false},
+  {name:'burned',     family:'burned',  title:'teleburned \u2014 ownership and every unit sent to the asset\'s unspendable address, supply locked', on:c=>c.teleburned===true},
 ];
 const tagsOf=c=>TAGS.filter(t=>t.on(c));
 const dotClass=t=>`t-${t.family}${t.big?' big':''}${t.arrows?' arrows':''}`;
@@ -1069,6 +1070,8 @@ async function renderDetail(id){
         ${c.supply!=null ? fact('supply', `${fmtSupply(c)}${c.burned?` · <span title="${fmtQty(c.burned,c)} destroyed forever — the supply shown already excludes them">🔥 ${fmtQty(c.burned,c)}</span>`:''}${c.divisible?' · divisible':''}`) : ''}
         ${c.locked!=null ? fact('supply locked', c.locked ? 'yes' : 'no') : ''}
         ${c.description_locked!=null ? fact('description locked', c.description_locked ? 'yes' : 'no') : ''}
+        ${c.teleburn&&c.teleburn.burned!=null ? fact('teleburned', c.teleburn.burned ? 'yes' : `no · owner ${yn(c.teleburn.owner_burned)} · supply ${yn(c.teleburn.supply_burned)} · locked ${yn(c.teleburn.locked)}`) : ''}
+        ${c.teleburn&&c.teleburn.address ? fact('teleburn', `<span title="the asset\'s unspendable address: anything sent here is burned into it">${short(c.teleburn.address)}</span>`, true, c.teleburn.address) : ''}
         ${fact('content type', c.content_type)}
         ${fact('content', `<a href="${contentLink}" target="_blank" rel="noopener" class="out" style="white-space:nowrap" title="${contentLink}">/content/${c.id.slice(0,6)}…${c.id.slice(-6)} ↗</a>`, true, contentLink)}
         ${c.delegate ? fact('delegate', `${c.delegate.number!=null?`<a class="blocklink" onclick="go('#/c/${c.delegate.number}')">#${c.delegate.number}</a>`:`${short(c.delegate.id)} · not indexed`}${c.delegate.fragment?` · ${esc('#'+c.delegate.fragment)}`:''}${c.delegate.number!=null?` · <a href="${API}/delegate/${c.id}" target="_blank" rel="noopener" class="out" title="the file this counter renders: its target's">file ↗</a>`:''}`) : ''}
@@ -1123,6 +1126,7 @@ async function renderBlock(h){
   thumbsWatch(el('block-grid'));
 }
 const short=s=>!s?'—':(s.length>22?s.slice(0,10)+'…'+s.slice(-8):s);
+const yn=v=>v==null?'unknown':(v?'yes':'no');
 function fact(k,v,copyable,raw){
   return `<div class="fact"><div class="k">${k}</div><div class="v">${v}${copyable?`<button class="copy" onclick="copy('${esc(raw||v)}')">copy</button>`:''}</div></div>`;
 }
