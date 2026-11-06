@@ -129,6 +129,15 @@ already holds, and nothing is ever fetched.
 toggle to the canonical bytes as inert escaped text (`/preview/<n>?raw=1`).
 The raw view is script-free and never executes the content.
 
+**11 — A teleburned counter wears a `burned` badge; a partial burn says which
+parts.** The badge appears only when the asset's `teleburn.burned` is true:
+ownership at the teleburn address, every unit there or destroyed, supply
+locked (build reference §10.3). Anything short of that is shown in the facts
+as `teleburned: no · owner yes/no · supply yes/no · locked yes/no`, and
+`unknown` where Counterparty could not be asked — never collapsed to "no".
+The address itself is always a fact, copyable, so a holder can send to it.
+Display only: the flags are live Counterparty state, never indexed.
+
 ## What each counter renders (#0–#86)
 
 Renders-as — **image / audio / html / text / pointer**. Status — **OK**:

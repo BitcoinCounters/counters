@@ -485,6 +485,63 @@ fact about the artifact that `envelope: counterparty/ord` alone cannot express �
 because tooling emitting the map form is already deployed. `null` for
 `counterparty`, which has no metadata section at all.
 
+### 10.3 Teleburn address and burn state (serve-time display)
+
+Every counter's asset has one **teleburn address**: a P2TR output derived
+from the asset name alone that nothing can ever spend from. Anything sent
+there — the asset's own supply, its ownership, other assets, sats,
+inscriptions — is burned *into* that asset. The address is a plain taproot
+address to every wallet and to Counterparty Core, which credits balances to
+it and accepts it as an `owner` without any change; it simply has no key.
+
+```
+m    = tagged_hash("CountersTeleburn", asset_name)   # ASCII, the canonical `asset` field
+t    = tagged_hash("TapTweak", H.x || m)             # BIP341 tweak
+Q    = H + t·G                                       # H = BIP341 NUMS point
+spk  = OP_1 <Q.x>
+addr = bech32m(hrp, 1, Q.x)                          # bc / tb / bcrt
+```
+
+`asset_name` is Counterparty's canonical `asset` field — `XCP`, `PEPECASH`,
+`A16756519242061643639` — never a subasset longname, which is a label on a
+numeric asset. `H` is BIP341's "nothing up my sleeve" point (§13). The key
+path needs the discrete log of `H`, which nobody knows; the script path needs
+`m` to be the Merkle root of a tree someone can open, and it is the hash of a
+non-script. Every address is that one unknown discrete log plus a public
+tweak, so there is no cheaper "any asset" attack than the 128-bit problem
+every Bitcoin signature already rests on. (A decodable construction — an
+asset id in the clear behind a fixed prefix — would let an attacker grind for
+*any* address in the family and then issue the numeric asset that fell out;
+that is why the commitment hashes, and recognition is by derivation from the
+asset, not by decoding the address.) The tag is the version: a changed scheme
+is a new tag and a new address set, never a silent edit.
+
+Three flags, all read live from Counterparty like the locks:
+
+| flag | true when |
+|---|---|
+| `owner_burned` | the asset's `owner` is its teleburn address |
+| `supply_burned` | no unit circulates outside it: `balance at the address ≥ supply` (Core's `supply` already excludes destroyed units, so a `destroy` counts; an asset that never had supply is trivially there) |
+| `locked` | the supply lock (§10) |
+| `burned` | all three |
+
+Partial states are real and are shown as partial. Once `owner_burned`, no
+owner can sign another issuance, so the description is frozen in effect and
+the counter family on that asset is closed. The burn procedure is therefore
+**lock, then transfer** — after the transfer nobody can lock — and the
+reference `wallet teleburn` command sends every circulating unit the wallet
+holds to the address, then one `issuance` with `quantity=0`, `lock=true`,
+`transfer_destination=<address>` and no description (an OP_RETURN message, so
+R4 never sees a counter in it).
+
+Like the locks, none of this is indexed: the address is a pure function of
+a column the index already has, and the flags are live state kept in the
+derived cache (§10.1) and re-asked. Nothing is hashed, nothing renumbers, no
+reindex. A reorg that undoes a burn flips the flags back on the next check.
+The API carries the address and flags as `teleburn` on every counter and the
+verdict flat as `teleburned`; the explorer's badge and facts are display
+rules ([`rules.md`](rules.md), rule 11).
+
 ---
 
 ## 11. Minting
@@ -533,6 +590,9 @@ starts a new namespace defined entirely by Counterparty state.
 | Rolling-hash genesis tag | `counters:v3:bitcoin-mainnet:902000` |
 | Message-authored `asset_events` (R2) | `creation reissuance transfer change_description lock_quantity lock_description reset` |
 | Recommended confirmations | `6` |
+| Teleburn tag (§10.3) | `CountersTeleburn` (BIP340-style tagged hash of the canonical asset name) |
+| Teleburn internal key | BIP341 NUMS point `H`, `H.x = 50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0` |
+| Teleburn vectors (mainnet) | `XCP` → `bc1pj76jq96xhq25jcxl8qgrecz5sv2sfphj247emczw3pw6smhah6sqalf224` · `A16756519242061643639` (counter #28) → `bc1py6gs0j0duqtyu0xr8mp3ewjhu3l0tlhdfptv8zcqyf38qvuryhsseel6e2` · `PEPECASH` → `bc1p6c47mk09xk42u8aslc4c6u503n6s635st6hxmxj6p06nntjqxg2qj5wqch` |
 
 ---
 

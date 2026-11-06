@@ -145,11 +145,11 @@ def test_describe_text_given_twice_is_a_usage_error():
         restore()
 
 
-def test_open_order_flag_form():
+def test_sell_flag_form_is_a_give_get_order():
     calls, restore = _stub(M.order, "cmd_open_order")
     try:
-        rc = M.main(["wallet", "open-order",
-                     "--give-asset", "XCP", "--give-amount", "10",
+        rc = M.main(["wallet", "sell",
+                     "--asset", "XCP", "--amount", "10",
                      "--get-asset", "BTC", "--get-amount", "0.001"])
         assert rc == 0
         (_, _, ga, gam, ta, tam), _ = calls[0]
@@ -158,14 +158,64 @@ def test_open_order_flag_form():
         restore()
 
 
+def test_buy_one_shot_swaps_the_sides_of_the_order():
+    calls, restore = _stub(M.order, "cmd_open_order")
+    try:
+        rc = M.main(["wallet", "buy", "SSETONET", "1", "BTC", "0.001", "--expiration", "10"])
+        assert rc == 0
+        (_, _, ga, gam, ta, tam), kw = calls[0]
+        assert (ga, gam, ta, tam) == ("BTC", "0.001", "SSETONET", "1")
+        assert kw["expiration"] == 10
+    finally:
+        restore()
+
+
+def test_sell_and_buy_go_interactive_when_bare_or_asset_only():
+    for cmd, fn in (("sell", "cmd_sell"), ("buy", "cmd_buy")):
+        calls, restore = _stub(M.market, fn)
+        try:
+            assert M.main(["wallet", cmd]) == 0
+            assert M.main(["wallet", cmd, "OPUSAUDIO", "--fee-rate", "2"]) == 0
+            assert calls[0][1]["asset"] is None
+            assert calls[1][1]["asset"] == "OPUSAUDIO" and calls[1][1]["fee_rate"] == 2.0
+        finally:
+            restore()
+
+
+def test_sell_with_some_but_not_all_values_is_a_usage_error():
+    for argv in (["sell", "XCP", "10"], ["sell", "XCP", "10", "BTC"],
+                 ["buy", "--amount", "1"], ["dispense", "XCP", "10"],
+                 ["dispense", "XCP", "--price", "5"], ["dispense", "--lot", "2"]):
+        stubs = [_stub(M.order, "cmd_open_order"), _stub(M.market, "cmd_sell"),
+                 _stub(M.market, "cmd_buy"), _stub(M.market, "cmd_dispense"),
+                 _stub(M.dispenser, "cmd_open_dispenser")]
+        try:
+            try:
+                M.main(["wallet"] + argv)
+                raise AssertionError(f"{argv}: expected a usage error")
+            except SystemExit as e:
+                assert e.code == 2, argv
+            assert all(calls == [] for calls, _ in stubs), argv
+        finally:
+            for _, restore in stubs:
+                restore()
+
+
 def test_dispenser_admin_flag_forms():
     calls, restore = _stub(M.dispenser, "cmd_open_dispenser")
     try:
-        rc = M.main(["wallet", "open-dispenser", "--asset", "PEPECASH",
+        rc = M.main(["wallet", "dispense", "--asset", "PEPECASH",
                      "--amount", "100", "--price", "5000"])
         assert rc == 0
         (_, _, asset, amount, price), _ = calls[0]
         assert (asset, amount, price) == ("PEPECASH", "100", 5000)
+    finally:
+        restore()
+    calls, restore = _stub(M.market, "cmd_dispense")
+    try:
+        assert M.main(["wallet", "dispense"]) == 0
+        assert M.main(["wallet", "dispense", "26"]) == 0
+        assert calls[0][1]["asset"] is None and calls[1][1]["asset"] == "26"
     finally:
         restore()
     calls, restore = _stub(M.dispenser, "cmd_close_dispenser")
@@ -225,10 +275,15 @@ def test_every_tx_creating_command_accepts_fee_rate():
         (M.burn, "cmd_burn", ["burn", "BONPARTY", "10"]),
         (M.dispenser, "cmd_buy_from_dispenser", ["buy-from-dispenser", DEST, "1"]),
         (M.dispenser, "cmd_open_dispenser",
-         ["open-dispenser", "PEPECASH", "100", "--price", "5000"]),
+         ["dispense", "PEPECASH", "100", "--price", "5000"]),
+        (M.market, "cmd_dispense", ["dispense"]),
+        (M.market, "cmd_sell", ["sell"]),
+        (M.market, "cmd_buy", ["buy", "SSETONET"]),
         (M.dispenser, "cmd_refill_dispenser", ["refill-dispenser", "PEPECASH", "100"]),
         (M.dispenser, "cmd_close_dispenser", ["close-dispenser", "PEPECASH"]),
-        (M.order, "cmd_open_order", ["open-order", "XCP", "10", "BTC", "0.001"]),
+        (M.order, "cmd_open_order", ["sell", "XCP", "10", "BTC", "0.001"]),
+        (M.order, "cmd_open_order", ["buy", "XCP", "10", "BTC", "0.001"]),
+        (M.teleburn, "cmd_teleburn", ["teleburn", "PEPECASH"]),
         (M.order, "cmd_cancel_order", ["cancel-order", HASH0]),
         (M.order, "cmd_pay_order", ["pay-order"]),
         (M.order, "cmd_swap", ["swap", "FEWGOODMAN", "1000", "XCP"]),

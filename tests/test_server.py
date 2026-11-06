@@ -563,6 +563,9 @@ def test_lists_carry_the_cached_supply_lock():
                     info["description_locked"] = self.desc[asset]
                 return info
 
+            def get_address_balance(self, address, asset):
+                return 0
+
         both = {"TESTASSET": True, "STAMPTEST": True}
         cp = FakeCp({"TESTASSET": False, "STAMPTEST": True}, both)
         assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000) == 2

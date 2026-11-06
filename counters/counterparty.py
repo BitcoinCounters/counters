@@ -723,6 +723,13 @@ class CounterpartyClient:
         """All Counterparty (XCP + asset) balances held by an address."""
         return self._paginate(f"/v2/addresses/{address}/balances")
 
+    def get_address_balance(self, address: str, asset: str) -> int:
+        """Raw units of `asset` held by `address` — 0 when it holds none
+        (Core answers an empty list, not an error). Balances attached to
+        UTXOs the address owns are summed in; they are the address's too."""
+        rows = self._paginate(f"/v2/addresses/{address}/balances/{asset}")
+        return sum(int(r.get("quantity") or 0) for r in rows or [])
+
     def get_utxo_balances(self, utxo: str) -> list[dict]:
         """Counterparty balances ATTACHED to a UTXO (v11 `attach`): spending the
         UTXO moves them with it."""
