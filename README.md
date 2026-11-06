@@ -185,6 +185,8 @@ counters info XDUALS --trading                    # market state: DEX orders & m
 counters info 0 --json                            # metadata as JSON (asset name gives asset JSON)
 counters info 0 --raw > file.txt                  # stream the file bytes
 counters info 0 --save file.gif                   # write the file to disk (asset name: the original's)
+counters teleburn-address 28                      # the unspendable address a counter (or any asset) burns into
+counters teleburn-address PEPECASH --json         # with the scriptPubKey; --network testnet for tb1p
 
 # --- web explorer + read-only JSON API ---
 counters server                                   # indexer + explorer on http://127.0.0.1:8081
@@ -251,12 +253,17 @@ counters wallet --name mywallet buy-from-dispenser bc1q... 3 --fee-rate 3
 counters wallet --name mywallet buy-from-dispenser bc1q... 1 --yes    # no prompt
 
 # --- run a dispenser (the operator side) ---
-# open: escrow an asset and vend it for BTC. The escrow leaves the address
+# dispense: escrow an asset and vend it for BTC. The escrow leaves the address
 # immediately; the price (satoshis per lot) can NEVER be changed while open —
 # to reprice, close, wait ~5 blocks, and reopen.
-counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 5000   # 5,000 sat each, 100 for sale
-counters wallet --name mywallet open-dispenser MYCOUNTER 100 --price 45000 --lot 10  # sold in tens
-counters wallet --name mywallet open-dispenser MYCOUNTER 1 --price 250000   # one token, all-or-nothing
+counters wallet --name mywallet dispense MYCOUNTER 100 --price 5000   # 5,000 sat each, 100 for sale
+counters wallet --name mywallet dispense MYCOUNTER 100 --price 45000 --lot 10  # sold in tens
+counters wallet --name mywallet dispense MYCOUNTER 1 --price 250000   # one token, all-or-nothing
+# Called bare it asks instead: a menu of what the wallet holds (counter numbers
+# first), then escrow, lot and price — a whole number is sats, a decimal is BTC.
+# Name the asset (or its counter number) to skip the menu. Same summary and y/n.
+counters wallet --name mywallet dispense
+counters wallet --name mywallet dispense 26
 counters wallet --name mywallet dispensers                    # list yours, with status
 # refill: adds stock on the SAME terms (Counterparty rejects any change, so the
 # live terms are read from the chain — you only name the amount). Max 5 refills.
@@ -266,12 +273,20 @@ counters wallet --name mywallet refill-dispenser MYCOUNTER 50
 counters wallet --name mywallet close-dispenser MYCOUNTER
 
 # --- the DEX (Counterparty's on-chain order book + AMM) ---
-# place an order: give one asset, get another; BTC is allowed on either side.
-# A non-BTC give is escrowed until the order fills, expires, or is cancelled.
-# Default --expiration 0 = the order NEVER expires (rests until cancel-order).
-counters wallet --name mywallet open-order XCP 10 BTC 0.001              # sell XCP for BTC
-counters wallet --name mywallet open-order BTC 0.001 XCP 10              # buy XCP with BTC
-counters wallet --name mywallet open-order MYCOUNTER 1 XCP 5 --expiration 8064
+# sell posts an ask, buy posts a bid: the asset first, then what it trades for.
+# BTC is allowed on either side. A non-BTC give is escrowed until the order
+# fills, expires, or is cancelled. Default --expiration 0 = NEVER expires.
+counters wallet --name mywallet sell XCP 10 BTC 0.001                   # 10 XCP for 0.001 BTC
+counters wallet --name mywallet buy XCP 10 BTC 0.001                    # 10 XCP with 0.001 BTC
+counters wallet --name mywallet sell MYCOUNTER 1 XCP 5 --expiration 8064
+# Called bare they ask instead. sell: a menu of what the wallet holds (counter
+# numbers first), the amount, the asset to be paid in (default BTC), a price
+# PER UNIT and an expiry. buy: name the asset or a counter number, see the
+# cheapest resting ask, then amount and price. Name the asset to skip the menu.
+# Both are the one order message underneath — same summary and y/n.
+counters wallet --name mywallet sell
+counters wallet --name mywallet sell OPUSAUDIO
+counters wallet --name mywallet buy 26
 counters wallet --name mywallet orders          # open orders + pending BTC settlements
 counters wallet --name mywallet cancel-order <txhash>   # withdraw; escrow returns
 # BTC is never escrowed: when a BTC-give order matches, the match is "pending"
@@ -282,7 +297,7 @@ counters wallet --name mywallet pay-order               # settle it (auto-picks 
 # --- swap: the market-order shape of that SAME order message ---
 # Counterparty has exactly one trade message and its compose API has no pool
 # parameters at all — nothing steers a fill to the AMM or to the book, and
-# consensus alone decides. `open-order` is the limit form (you name the price,
+# consensus alone decides. `sell`/`buy` are the limit form (you name the price,
 # it rests); `swap` is the market form: the price comes from a live AMM+book
 # quote, and --expiration defaults to 1 block so anything the market cannot
 # fill right now expires instead of resting. Both compose `order`.
@@ -363,6 +378,15 @@ counters wallet --name mywallet inscribe --file big.png --asset BIGONE --slipstr
 # counter number, and asks which. Only inscriptions still on their reveal output.
 counters wallet --name mywallet burn-ordinal-sat
 counters wallet --name mywallet burn-ordinal-sat MYCOUNTER --dry-run   # or a counter number / inscription id
+
+# --- teleburn: burn a counter you own into its own unspendable address ---
+# Every asset has one address, derived from its name, that nothing can spend from
+# (build reference §10.3). This sends the circulating supply there, then locks and
+# transfers ownership there in one issuance. Two transactions, one y/N, IRREVERSIBLE.
+# The explorer shows the counter as burned once both confirm.
+counters wallet --name mywallet teleburn MYCOUNTER --dry-run   # or a counter number
+counters wallet --name mywallet teleburn 28
+counters wallet --name mywallet teleburn 28 --partial          # units held elsewhere stay; ownership burns anyway
 
 # --- asset management (owner-sourced Counterparty issuances) ---
 counters wallet --name mywallet lock-supply MYCOUNTER         # freeze the supply
@@ -468,9 +492,9 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 >
 > Slipstream has no package endpoint, so the commit and reveal are submitted
 > individually, commit first. If the commit is accepted and the reveal is not,
-> the reveal hex is printed loudly: Counterparty signed that reveal with an
-> ephemeral key it discarded, making it the only transaction that can ever spend
-> the commit output — it cannot be re-composed, fee-bumped, or replaced.
+> the reveal hex is printed loudly: it is the only transaction prepared to spend
+> the commit output, and nothing in this tool rebuilds or re-signs one yet — it
+> cannot be fee-bumped or replaced, so keep that hex.
 
 > **Dispensers cannot be paid with a plain BTC send.** Since Counterparty's
 > `disable_vanilla_btc_dispense` (block 866,000) a payment carrying no
@@ -501,9 +525,11 @@ counters wallet --name mywallet describe --asset MYASSET --text "BURN THEM ALL" 
 > signed hex for direct submission, since no ordinary node will relay it.
 
 > **A reveal can never be replaced, and only a `counterparty/ord` one can be sped up.**
-> Counterparty signs the reveal with an ephemeral envelope key it discards, so
-> it can never be re-signed: no RBF, in either style. CPFP, however, depends on
-> the envelope. A `counterparty` reveal spends its whole input to fee and emits only
+> Since Counterparty Core v11.5.0 the reveal is signed by the source's own key
+> (`counters` exports it from Bitcoin Core for that one signature; see
+> `counters/revealsign.py`), but it is signed once, with a 64-byte
+> `SIGHASH_DEFAULT` signature, and this tool does not rebuild one: no RBF, in
+> either style. CPFP, however, depends on the envelope. A `counterparty` reveal spends its whole input to fee and emits only
 > an `OP_RETURN`, so there is no output to attach a child to. A `counterparty/ord` reveal
 > additionally carries the dust output Core adds for an ordinals envelope
 > (v11.0.0: "when using an Ordinals envelope script, add a dust output for the
@@ -637,6 +663,7 @@ counters/
   ledger.py         the same oracle questions answered from Core's ledger db, read-only (API closed while catching up)
   store.py          SQLite schema + blob store + rolling hash + reorg rollback
   tap.py            BIP340/341 primitives (address encoding for the wallet)
+  teleburn.py       the per-asset unspendable address (§10.3) and the burn verdict
   bip32.py          BIP32/BIP86 derivation (pure-Python RIPEMD160 + ecdsa)
   counterwallet.py  Counterwallet/Freewallet legacy recovery
   electrum1.py      Electrum-v1 recovery for old Counterparty seeds
@@ -648,6 +675,7 @@ counters/
     indexer.py      oracle-first pipeline + reorg rollback + run loops
   commands/         CLI command handlers
     read.py         status / info / list
+    teleburn.py     teleburn-address, and `wallet teleburn`: send supply, lock + transfer ownership
     wallet.py       create / restore / receive / balance / inscriptions
     inscribe.py     mint flow: compose via Core (encoding=taproot), sign commit, broadcast
     issue.py        lock-supply / lock-description / describe / issue (owner-sourced)
@@ -655,7 +683,8 @@ counters/
     cancel.py       abandon an unconfirmed transaction by RBF replacement
     bump.py         speed up an unconfirmed transaction by CPFP child
     dispenser.py    buy from a dispenser, and run one: open / refill / close / list
-    order.py        DEX: open-order / cancel-order / pay-order / orders
+    order.py        DEX: the order message (sell/buy), swap, cancel-order, pay-order, orders
+    market.py       sell / buy / dispense: one-shot or interactive, over order.py and dispenser.py
     serve.py        explorer + JSON API orchestration
   server/           stdlib HTTP server + the bundled explorer SPA
     app.py          routes, JSON API, per-counter Open Graph tags

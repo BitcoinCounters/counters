@@ -208,6 +208,7 @@ def test_api_and_static():
         assert c0["xcp_burned"] == 50000000
         assert c0["supply"] == 1 and c0["divisible"] is False
         assert c0["locked"] is None   # live lookup stubbed offline
+        assert c0["description_locked"] is None
         assert c0["burned"] == 100    # total destroyed, shown next to supply
         assert rec["burned"] is None  # list read BEFORE any view: no snapshot yet
         # The view persisted the asset snapshot (for the crawler-facing
@@ -535,42 +536,84 @@ def test_lists_carry_the_cached_envelope_and_original():
 
 
 def test_lists_carry_the_cached_supply_lock():
-    """`locked` in a list is what Counterparty last said, kept by the
-    background pass: null until checked, re-asked soon while unlocked (an
-    owner can lock at any moment), rarely once locked."""
+    """`locked` and `description_locked` in a list are what Counterparty last
+    said, kept by the background pass: null until checked, re-asked soon
+    while either is open (an owner can lock at any moment), rarely once both
+    are locked."""
     httpd, base = _run_server()
     try:
-        def locks():
+        def locks(field="locked"):
             recs = json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]
-            return {r["number"]: r["locked"] for r in recs}
+            return {r["number"]: r[field] for r in recs}
 
         assert locks() == {0: None, 1: None, 2: None}
+        assert locks("description_locked") == {0: None, 1: None, 2: None}
 
         class FakeCp:
-            def __init__(self, state):
+            def __init__(self, state, desc=None):
                 self.state, self.asked = state, []
+                self.desc = desc if desc is not None else {}
 
             def get_asset(self, asset):
                 self.asked.append(asset)
-                return {"locked": self.state[asset]} if asset in self.state else None
+                if asset not in self.state:
+                    return None
+                info = {"locked": self.state[asset]}
+                if asset in self.desc:
+                    info["description_locked"] = self.desc[asset]
+                return info
 
-        cp = FakeCp({"TESTASSET": False, "STAMPTEST": True})
+            def get_address_balance(self, address, asset):
+                return 0
+
+        both = {"TESTASSET": True, "STAMPTEST": True}
+        cp = FakeCp({"TESTASSET": False, "STAMPTEST": True}, both)
         assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000) == 2
         assert sorted(cp.asked) == ["STAMPTEST", "TESTASSET"]   # once per ASSET
         assert locks() == {0: False, 1: False, 2: True}          # siblings share it
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
 
         # Fresh answers are not re-asked...
-        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        cp = FakeCp(both, both)
         assert appmod.warm_locks_once(httpd.config, cp=cp, now=1000 + 60) == 0
         # ...an unlocked asset goes stale quickly, and its lock is picked up...
         assert appmod.warm_locks_once(
             httpd.config, cp=cp, now=1000 + appmod.UNLOCKED_MAX_AGE) == 1
         assert cp.asked == ["TESTASSET"]
         assert locks() == {0: True, 1: True, 2: True}
-        # ...and a locked one only after a long while.
-        cp = FakeCp({"TESTASSET": True, "STAMPTEST": True})
+        # ...and one locked both ways only after a long while.
+        cp = FakeCp(both, both)
         assert appmod.warm_locks_once(
             httpd.config, cp=cp, now=1000 + appmod.LOCKED_MAX_AGE) == 1
+        assert cp.asked == ["STAMPTEST"]
+
+        # An open description keeps a supply-locked asset on the quick cadence...
+        cp = FakeCp(both, {"TESTASSET": False, "STAMPTEST": True})
+        t = 1000 + 2 * appmod.LOCKED_MAX_AGE          # both long settled
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=t) == 2
+        assert locks("description_locked") == {0: False, 1: False, 2: True}
+        cp = FakeCp(both, both)
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=t + appmod.UNLOCKED_MAX_AGE) == 1
+        assert cp.asked == ["TESTASSET"]
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
+        # ...and an answer that leaves it out keeps what was last known, while
+        # a row that never learned it is asked again soon.
+        cp = FakeCp(both)
+        t += appmod.LOCKED_MAX_AGE + appmod.UNLOCKED_MAX_AGE
+        assert appmod.warm_locks_once(httpd.config, cp=cp, now=t) == 2
+        assert locks("description_locked") == {0: True, 1: True, 2: True}
+        store = Store(httpd.config)
+        try:
+            store.db.execute("UPDATE asset_locks SET description_locked = NULL "
+                             "WHERE asset = 'STAMPTEST'")
+            store.db.commit()
+        finally:
+            store.close()
+        assert locks("description_locked") == {0: True, 1: True, 2: None}
+        cp = FakeCp(both, both)
+        assert appmod.warm_locks_once(
+            httpd.config, cp=cp, now=t + appmod.UNLOCKED_MAX_AGE) == 1
         assert cp.asked == ["STAMPTEST"]
 
         # An asset Core does not know stays unknown rather than guessed.
@@ -705,4 +748,119 @@ def test_a_file_is_sandboxed_wherever_it_is_opened():
         assert "sandbox allow-scripts" in csp(base, "/delegate/1")        # a delegate's target
         assert "sandbox allow-scripts" not in csp(base, f"/content/{n + 1}")   # pdf
     finally:
+        httpd.shutdown()
+
+
+def test_asset_locks_gains_the_description_lock_in_place():
+    """A database from before the description lock was kept grows the column
+    on open, and its rows read as 'never learned' rather than failing."""
+    import sqlite3
+    cfg = _seed_store(tempfile.mkdtemp())
+    db = sqlite3.connect(str(cfg.db_path))
+    db.execute("DROP TABLE asset_locks")
+    db.execute("CREATE TABLE asset_locks (asset TEXT PRIMARY KEY, "
+               "locked INTEGER NOT NULL, checked_at INTEGER NOT NULL)")
+    db.execute("INSERT INTO asset_locks VALUES ('TESTASSET', 1, 1000)")
+    db.commit()
+    db.close()
+    store = Store(cfg)
+    try:
+        assert store.get_locks("TESTASSET") == (True, None)
+        assert store.get_locked("TESTASSET") is True
+        # Never learned counts as open: asked again on the quick cadence.
+        assert "TESTASSET" not in store.assets_due_lock_check(1000 + 1, 10, 10 ** 6)
+        assert "TESTASSET" in store.assets_due_lock_check(1000 + 10, 10, 10 ** 6)
+        store.set_locked("TESTASSET", True, 2000, False)
+        assert store.get_locks("TESTASSET") == (True, False)
+        store.set_locked("TESTASSET", True, 3000)          # unknown keeps it
+        assert store.get_locks("TESTASSET") == (True, False)
+    finally:
+        store.close()
+
+
+def test_icon_is_read_from_the_chain_through_this_node():
+    """§5.6: a JSON counter naming an icon inscription carries its id as
+    `icon`, and /icon/<n> serves that inscription's bytes out of the reveal
+    witness — from bitcoind, cached on disk, never from ordinals.com."""
+    from test_ordenv import envelope, tx_with
+
+    httpd, base = _run_server()
+    txid = "a21364e1e3d21bcc258a6f16b5193426077c969a1626fdd6674cd38d9a078dcd"
+    body = json.dumps({"asset": "ICONTEST", "delegate": "aa" * 32 + "i0",
+                       "images": [{"type": "icon", "size": "48x48",
+                                   "data": f"https://ordinals.com/content/{txid}i1?.png"}]}).encode()
+    store = Store(httpd.config)
+    try:
+        sha = store.store_blob(body)
+        store.add_counter(3, CounterRecord(
+            asset="ICONTEST", asset_id="999", asset_longname=None,
+            kind="issuance", content_type="application/json", content_type_raw=None,
+            content_sha256=sha, content_length=len(body), is_pointer_like=False,
+            mint_txid="ee" * 32, msg_index=0, block_index=902007,
+            cp_tx_index=5, source="bc1pstored", divisible=False, supply=1))
+        store.commit()
+    finally:
+        store.close()
+
+    calls = []
+
+    class FakeBtc:
+        def __init__(self, config):
+            pass
+
+        def get_raw_transaction(self, want, verbose=True):
+            # Other lookups (the reveal's fee, its envelope) find the node
+            # away, as the other tests do; only the icon's reveal is served.
+            if want != txid:
+                raise ConnectionError("down")
+            calls.append(want)
+            # i0 is text, i1 the PNG icon, i2 a picture too big to be one.
+            return tx_with(envelope(b"text/plain", b"zero") + envelope(b"image/gif", GIF),
+                           envelope(b"image/png", b"\x89PNG\r\n\x1a\n" + b"\0" * (1024 * 1024)))
+
+    orig = appmod.BitcoindClient
+    appmod.BitcoindClient = FakeBtc
+    try:
+        rec = json.loads(_get(base, "/counter/3")[2])
+        assert rec["icon"] == f"{txid}i1"
+        assert json.loads(_get(base, "/counter/0")[2])["icon"] is None
+        lean = {r["number"]: r["icon"] for r in
+                json.loads(_get(base, "/counters?limit=5&body=0")[2])["counters"]}
+        assert lean[3] == f"{txid}i1" and lean[2] is None
+
+        status, ctype, got = _get(base, "/icon/3")
+        assert status == 200 and ctype == "image/gif" and got == GIF
+        assert calls == [txid]
+        # Cached: the second read never asks the node.
+        status, ctype, got = _get(base, "/icon/3")
+        assert status == 200 and got == GIF and calls == [txid]
+        assert (httpd.config.icons_dir / f"{txid}i1").read_bytes() == GIF
+
+        assert _get(base, "/icon/0")[0] == 404                 # names no icon
+        assert _get(base, "/icon/999")[0] == 404
+        # The oversized picture: not an icon.
+        store = Store(httpd.config)
+        try:
+            big = body.replace(b"i1?.png", b"i2?.png")
+            sha = store.store_blob(big)
+            store.add_counter(4, CounterRecord(
+                asset="BIGICON", asset_id="998", asset_longname=None,
+                kind="issuance", content_type="application/json", content_type_raw=None,
+                content_sha256=sha, content_length=len(big), is_pointer_like=False,
+                mint_txid="ef" * 32, msg_index=0, block_index=902007,
+                cp_tx_index=6, source="bc1pstored", divisible=False, supply=1))
+            store.commit()
+        finally:
+            store.close()
+        assert _get(base, "/icon/4")[0] == 415
+
+        # The node away: 502, and nothing cached as if it were an answer.
+        class DownBtc(FakeBtc):
+            def get_raw_transaction(self, want, verbose=True):
+                raise ConnectionError("down")
+        appmod.BitcoindClient = DownBtc
+        (httpd.config.icons_dir / f"{txid}i1").unlink()
+        assert _get(base, "/icon/3")[0] == 502
+    finally:
+        appmod.BitcoindClient = orig
         httpd.shutdown()

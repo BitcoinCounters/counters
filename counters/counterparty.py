@@ -237,15 +237,22 @@ class CounterpartyClient:
         mime_type: str | None = None,
         sat_per_vbyte: float | int | None = None,
         inscription: bool = False,
+        multisig_pubkey: str | None = None,
     ) -> dict:
         """Compose an issuance and return Core's result dict.
 
         encoding="opreturn" (default) composes the classic single transaction
         (`rawtransaction`), used for lock/reissue/transfer where no new content
         rides along. encoding="taproot" composes the commit/reveal inscription
-        pair: `rawtransaction` is the UNSIGNED commit and
-        `signed_reveal_rawtransaction` the reveal, whose envelope input Core
-        signs itself with the ephemeral envelope key (build ref v3 §11).
+        pair: `rawtransaction` is the UNSIGNED commit and, since Core v11.5.0,
+        `reveal_rawtransaction` the UNSIGNED reveal, with `envelope_script`,
+        `reveal_control_block` and `reveal_pubkey` for the wallet to sign its
+        envelope leaf (see revealsign.py). `multisig_pubkey` is the source's
+        own public key (compressed or x-only hex), which Core closes the
+        envelope with; without it Core searches the source's past transactions
+        and, for a P2TR source, falls back to the output key. Older Cores
+        returned a `signed_reveal_rawtransaction` closed by a throwaway key;
+        the network ignores those reveals since block 969,320.
         `mime_type` labels the description content; binary content is passed
         as hex per Core's content encoding (§5.1).
 
@@ -281,6 +288,8 @@ class CounterpartyClient:
             params["sat_per_vbyte"] = _fee_rate_param(sat_per_vbyte)
         if transfer_destination:
             params["transfer_destination"] = transfer_destination
+        if multisig_pubkey:
+            params["multisig_pubkey"] = multisig_pubkey
         data = self._post(f"/v2/addresses/{source}/compose/issuance", params=params)
         if not data or "result" not in data:
             raise CounterpartyError(f"compose issuance failed: {data}")
@@ -713,6 +722,13 @@ class CounterpartyClient:
     def get_address_balances(self, address: str) -> list[dict]:
         """All Counterparty (XCP + asset) balances held by an address."""
         return self._paginate(f"/v2/addresses/{address}/balances")
+
+    def get_address_balance(self, address: str, asset: str) -> int:
+        """Raw units of `asset` held by `address` — 0 when it holds none
+        (Core answers an empty list, not an error). Balances attached to
+        UTXOs the address owns are summed in; they are the address's too."""
+        rows = self._paginate(f"/v2/addresses/{address}/balances/{asset}")
+        return sum(int(r.get("quantity") or 0) for r in rows or [])
 
     def get_utxo_balances(self, utxo: str) -> list[dict]:
         """Counterparty balances ATTACHED to a UTXO (v11 `attach`): spending the

@@ -317,3 +317,29 @@ def test_delegate_display_fragment():
     for edition in (0, -1, 69.0, "69", True, 10**9 + 1, None):
         body = json.dumps({"delegate": t, "edition": edition})
         assert delegate_ref(body.encode(), True) == (*ev, None), edition
+
+
+def test_icon_ref_names_the_icon_inscription():
+    """§5.6: the `images` entry of type icon, as an ordinals.com content URL
+    (every RARE.PEPE edition) or a bare inscription id. Only the id is taken;
+    the host is never part of the answer."""
+    from counters.content import icon_ref
+    txid = "a21364e1e3d21bcc258a6f16b5193426077c969a1626fdd6674cd38d9a078dcd"
+    def body(data, kind="icon"):
+        return json.dumps({"asset": "RARE.PEPE.1", "images": [
+            {"type": "standard", "data": "https://ordinals.com/content/" + "0" * 64 + "i0?.svg"},
+            {"type": kind, "size": "48x48", "data": data}]}).encode()
+    assert icon_ref(body(f"https://ordinals.com/content/{txid}i0?.png"), True) == (txid, 0)
+    assert icon_ref(body(f"https://ordinals.com/r/undelegated-content/{txid}i7"), True) == (txid, 7)
+    assert icon_ref(body(f"https://www.ordinals.com/content/{txid.upper()}i2#x"), True) == (txid, 2)
+    assert icon_ref(body(f"  {txid}i3 "), True) == (txid, 3)
+    # No icon entry, a hosted picture, or a stray shape: no icon.
+    assert icon_ref(body(f"https://ordinals.com/content/{txid}i0", kind="thumb"), True) is None
+    assert icon_ref(body("https://xcp.fun/full/MEMEBEAM"), True) is None
+    assert icon_ref(body("https://ordinals.com/inscription/" + txid + "i0"), True) is None
+    assert icon_ref(body(42), True) is None
+    assert icon_ref(json.dumps({"images": "nope"}).encode(), True) is None
+    assert icon_ref(json.dumps(["x"]).encode(), True) is None
+    assert icon_ref(b"not json", True) is None
+    assert icon_ref(body(f"{txid}i0"), False) is None               # binary content
+    assert icon_ref(b"{" + b" " * 70000 + b"}", True) is None        # over the body cap

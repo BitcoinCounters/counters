@@ -54,8 +54,11 @@ from ..config import Config
 from ..ids import format_id
 from .. import search as searchmod
 from ..content import (DELEGATE_MAX_BYTES, classify_mime_type, delegate_ref,
-                       sniff_media, decoded_image, DECODE_MAX_BYTES)
+                       icon_ref, sniff_image, sniff_media, decoded_image,
+                       DECODE_MAX_BYTES)
+from .. import ordenv
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .. import teleburn
 from ..reveal import ENVELOPE_VERSION, envelope_style
 from ..store import Store
 
@@ -329,6 +332,42 @@ def _asset_burned(config: Config, asset: str) -> int | None:
         return None
 
 
+def _sink_balance(cp, asset: str) -> int | None:
+    """Raw units of `asset` at its own teleburn address, per Counterparty;
+    None when Core is unreachable (never a false zero) or the name cannot
+    derive one."""
+    try:
+        return cp.get_address_balance(teleburn.teleburn_address(asset), asset)
+    except (CounterpartyError, ValueError):
+        return None
+
+
+def _owner_burned(owner: str | None, asset: str) -> bool | None:
+    """Whether `owner` is `asset`'s teleburn address; None when the owner is
+    unknown (Core unreachable) so a page can tell "no" from "couldn't check"."""
+    if not owner:
+        return None
+    try:
+        return teleburn.is_teleburn_address(owner, asset)
+    except ValueError:
+        return None
+
+
+def teleburn_state(asset: str, supply: int | None, locked: bool | None,
+                   owner_burned: bool | None, sink_balance: int | None) -> dict:
+    """Build ref v3 §10.3: the asset's teleburn address and its burn flags.
+    `supply_burned` means no unit circulates outside the address (Core's
+    `supply` already excludes destroyed units, so a destroy counts too);
+    `burned` is all three flags, None while any is unknown and no known one
+    is False. Display state, never indexed."""
+    try:
+        address = teleburn.teleburn_address(asset)
+    except ValueError:
+        address = None
+    return {"address": address,
+            **teleburn.burn_state(supply, locked, owner_burned, sink_balance)}
+
+
 def _block_time(config: Config, height: int) -> int | None:
     """The counter's creation time = its block's timestamp, per Counterparty
     (best-effort, like _live_asset; None if Core is unreachable)."""
@@ -389,6 +428,59 @@ def _delegate_info(store: Store, row: sqlite3.Row) -> dict | None:
         "size": target["content_length"] if target is not None else None,
         "fragment": fragment,
     }
+
+
+def _icon_id(store: Store, row: sqlite3.Row) -> str | None:
+    """The inscription id an asset-info JSON body names as its icon (§5.6),
+    `<txid>i<n>`, or None. Shape only — whether the chain holds an image
+    there is /icon/<n>'s business. Serve-time, like the delegate."""
+    ct = row["content_type"] or "text/plain"
+    if classify_mime_type(ct, row["block_index"]) != "text":
+        return None
+    if row["content_length"] > DELEGATE_MAX_BYTES:
+        return None
+    blob = store.read_blob(row["content_sha256"])
+    if blob is None:
+        return None
+    ref = icon_ref(blob, textual=True)
+    return None if ref is None else format_id(*ref)
+
+
+# An icon is a small picture by construction; anything larger is not one.
+ICON_MAX_BYTES = 1024 * 1024
+
+
+def read_icon(config: Config, icon_id: str, btc=None) -> tuple[bytes, str] | None:
+    """(bytes, mime) of the inscription `icon_id` names, from the chain
+    through this node: the reveal's witness, parsed for ord envelopes. None
+    when the inscription is not there, is not an image, or is too big to be
+    an icon. Cached on disk by id — the bytes cannot change."""
+    path = config.icons_dir / icon_id
+    try:
+        cached = path.read_bytes()
+    except OSError:
+        cached = None
+    if cached is not None:
+        mime = sniff_image(cached)
+        if mime is not None:
+            return cached, mime
+    txid, _, index = icon_id.partition("i")
+    btc = btc if btc is not None else BitcoindClient(config)
+    tx = btc.get_raw_transaction(txid, verbose=True)
+    ins = ordenv.inscription(tx, int(index))
+    if ins is None or len(ins.body) > ICON_MAX_BYTES:
+        return None
+    mime = sniff_image(ins.body)
+    if mime is None:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(ins.body)
+        tmp.replace(path)
+    except OSError:
+        log.debug("could not cache icon %s", icon_id, exc_info=True)
+    return ins.body, mime
 
 
 def _effective_row(store: Store, row: sqlite3.Row) -> sqlite3.Row:
@@ -491,6 +583,9 @@ def render_social(store: Store, row: sqlite3.Row) -> bytes:
 def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
                 with_body: bool = True) -> dict:
     stamp = _stamp_payload(store, row)
+    locked, description_locked = store.get_locks(row["asset"])
+    owner_burned, sink_balance = store.get_burn(row["asset"])
+    tb = teleburn_state(row["asset"], row["supply"], locked, owner_burned, sink_balance)
     return {
         "number": row["number"],
         # §6.1: <reveal txid>i<msg_index> — the event's on-chain identity,
@@ -508,6 +603,9 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         # §5.5: the event a delegate body names — {'id','number','content_type',
         # 'fragment'}, number None while unresolved — or null for a non-delegate.
         "delegate": _delegate_info(store, row),
+        # §5.6: the inscription id an asset-info body names as its icon, or
+        # null. /icon/<n> serves its bytes from the chain through this node.
+        "icon": _icon_id(store, row),
         # Envelope style is computed from the reveal tx (a bitcoind fetch).
         # Lists never make that fetch: they carry the cached verdict
         # (warm_envelopes fills it in the background), and null means
@@ -526,10 +624,17 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
         "rolling_hash": row["rolling_hash"],
         "supply": row["supply"],
         "divisible": (bool(row["divisible"]) if row["divisible"] is not None else None),
-        # Supply lock. Mutable, so the single-counter endpoint asks
-        # Counterparty; lists carry what was last seen (warm_locks_once keeps
-        # it fresh), null while it never has been.
-        "locked": store.get_locked(row["asset"]),
+        # Supply and description locks. Mutable, so the single-counter
+        # endpoint asks Counterparty; lists carry what was last seen
+        # (warm_locks_once keeps them fresh), null while never checked.
+        "locked": locked,
+        "description_locked": description_locked,
+        # §10.3: the asset's teleburn address and whether its ownership and
+        # supply have gone there. Live state like the locks: lists carry what
+        # was last seen, the single-counter endpoint asks Counterparty.
+        # `teleburned` repeats the verdict flat, for the facet index.
+        "teleburn": tb,
+        "teleburned": tb["burned"],
         # Total destroyed: the stored snapshot (refreshed by detail views);
         # the single-counter endpoint overlays the live number.
         "burned": row["burned"],
@@ -547,7 +652,8 @@ def record_dict(store: Store, row: sqlite3.Row, *, owner: str | None = None,
 # gzipped) and take 30 ms to build; the result is kept until what it is a
 # function of changes (Store.facets_signature).
 FACET_FIELDS = ("number", "asset", "content_type", "size", "kind", "original",
-                "is_pointer_like", "envelope", "locked", "stamp_mime", "delegate")
+                "is_pointer_like", "envelope", "locked", "stamp_mime", "teleburned",
+                "delegate")
 FACETS_MAX_AGE = 15
 
 _facets_cache: dict[str, tuple[tuple, str, bytes]] = {}   # db path -> (sig, etag, body)
@@ -629,6 +735,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(rf"/stamp/({_IDENT})", path)
             if m:
                 return self._stamp(m.group(1))
+            m = re.fullmatch(rf"/icon/({_IDENT})", path)
+            if m:
+                return self._icon(m.group(1))
             m = re.fullmatch(rf"/social/({_IDENT})\.png", path)
             if m:
                 return self._social(m.group(1))
@@ -766,13 +875,27 @@ class Handler(BaseHTTPRequestHandler):
             info = _live_asset(self.config, row["asset"])
             owner = info.get("owner") or row["source"]
             rec = record_dict(store, row, owner=owner)
+            # Teleburn state (§10.3) is read live with the locks: the owner
+            # from the asset info, the balance at the sink from Core.
+            owner_burned = _owner_burned(info.get("owner"), row["asset"])
+            sink = (_sink_balance(CounterpartyClient(self.config), row["asset"])
+                    if info else None)
             if info.get("locked") is not None:
                 rec["locked"] = bool(info["locked"])
-                store.set_locked(row["asset"], rec["locked"], int(time.time()))
+                if info.get("description_locked") is not None:
+                    rec["description_locked"] = bool(info["description_locked"])
+                store.set_locked(row["asset"], rec["locked"], int(time.time()),
+                                 rec["description_locked"], owner_burned, sink)
             if info.get("supply") is not None:
                 rec["supply"] = info["supply"]
             if info.get("divisible") is not None:
                 rec["divisible"] = bool(info["divisible"])
+            if owner_burned is not None or sink is not None:
+                rec["teleburn"] = teleburn_state(
+                    row["asset"], rec["supply"], rec["locked"],
+                    owner_burned if owner_burned is not None else rec["teleburn"]["owner_burned"],
+                    sink if sink is not None else rec["teleburn"]["sink_balance"])
+                rec["teleburned"] = rec["teleburn"]["burned"]
             live_burned = _asset_burned(self.config, row["asset"])
             if live_burned is not None:
                 rec["burned"] = live_burned
@@ -885,6 +1008,34 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, mime, raw, max_age=DERIVED_MAX_AGE, extra_headers=content_headers(mime))
         finally:
             store.close()
+
+    def _icon(self, ident: str) -> None:
+        """The icon an asset-info body names (§5.6): an ordinals inscription's
+        bytes, read from the reveal's witness through this node — never from
+        the gateway the body's URL names. Immutable once found, so cached on
+        disk and sent as such; 404 for a counter that names no icon, 415 when
+        the inscription is not a small image, 502 when the node is away."""
+        store = Store(self.config)
+        try:
+            row = store.find(ident)
+            if row is None:
+                return self._send(404, "text/plain; charset=utf-8", b"counter not found")
+            icon_id = _icon_id(store, row)
+        finally:
+            store.close()
+        if icon_id is None:
+            return self._send(404, "text/plain; charset=utf-8", b"no icon")
+        try:
+            found = read_icon(self.config, icon_id)
+        except Exception:
+            log.warning("icon %s: bitcoind unavailable", icon_id, exc_info=True)
+            return self._send(502, "text/plain; charset=utf-8", b"bitcoind unavailable")
+        if found is None:
+            return self._send(415, "text/plain; charset=utf-8",
+                              b"the inscription named is not a small image")
+        body, mime = found
+        self._send(200, mime, body, immutable=True,
+                   extra_headers=[("X-Content-Type-Options", "nosniff")])
 
     def _delegate(self, ident: str) -> None:
         """The bytes a delegate's target committed — the one-hop resolution
@@ -1248,8 +1399,10 @@ LOCKED_MAX_AGE = 86400      # a locked one stays locked; only a reorg undoes it
 
 
 def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
-    """Ask Counterparty for the supply lock of every asset whose cached state
-    is unknown or stale, and keep the answers. Returns how many were checked.
+    """Ask Counterparty for the live state of every asset whose cached state
+    is unknown or stale — the two locks, whether the owner is the teleburn
+    address, the balance at that address, and the supply it is measured
+    against — and keep the answers. Returns how many were checked.
 
     Like the envelope, this is what lets a list carry `locked` without calling
     a backend itself. Stops at the first failure: while Core is catching up it
@@ -1263,7 +1416,13 @@ def warm_locks_once(config: Config, cp=None, now: int | None = None) -> int:
             info = cp.get_asset(asset) or {}
             if info.get("locked") is None:
                 continue        # Core does not know the asset: leave it unknown
-            store.set_locked(asset, bool(info["locked"]), now)
+            desc = info.get("description_locked")
+            store.set_locked(asset, bool(info["locked"]), now,
+                             bool(desc) if desc is not None else None,
+                             _owner_burned(info.get("owner"), asset),
+                             _sink_balance(cp, asset))
+            if info.get("supply") is not None:
+                store.set_asset_snapshot(asset, info["supply"], None)
             checked += 1
         return checked
     finally:

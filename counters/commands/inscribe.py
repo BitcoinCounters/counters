@@ -3,18 +3,29 @@
 Counterparty Core does the heavy lifting: composing the issuance with
 `encoding=taproot` returns the commit/reveal pair — `rawtransaction` is the
 UNSIGNED commit (funded from the source address's coins) and
-`signed_reveal_rawtransaction` the reveal, whose envelope input Core has
-already signed with its ephemeral envelope key. Our job is only to:
+`reveal_rawtransaction` the UNSIGNED reveal, plus the `envelope_script`,
+`reveal_control_block` and `reveal_pubkey` needed to sign it. Our job is to:
 
+  0. refuse an outdated node (nodecheck.py): a Core older than the protocol
+     changes already active composes reveals the network ignores,
   1. derive the description string from the file per Core's content encoding
      (text -> UTF-8, binary -> hex; content.py mirrors the consensus rule),
   2. pick the Counterparty *source* address (it funds the commit, receives
-     the issued tokens, and pays the 0.5 XCP burn for a named asset),
+     the issued tokens, and pays the 0.5 XCP burn for a named asset) and hand
+     Core the source's own public key, which closes the envelope,
   3. have Bitcoin Core sign the commit — all inputs are segwit (the composer
      enforces this) so signing cannot change the txid the reveal commits to,
-  4. package-validate [commit, reveal] with testmempoolaccept and broadcast.
+  4. sign the reveal's envelope leaf ourselves with the source key exported
+     from Bitcoin Core (revealsign.py), and re-check the result against a
+     mirror of Core's attribution rule,
+  5. package-validate [commit, reveal] with testmempoolaccept and broadcast.
 
-Key custody stays in Bitcoin Core. There is no local envelope construction.
+Since Core v11.5.0 (`require_reveal_source_signature`, mainnet block 969,320)
+a reveal counts only when its envelope is signed by a key of the source. Core
+used to sign it with a throwaway key, and Bitcoin Core's wallet cannot sign a
+tapscript envelope at all, so step 4 is the one place this tool signs
+anything itself. Keys otherwise stay in Bitcoin Core; the source secret is
+exported for the one signature and dropped.
 
 New content on an EXISTING asset is a reinscription — a Counterparty reissuance with a fresh
 taproot-carried description (quantity 0 keeps the supply): under per-event
@@ -33,6 +44,7 @@ import sys
 import time
 from decimal import Decimal
 
+from .. import nodecheck, revealsign
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
 from ..config import RESERVED_ASSETS, Config
 from ..content import classify_mime_type, split_fragment
@@ -296,10 +308,10 @@ def _commit_child(btc: BitcoindClient, wallet: str, commit_dec: dict,
 def _stash_hex(commit_hex: str, reveal_hex: str, reveal_txid: str) -> str:
     """Write both raw transactions to disk BEFORE anything is broadcast.
 
-    The reveal cannot be re-composed: Counterparty signs it with an ephemeral
-    envelope key it discards, so the hex in memory is the only copy in
-    existence, and it is the only transaction that can ever spend the commit.
-    Printing it on the failure paths is not enough — stdout may be redirected,
+    The reveal is signed here with the source key, so in principle it could be
+    rebuilt, but nothing in this tool does that yet: the hex in memory is the
+    only ready-to-send copy, and it is the only transaction prepared to spend
+    the commit. Printing it on the failure paths is not enough — stdout may be redirected,
     a terminal may scroll, and a Ctrl-C between broadcast and submission takes
     the process down with the hex still in RAM. So it goes to a file first, and
     every later message points at that file.
@@ -373,11 +385,11 @@ def _submit_split(
     confirms.
 
     The commit still goes FIRST, and the gap after it is the same hazard as
-    ever — once it is out, the pre-signed reveal is the only transaction that
-    can ever spend its output (Counterparty signed with an ephemeral key it
-    discarded; the 0-value OP_RETURN forecloses CPFP and the 64-byte signature
-    forecloses RBF), so a reveal Slipstream will not take strands those funds
-    permanently. Every failure path prints the reveal hex.
+    ever — once it is out, the signed reveal is the only transaction prepared
+    to spend its output (the 0-value OP_RETURN forecloses CPFP and the 64-byte
+    signature forecloses RBF; re-signing with the source key is possible in
+    principle but not implemented), so a reveal Slipstream will not take
+    strands those funds. Every failure path prints the reveal hex.
 
     The new failure mode is propagation: MARA cannot accept a reveal whose
     parent its node has not seen yet, so the reveal is retried on a backoff
@@ -489,12 +501,11 @@ def _submit_via_slipstream(
 
     Slipstream has no package endpoint, so these are two independent calls and
     the gap between them is the hazard. Once the commit is accepted, the
-    pre-signed reveal is the ONLY transaction that can ever spend its output:
-    Counterparty signed it with an ephemeral key it discarded, both spend paths
-    of the commit need that key, and the reveal's single 0-value OP_RETURN
-    output makes CPFP impossible and its 64-byte signature makes RBF
-    impossible. A reveal hex lost here strands the commit's funds forever, so
-    every failure path prints it.
+    signed reveal is the only transaction prepared to spend its output: the
+    reveal's single 0-value OP_RETURN output makes CPFP impossible and its
+    64-byte signature makes RBF impossible, and although the source key could
+    re-sign a rebuilt reveal, nothing here does that yet. A reveal hex lost
+    here strands the commit's funds, so every failure path prints it.
     """
     print()
     stash = _stash_hex(commit_hex, reveal_hex, reveal_txid)
@@ -731,6 +742,11 @@ def cmd_inscribe(
     # On-chain view plus the derived window (see _wallet_addresses): XCP
     # parked on a change address, or on one that only ever received assets,
     # would otherwise look like "no XCP anywhere".
+    # Before a single satoshi moves: a node behind an active protocol change
+    # composes reveals the network ignores, and parses them as valid itself.
+    if not nodecheck.require_current_node(cp):
+        return 1
+
     wallet_addrs = set(_wallet_addresses(btc, wallet))
     try:
         spendable = _spendable_addresses(btc, wallet)
@@ -841,6 +857,17 @@ def cmd_inscribe(
               f"commit and reveal need about {need}; compose will likely fail — "
               f"{remedy}, or pass --inputs-set TXID:VOUT", file=sys.stderr)
 
+    # The envelope is closed by the source's own key, so look that key up
+    # first: Core would otherwise search the source's past transactions and,
+    # for a bc1p source it has never seen spend, fall back to the output key,
+    # which the wallet can only sign for with a tweaked secret. Handing Core
+    # the key Bitcoin Core actually holds keeps both sides on the same key.
+    try:
+        source_key = revealsign.source_pubkey(btc, wallet, source)
+    except (revealsign.RevealSignError, BitcoindError) as e:
+        print(f"cannot determine the signing key of {source}: {e}", file=sys.stderr)
+        return 1
+
     # Compose the commit/reveal pair via Counterparty Core.
     try:
         composed = compose_retrying(lambda: cp.compose_issuance(
@@ -848,6 +875,7 @@ def cmd_inscribe(
             description=description, lock=lock, encoding="taproot",
             mime_type=mime_type, sat_per_vbyte=fee_rate, inputs_set=inputs_set,
             inscription=(envelope == "counterparty/ord"),
+            multisig_pubkey=source_key.compressed.hex(),
         ), fund.funded)
     except CounterpartyError as e:
         msg = str(e)
@@ -862,15 +890,28 @@ def cmd_inscribe(
                   "funds off legacy 1... addresses first.", file=sys.stderr)
         return 1
     commit_unsigned = composed.get("rawtransaction")
-    reveal_hex = composed.get("signed_reveal_rawtransaction")
-    if not commit_unsigned or not reveal_hex:
-        print(f"compose returned no commit/reveal pair — is Counterparty Core v11+? "
-              f"keys: {sorted(composed)}", file=sys.stderr)
+    reveal_unsigned = composed.get("reveal_rawtransaction")
+    if composed.get("signed_reveal_rawtransaction") and not reveal_unsigned:
+        print("compose returned a reveal signed by the node with a throwaway key — "
+              "this Counterparty Core predates v11.5.0. The network has ignored such "
+              "reveals since block 969,320, so nothing was broadcast. Upgrade the node.",
+              file=sys.stderr)
+        return 1
+    needed = ("rawtransaction", "reveal_rawtransaction", "envelope_script",
+              "reveal_control_block", "reveal_pubkey")
+    if any(not composed.get(k) for k in needed):
+        print(f"compose returned no signable commit/reveal pair — is Counterparty Core "
+              f"v11.5+? keys: {sorted(composed)}", file=sys.stderr)
+        return 1
+    if composed["reveal_pubkey"].lower() != source_key.xonly.hex():
+        print(f"compose closed the envelope with key {composed['reveal_pubkey'][:16]}…, not "
+              f"the source's {source_key.xonly.hex()[:16]}…; refusing to sign a reveal the "
+              f"network would ignore. Nothing was broadcast.", file=sys.stderr)
         return 1
 
     # Bitcoin Core signs the commit. All composer-selected inputs are segwit,
-    # so signing cannot change the txid the pre-signed reveal spends — but
-    # verify anyway before anything is broadcast.
+    # so signing cannot change the txid the reveal spends — but verify anyway
+    # before anything is broadcast.
     unsigned_txid = btc._call("decoderawtransaction", [commit_unsigned])["txid"]
     signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [commit_unsigned])
     if not signed.get("complete"):
@@ -880,11 +921,40 @@ def cmd_inscribe(
     commit_hex = signed["hex"]
     commit_dec = btc._call("decoderawtransaction", [commit_hex])
     if commit_dec["txid"] != unsigned_txid:
-        print("internal error: commit txid changed on signing; the pre-signed "
-              "reveal would be orphaned. Nothing was broadcast.", file=sys.stderr)
+        print("internal error: commit txid changed on signing; the reveal would be "
+              "orphaned. Nothing was broadcast.", file=sys.stderr)
+        return 1
+
+    # We sign the reveal: its single input is the commit's first output, spent
+    # through the envelope leaf with the source key. Export that one key from
+    # Bitcoin Core, sign, and check the finished reveal the way Core v11.5.0
+    # will — a reveal that fails the mirror rule is never broadcast.
+    commit_out = commit_dec["vout"][0]
+    commit_value = int(round(Decimal(str(commit_out["value"])) * COIN))
+    try:
+        secret = revealsign.export_secret(btc, wallet, source_key)
+        reveal_hex, reveal_txid = revealsign.sign_reveal(
+            reveal_unsigned, commit_out["scriptPubKey"]["hex"], commit_value,
+            composed["envelope_script"], composed["reveal_control_block"],
+            composed["reveal_pubkey"], secret)
+    except (revealsign.RevealSignError, BitcoindError, ValueError) as e:
+        print(f"could not sign the reveal: {e}. Nothing was broadcast.", file=sys.stderr)
+        return 1
+    finally:
+        secret = 0
+    source_spk = bytes.fromhex(btc.wallet_call(wallet, "getaddressinfo", [source])["scriptPubKey"])
+    witness = revealsign.parse_tx(bytes.fromhex(reveal_hex)).witnesses[0]
+    rule_error = revealsign.reveal_source_error(
+        bytes.fromhex(commit_out["scriptPubKey"]["hex"]), source_spk, witness)
+    if rule_error:
+        print(f"the signed reveal would be IGNORED by Counterparty Core v11.5+ ({rule_error}). "
+              f"Nothing was broadcast.", file=sys.stderr)
         return 1
     reveal_dec = btc._call("decoderawtransaction", [reveal_hex])
-    reveal_txid = reveal_dec["txid"]
+    if reveal_dec["txid"] != reveal_txid or reveal_dec["vin"][0]["txid"] != commit_dec["txid"]:
+        print("internal error: the signed reveal does not spend the signed commit. "
+              "Nothing was broadcast.", file=sys.stderr)
+        return 1
 
     commit_fee = composed.get("btc_fee")
     child_hex, child_vsize, child_fee = None, 0, 0
@@ -943,8 +1013,7 @@ def cmd_inscribe(
 
     # Slipstream's policy caps a transaction at MAX_WEIGHT. Check it here, while
     # the only thing spent is time: past this point the commit goes on chain,
-    # and Counterparty signs the reveal with an ephemeral key it discards, so a
-    # commit whose reveal Slipstream will not accept is unrecoverable.
+    # and a commit whose reveal Slipstream will not accept is stranded.
     reveal_weight = reveal_dec.get("weight")
     if slip is not None and reveal_weight and reveal_weight > MAX_WEIGHT:
         over = reveal_weight - MAX_WEIGHT

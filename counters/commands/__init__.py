@@ -13,7 +13,12 @@ parsing and dispatch live in `counters.__main__`.
   counterparty + ord counter (the Counterparty asset is untouched)
 - dispenser.py buy-from-dispenser (and, called bare, what is for sale —
   cheapest per unit first), plus the operator side: open/refill/close/list
-- order.py     DEX: swap / open-order / cancel-order / pay-order / orders
+- order.py     DEX: swap / cancel-order / pay-order / orders, and the `order`
+  message behind `sell` and `buy`
+- market.py    sell / buy / dispense: one-shot or interactive fronts to the
+  order and dispenser messages
+- teleburn.py  teleburn-address (any asset's unspendable address) and
+  `wallet teleburn`: send the supply there, then lock + transfer ownership
 - pool.py      AMM liquidity: add-liquidity / remove-liquidity / pools
 - bump.py      CPFP-accelerate an unconfirmed transaction
 - cancel.py    RBF-abandon an unconfirmed transaction
