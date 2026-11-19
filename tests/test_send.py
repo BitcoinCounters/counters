@@ -313,6 +313,104 @@ def test_send_btc_retries_with_a_change_type_the_wallet_has():
         _restore(orig)
 
 
+class _FloorBtcWallet(_FakeBtcWallet):
+    """bitcoind's wallet: `send` refuses anything under -mintxfee (1 sat/vB),
+    but it signs, and the node relays, whatever it is handed raw."""
+
+    change = True
+    fee = 0.00000141
+    raw = None
+    broadcast = None
+
+    def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+        if method == "send" and params[3] is not None and params[3] < 1.0:
+            raise S.BitcoindError(
+                f"bitcoind RPC error for send: Fee rate ({params[3]:.3f} sat/vB) is "
+                f"lower than the minimum fee rate setting (1.000 sat/vB)")
+        if method == "listdescriptors":
+            return {"descriptors": [
+                {"desc": "tr(xpub.../1/*)", "active": True, "internal": True}]}
+        if method == "walletcreatefundedpsbt":
+            self.built = params
+            return {"psbt": "psbt", "fee": self.fee,
+                    "changepos": 0 if self.change else -1}
+        if method == "getrawchangeaddress":
+            assert params == ["bech32m"]
+            return "bc1pnewchange"
+        if method == "signrawtransactionwithwallet":
+            return {"complete": True, "hex": "signed" + params[0]}
+        return super().wallet_call(wallet, method, params, timeout)
+
+    def _call(self, method, params=None):
+        if method == "decodepsbt":
+            vout = [{"value": 0.0005, "scriptPubKey": {"address": "bc1pchange"}},
+                    {"value": 0.005871, "scriptPubKey": {"address": DEST}}]
+            return {"tx": {"locktime": 0, "vout": vout if self.change else vout[1:],
+                           "vin": [{"txid": "bb" * 32, "vout": 0,
+                                    "sequence": 4294967293}]}}
+        if method == "createrawtransaction":
+            self.raw = params
+            return "raw"
+        if method == "sendrawtransaction":
+            self.broadcast = params[0]
+            return "undertxid"
+        return super()._call(method, params)
+
+
+def test_send_btc_under_the_wallet_fee_floor(capsys):
+    btc = _FloorBtcWallet()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "btc", "0.005871", fee_rate=0.2)
+        assert rc == 0
+        assert btc.built[3] == {"change_type": "bech32m", "fee_rate": 1.0}
+        # 141 sat at the floor -> ceil(141 * 0.2) = 29; change takes the 112 back
+        assert btc.raw[1] == [{"bc1pchange": "0.00050112"}, {DEST: "0.005871"}]
+        assert btc.broadcast == "signedraw"
+        assert "broadcast: undertxid" in capsys.readouterr().out
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_under_the_floor_dry_run_does_not_broadcast():
+    btc = _FloorBtcWallet()
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "btc", "0.005871", fee_rate=0.2,
+                        dry_run=True)
+        assert rc == 0 and btc.broadcast is None and btc.raw is not None
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_under_the_floor_makes_its_own_change_when_it_is_worth_one():
+    btc = _FloorBtcWallet()
+    btc.change = False
+    btc.fee = 0.00002000          # the wallet left 2000 sat to the fee
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "btc", "0.005871", fee_rate=0.2)
+        assert rc == 0
+        # 2000 -> 400 at 0.2, less ceil(43 * 0.2) = 9 for the output itself
+        assert btc.raw[1] == [{DEST: "0.005871"}, {"bc1pnewchange": "0.00001591"}]
+        assert btc.broadcast == "signedraw"
+    finally:
+        _restore(orig)
+
+
+def test_send_btc_under_the_floor_without_change_goes_as_laid_out(capsys):
+    btc = _FloorBtcWallet()
+    btc.change = False            # 141 sat of fee: nothing worth a change output
+    orig = _patch(btc, _FakeCp({}, {}), [])
+    try:
+        rc = S.cmd_send(Config(), "me", DEST, "btc", "0.005871", fee_rate=0.2)
+        assert rc == 0 and btc.raw[1] == [{DEST: "0.005871"}]
+        assert btc.broadcast == "signedraw"
+        assert "pays 141 sat" in capsys.readouterr().out
+    finally:
+        _restore(orig)
+
+
 def test_send_btc_rejects_bad_destination():
     btc = _FakeBtcWallet()
     orig = _patch(btc, _FakeCp({}, {}), [])
