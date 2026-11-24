@@ -82,13 +82,21 @@ CREATE TABLE IF NOT EXISTS envelopes (
     version   INTEGER NOT NULL
 );
 
--- Serve-time DERIVED cache, not index data: whether an asset's SUPPLY is
--- locked, as Counterparty last reported it. Live state — an owner can lock
--- at any time — so every row carries when it was checked and is re-asked.
+-- Serve-time DERIVED cache, not index data: an asset's LIVE STATE as
+-- Counterparty last reported it — whether its SUPPLY and its DESCRIPTION are
+-- locked, and the two inputs of its teleburn state (build ref v3 §10.3):
+-- whether its owner is its teleburn address, and how much of it sits at
+-- that address. All of it can change at any time (an owner can lock, burn,
+-- or transfer; anyone can send to the sink), so every row carries when it
+-- was checked and is re-asked. A column is NULL until first learned (rows
+-- written before it existed).
 CREATE TABLE IF NOT EXISTS asset_locks (
-    asset      TEXT    PRIMARY KEY,
-    locked     INTEGER NOT NULL,
-    checked_at INTEGER NOT NULL
+    asset              TEXT    PRIMARY KEY,
+    locked             INTEGER NOT NULL,
+    description_locked INTEGER,
+    owner_burned       INTEGER,
+    sink_balance       INTEGER,
+    checked_at         INTEGER NOT NULL
 );
 """
 
@@ -142,6 +150,10 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(counters)")}
         if "burned" not in cols:
             self.db.execute("ALTER TABLE counters ADD COLUMN burned INTEGER")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(asset_locks)")}
+        for col in ("description_locked", "owner_burned", "sink_balance"):
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE asset_locks ADD COLUMN {col} INTEGER")
 
     def close(self) -> None:
         self.db.close()
@@ -374,35 +386,79 @@ class Store:
 
     # --- supply-lock cache (derived, serve-time) -----------------------------
 
+    def get_locks(self, asset: str) -> tuple[bool | None, bool | None]:
+        """(supply locked, description locked) as last checked; each None
+        while it never has been — the description lock also for a row kept
+        before it was recorded."""
+        row = self.db.execute(
+            "SELECT locked, description_locked FROM asset_locks WHERE asset = ?",
+            (asset,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        desc = row["description_locked"]
+        return bool(row["locked"]), (bool(desc) if desc is not None else None)
+
     def get_locked(self, asset: str) -> bool | None:
         """Whether the asset's supply was locked when last checked; None if
         it never has been."""
-        row = self.db.execute(
-            "SELECT locked FROM asset_locks WHERE asset = ?", (asset,)
-        ).fetchone()
-        return bool(row["locked"]) if row else None
+        return self.get_locks(asset)[0]
 
-    def set_locked(self, asset: str, locked: bool, now: int) -> None:
+    def get_burn(self, asset: str) -> tuple[bool | None, int | None]:
+        """(owner is the teleburn address, raw units held there) as last
+        checked; each None while never learned."""
+        row = self.db.execute(
+            "SELECT owner_burned, sink_balance FROM asset_locks WHERE asset = ?",
+            (asset,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        ob = row["owner_burned"]
+        return (bool(ob) if ob is not None else None), row["sink_balance"]
+
+    def set_locked(self, asset: str, locked: bool, now: int,
+                   description_locked: bool | None = None,
+                   owner_burned: bool | None = None,
+                   sink_balance: int | None = None) -> None:
+        """Keep the live state as Counterparty just reported it. Anything
+        unknown (None) leaves whatever was last known in place."""
+        desc = int(description_locked) if description_locked is not None else None
+        ob = int(owner_burned) if owner_burned is not None else None
         self.db.execute(
-            "INSERT INTO asset_locks (asset, locked, checked_at) VALUES (?, ?, ?) "
+            "INSERT INTO asset_locks (asset, locked, description_locked, owner_burned, "
+            "                         sink_balance, checked_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(asset) DO UPDATE SET locked = excluded.locked, "
+            "description_locked = COALESCE(excluded.description_locked, "
+            "                              asset_locks.description_locked), "
+            "owner_burned = COALESCE(excluded.owner_burned, asset_locks.owner_burned), "
+            "sink_balance = COALESCE(excluded.sink_balance, asset_locks.sink_balance), "
             "checked_at = excluded.checked_at",
-            (asset, int(locked), now),
+            (asset, int(locked), desc, ob, sink_balance, now),
         )
         self.db.commit()
 
     def assets_due_lock_check(self, now: int, unlocked_age: int,
                               locked_age: int, limit: int = 2000) -> list[str]:
-        """Assets carrying a counter whose lock state is unknown or stale,
-        never-checked first. An unlocked asset can be locked at any moment, so
-        it goes stale quickly; a locked one stays locked, and is re-asked only
-        rarely (a reorg is the one thing that can take a lock back)."""
+        """Assets carrying a counter whose live state is unknown or stale,
+        never-checked first. An open lock — supply or description — can be
+        closed at any moment, so the asset goes stale quickly; one with both
+        locked stays that way, and is re-asked only rarely (a reorg is the one
+        thing that can take a lock back). A fully teleburned asset (owner is
+        the sink and every unit is there) is settled the same way: without
+        an owner nothing can be issued or described again. A column never
+        recorded (a row from before it was kept) counts as open, so it is
+        learned soon. A locked asset that is later burned shows it in lists
+        within a day, and at once on its own page, which reads live."""
         return [r["asset"] for r in self.db.execute(
-            "SELECT c.asset AS asset, MIN(c.number) AS n, l.checked_at AS t "
+            "SELECT c.asset AS asset, MIN(c.number) AS n, l.checked_at AS t, "
+            "       ((l.locked = 1 AND l.description_locked = 1) "
+            "        OR (l.owner_burned = 1 AND c.supply IS NOT NULL "
+            "            AND l.sink_balance >= c.supply)) AS settled "
             "FROM counters c LEFT JOIN asset_locks l ON l.asset = c.asset "
             "WHERE l.asset IS NULL "
-            "   OR (l.locked = 0 AND l.checked_at <= ?) "
-            "   OR (l.locked = 1 AND l.checked_at <= ?) "
+            "   OR (settled IS NOT 1 AND l.checked_at <= ?) "
+            "   OR (settled = 1 AND l.checked_at <= ?) "
             "GROUP BY c.asset ORDER BY (t IS NOT NULL), t, n LIMIT ?",
             (now - unlocked_age, now - locked_age, limit),
         )]
@@ -508,10 +564,14 @@ class Store:
             "SELECT COUNT(*) AS c FROM envelopes WHERE version = ?", (envelope_version,)
         ).fetchone()["c"]
         lock = self.db.execute(
-            "SELECT COUNT(*) AS c, COALESCE(SUM(locked), 0) AS s FROM asset_locks"
+            "SELECT COUNT(*) AS c, COALESCE(SUM(locked), 0) AS s, "
+            "       COALESCE(SUM(owner_burned), 0) AS ob, COALESCE(SUM(sink_balance), 0) AS sb "
+            "FROM asset_locks"
         ).fetchone()
+        supply = self.db.execute(
+            "SELECT COALESCE(SUM(supply), 0) AS s FROM counters").fetchone()["s"]
         return (self.count(), self.last_rolling_hash().hex(), envelope_version,
-                env, lock["c"], lock["s"])
+                env, lock["c"], lock["s"], lock["ob"], lock["sb"], supply)
 
     def list_recent(self, limit: int = 20) -> list[sqlite3.Row]:
         return self.db.execute(

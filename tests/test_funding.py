@@ -216,17 +216,30 @@ def test_wallet_fee_floor_is_read_off_the_error():
 
 
 class _FloorBtc:
-    """Refuses any `send` below `floor` sat/vB, the way bitcoind's wallet does."""
+    """Refuses any `send` below `floor` sat/vB, the way bitcoind's wallet does,
+    but builds, signs and relays whatever it is handed raw. `change` says
+    whether the transaction it lays out has a change output."""
 
-    def __init__(self, floor: float = 1.0):
+    def __init__(self, floor: float = 1.0, change: bool = True):
         self.floor = floor
+        self.change = change
         self.attempts = []
+        self.built = None         # walletcreatefundedpsbt params
+        self.raw = None           # createrawtransaction params
+        self.broadcast = None
 
     def wallet_call(self, wallet, method, params=None, timeout=-1.0):
         if method == "listdescriptors":
             return {"descriptors": []}
         if method == "listunspent":
             return []
+        if method == "walletcreatefundedpsbt":
+            self.built = params
+            assert params[3]["fee_rate"] >= self.floor
+            return {"psbt": "psbt", "fee": 0.00000141,
+                    "changepos": 1 if self.change else -1}
+        if method == "signrawtransactionwithwallet":
+            return {"complete": True, "hex": "signed" + params[0]}
         assert method == "send"
         rate = params[3]
         self.attempts.append(rate)
@@ -236,11 +249,64 @@ class _FloorBtc:
                 f"than the minimum fee rate setting ({self.floor:.3f} sat/vB)")
         return {"txid": "fundtxid"}
 
+    def _call(self, method, params=None):
+        if method == "decodepsbt":
+            vout = [{"value": 0.00022993, "scriptPubKey": {"address": SRC}}]
+            if self.change:
+                vout.append({"value": 0.001, "scriptPubKey": {"address": "bc1pchange"}})
+            return {"tx": {"locktime": 7, "vout": vout, "vin": [
+                {"txid": "aa" * 32, "vout": 3, "sequence": 4294967293}]}}
+        if method == "createrawtransaction":
+            self.raw = params
+            return "raw"
+        if method == "sendrawtransaction":
+            self.broadcast = params[0]
+            return "undertxid"
+        raise AssertionError(f"unexpected _call {method}")
 
-def test_funding_retries_at_the_floor_when_the_wallet_refuses_the_rate(capsys):
+
+def test_funding_goes_under_the_floor_by_returning_the_difference_to_change():
     btc = _FloorBtc()
-    txid = _fund_source(btc, "w", SRC, 22993, None, 0.4)
-    assert txid == "fundtxid"
+    assert _fund_source(btc, "w", SRC, 22993, None, 0.4) == "undertxid"
+    assert btc.attempts == [0.4]             # asked once; never paid the floor
+    assert btc.built[3]["fee_rate"] == 1.0   # laid out at the floor...
+    vins, vouts, locktime = btc.raw
+    # ...then 141 sat of fee becomes ceil(141 * 0.4) = 57, and change gets the 84
+    assert vouts == [{SRC: "0.00022993"}, {"bc1pchange": "0.00100084"}]
+    assert vins == [{"txid": "aa" * 32, "vout": 3, "sequence": 4294967293}]
+    assert locktime == 7
+    assert btc.broadcast == "signedraw"
+
+
+def test_funding_without_change_goes_as_the_wallet_laid_it_out(capsys):
+    btc = _FloorBtc(change=False)
+    assert _fund_source(btc, "w", SRC, 22993, None, 0.4) == "undertxid"
+    assert btc.attempts == [0.4] and btc.raw[1] == [{SRC: "0.00022993"}]
+    assert "pays 141 sat" in capsys.readouterr().out
+
+
+def test_funding_retries_at_the_floor_when_it_cannot_go_under(capsys):
+    class _NoBuilder(_FloorBtc):
+        def wallet_call(self, wallet, method, params=None, timeout=-1.0):
+            if method == "walletcreatefundedpsbt":
+                raise BitcoindError("bitcoind RPC error: Method not found")
+            return super().wallet_call(wallet, method, params, timeout)
+
+    btc = _NoBuilder()
+    assert _fund_source(btc, "w", SRC, 22993, None, 0.4) == "fundtxid"
+    assert btc.attempts == [0.4, 1.0]
+
+
+def test_funding_pays_the_floor_when_the_layout_cannot_be_rebuilt(capsys):
+    class _OpReturn(_FloorBtc):
+        def _call(self, method, params=None):
+            out = super()._call(method, params)
+            if method == "decodepsbt":
+                out["tx"]["vout"][0]["scriptPubKey"] = {"type": "nulldata"}
+            return out
+
+    btc = _OpReturn()
+    assert _fund_source(btc, "w", SRC, 22993, None, 0.4) == "fundtxid"
     assert btc.attempts == [0.4, 1.0]        # asked for 0.4, funded at the floor
     out = capsys.readouterr().out
     assert "-mintxfee" in out and "still goes at 0.4 sat/vB" in out

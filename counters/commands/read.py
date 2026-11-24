@@ -17,6 +17,7 @@ from ..bitcoind import BitcoindClient, BitcoindError
 from ..config import Config
 from ..content import DECODE_MAX_BYTES, classify_mime_type, decoded_image
 from ..counterparty import CounterpartyClient, CounterpartyError
+from .. import teleburn
 from ..ids import format_id, parse_id
 from ..ledger import CounterpartyLedger
 from ..reveal import commit_txid, envelope_style
@@ -180,6 +181,7 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         record["fee"] = fee
         record["tx_size"] = tx_size
         record["locked"] = info.get("locked")
+        record["teleburn"] = _teleburn_address(row["asset"])
         print(json.dumps(record, indent=2))
         return 0
 
@@ -269,6 +271,9 @@ def _counter_info(config: Config, store: Store, row: sqlite3.Row,
         # Addresses, txids, and hashes last — long opaque strings that bury
         # the readable facts when interleaved above.
         print(f"source       : {row['source']}")
+        tb = _teleburn_address(row["asset"])
+        if tb:
+            print(f"teleburn     : {tb}")
         if commit:
             print(f"commit_txid  : {commit}")
         print(f"reveal_txid  : {row['mint_txid']}"
@@ -315,6 +320,18 @@ def _asset_info(config: Config, store: Store, name: str,
         except CounterpartyError:
             pass
 
+    # §10.3: the asset's teleburn address and whether it has gone there.
+    tb_address = _teleburn_address(asset)
+    tb = None
+    if tb_address:
+        sink = None
+        try:
+            sink = CounterpartyClient(config).get_address_balance(tb_address, asset)
+        except CounterpartyError:
+            pass
+        tb = teleburn.burn_state(
+            supply, locked, teleburn.is_teleburn_address(owner, asset) if owner else None, sink)
+
     numbers = [r["number"] for r in rows]
     total_size = sum(r["content_length"] for r in rows)
     fees = [_ensure_fee(config, store, r) for r in rows]
@@ -334,6 +351,7 @@ def _asset_info(config: Config, store: Store, name: str,
             "locked": locked,
             "holders": holders,
             "owner": owner,
+            "teleburn": ({"address": tb_address, **tb} if tb else None),
             "counters": numbers,
             "counter_count": len(numbers),
             "total_size": total_size if rows else None,
@@ -360,6 +378,12 @@ def _asset_info(config: Config, store: Store, name: str,
         print(f"divisible    : {'yes' if divisible else 'no'}")
     if locked is not None:
         print(f"locked       : {'yes' if locked else 'no'}")
+    if tb:
+        yn = lambda v: "unknown" if v is None else ("yes" if v else "no")  # noqa: E731
+        verdict = "yes" if tb["burned"] else (
+            f"{yn(tb['burned'])} (owner {yn(tb['owner_burned'])} · supply "
+            f"{yn(tb['supply_burned'])} · locked {yn(locked)})")
+        print(f"teleburned   : {verdict}")
     if rows:
         print(f"total size   : {total_size:,} bytes")
         xcp = f" + {total_xcp / 1e8:g} XCP" if total_xcp else ""
@@ -370,10 +394,20 @@ def _asset_info(config: Config, store: Store, name: str,
     if detailed:
         print(f"asset_id     : {asset_id}")
         print(f"owner        : {owner}")
+        if tb_address:
+            print(f"teleburn     : {tb_address}")
         _market_sections(config, asset, bool(divisible))
     return 0
 
 
+
+
+def _teleburn_address(asset: str) -> str | None:
+    """The asset's teleburn address, or None for a name that cannot have one."""
+    try:
+        return teleburn.teleburn_address(asset)
+    except ValueError:
+        return None
 
 
 def _fmt_dec(x: float) -> str:

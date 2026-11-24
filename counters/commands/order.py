@@ -292,7 +292,7 @@ def cmd_swap(
 ) -> int:
     """A market order: sell a fixed amount at whatever the market pays now.
 
-    This composes the SAME `order` message as `open-order` — Counterparty has
+    This composes the SAME `order` message as `sell`/`buy` — Counterparty has
     only one trade message, and `compose/order` has no way to prefer the AMM
     pool over the book or the other way round. Consensus alone decides where
     the fill comes from. The difference is entirely in how the order is shaped:
@@ -313,7 +313,7 @@ def cmd_swap(
             print("swap cannot trade BTC: an AMM pool never holds BTC, and a "
                   "BTC leg on the book is not settled by the order at all — it "
                   "needs the counterparty to `pay-order` within ~20 blocks. "
-                  "Use `open-order` for BTC.", file=sys.stderr)
+                  "Use `sell` or `buy` for BTC.", file=sys.stderr)
             return 1
 
     give = _resolve_order_asset(cp, give_asset)
@@ -342,13 +342,13 @@ def cmd_swap(
               file=sys.stderr)
         return 1
 
-    # A market order has no price of its own, so unlike open-order a missing
+    # A market order has no price of its own, so unlike sell/buy a missing
     # quote is fatal: there would be nothing to set the limit from.
     market = _market_quote(cp, give_asset, get_asset, give_raw)
     estimated = int((market or {}).get("estimated_output") or 0)
     if not market or estimated <= 0:
         print(f"no live market for {give_asset} -> {get_asset}: neither an AMM "
-              f"pool nor a resting order would fill this. Use `open-order` to "
+              f"pool nor a resting order would fill this. Use `sell` or `buy` to "
               f"post a limit order and wait.", file=sys.stderr)
         return 1
 

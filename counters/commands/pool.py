@@ -5,7 +5,7 @@ A pool is a constant-product reserve pair (`asset_a`/`asset_b`) with its own
 reserves. Depositing mints LP tokens; withdrawing burns them and returns both
 assets pro rata. Trading against a pool is not done here at all — a pool fill
 is an ordinary DEX order that consensus routes to the pool, so it lives in
-`order.py` (`swap` and `open-order`).
+`order.py` (`swap`, `sell` and `buy`).
 
 Three things about the protocol shape every command below:
 
@@ -63,7 +63,7 @@ def _resolve_pool_asset(cp, name: str):
     Counterparty balance to escrow, so it can never sit in a pool."""
     if name.upper() == "BTC":
         print("pools hold Counterparty assets only — BTC can never be pooled. "
-              "Trade BTC on the order book with `open-order`.", file=sys.stderr)
+              "Trade BTC on the order book with `sell` or `buy`.", file=sys.stderr)
         return None
     info = cp.get_asset(name) or cp.get_asset(name.upper())
     if not info:

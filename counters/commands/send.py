@@ -245,19 +245,37 @@ def cmd_send_btc(
             wallet, "send", [{destination: _fmt_btc(want)}, None, "unset", fee_rate, opts]
         )
 
+    from .funding import _wallet_fee_floor, send_under_floor   # local: funding imports us
+
     try:
         result = _send(options)
     except BitcoindError as e:
-        # Core builds change at the node's -changetype, which fails outright on
-        # a wallet with no descriptor of that type (e.g. a taproot-only wallet
-        # on a node running addresstype=legacy). Retry with a type the wallet
-        # can actually derive.
-        change_type = _change_type(btc, wallet) if "change address" in str(e) else None
-        if not change_type:
-            raise
-        print(f"  change    : {change_type} (the node's default change type is not "
-              f"in this wallet)")
-        result = _send({**options, "change_type": change_type})
+        floor = _wallet_fee_floor(e)
+        if floor is not None and fee_rate is not None and fee_rate < floor:
+            # -mintxfee is the wallet builder's floor, not a relay rule: build
+            # at the floor, hand the difference back to change, broadcast raw.
+            change_type = _change_type(btc, wallet)
+            result = send_under_floor(
+                btc, wallet, {destination: _fmt_btc(want)}, fee_rate, floor,
+                {"change_type": change_type} if change_type else {},
+                broadcast=not dry_run)
+            if result is None:
+                print(f"error: bitcoind's wallet will not build a transaction under "
+                      f"{floor} sat/vB (-mintxfee), and the one it lays out is not one "
+                      f"this command can rebuild at {fee_rate}. Set mintxfee in "
+                      f"bitcoin.conf to go lower.", file=sys.stderr)
+                return 1
+        else:
+            # Core builds change at the node's -changetype, which fails outright
+            # on a wallet with no descriptor of that type (e.g. a taproot-only
+            # wallet on a node running addresstype=legacy). Retry with a type
+            # the wallet can actually derive.
+            change_type = _change_type(btc, wallet) if "change address" in str(e) else None
+            if not change_type:
+                raise
+            print(f"  change    : {change_type} (the node's default change type is not "
+                  f"in this wallet)")
+            result = _send({**options, "change_type": change_type})
 
     if dry_run:
         tx_hex = result.get("hex")

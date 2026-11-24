@@ -250,3 +250,84 @@ def first_address(seed: bytes, kind: str, *, change: int = 0, index: int = 0) ->
     node, _ = _account_node(seed, purpose)
     child = node.ckd_priv(change).ckd_priv(index)
     return address_from_pubkey(kind, _ser_pubkey(child.secret))
+
+
+# --- Reading keys back out of Bitcoin Core -----------------------------------
+#
+# The wallet's descriptors (`listdescriptors true`) carry the account xprv that
+# `account_descriptors()` wrote in. revealsign.py walks that back to the one
+# child key an inscription reveal must be signed with, because Bitcoin Core
+# cannot sign an envelope leaf itself. Nothing below touches the network or
+# the disk; it is parsing and arithmetic over strings Core already handed over.
+
+def _b58decode_check(s: str) -> bytes:
+    num = 0
+    for ch in s:
+        idx = _B58_ALPHABET.find(ch)
+        if idx < 0:
+            raise ValueError("invalid base58 character")
+        num = num * 58 + idx
+    raw = num.to_bytes((num.bit_length() + 7) // 8, "big") if num else b""
+    pad = len(s) - len(s.lstrip(_B58_ALPHABET[0]))
+    raw = b"\x00" * pad + raw
+    payload, chk = raw[:-4], raw[-4:]
+    if hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4] != chk:
+        raise ValueError("bad base58 checksum")
+    return payload
+
+
+def node_from_xprv(xprv: str) -> _Node:
+    """Parse a serialized BIP32 private extended key (mainnet or testnet)."""
+    payload = _b58decode_check(xprv)
+    if len(payload) != 78:
+        raise ValueError("extended key must be 78 bytes")
+    if payload[:4] not in (_XPRV_VERSION, bytes.fromhex("04358394")):  # xprv / tprv
+        raise ValueError("not a private extended key")
+    depth = payload[4]
+    parent_fp = payload[5:9]
+    child_number = struct.unpack(">L", payload[9:13])[0]
+    chain = payload[13:45]
+    if payload[45] != 0:
+        raise ValueError("malformed private key field")
+    secret = int.from_bytes(payload[46:78], "big")
+    if not 0 < secret < int(_CURVE_ORDER):
+        raise ValueError("secret out of range")
+    return _Node(secret, chain, depth, parent_fp, child_number)
+
+
+def parse_path(path: str) -> list[int]:
+    """'m/86h/0h/0h/0/5', \"86'/0'\" or '/0/5' -> child indexes (hardened |= 2^31)."""
+    out = []
+    for part in path.strip().split("/"):
+        if part in ("", "m", "M"):
+            continue
+        hardened = part[-1] in "h'H"
+        num = int(part[:-1] if hardened else part)
+        if num < 0 or num >= _HARDENED:
+            raise ValueError(f"bad path component {part!r}")
+        out.append(num + (_HARDENED if hardened else 0))
+    return out
+
+
+def derive(node: _Node, indexes: list[int]) -> _Node:
+    for index in indexes:
+        node = node.ckd_priv(index)
+    return node
+
+
+def wif_to_secret(wif: str) -> int:
+    """Decode a WIF private key (compressed or not); the secret scalar."""
+    payload = _b58decode_check(wif)
+    if payload[0] not in (0x80, 0xEF) or len(payload) not in (33, 34):
+        raise ValueError("not a WIF private key")
+    if len(payload) == 34 and payload[-1] != 0x01:
+        raise ValueError("malformed WIF suffix")
+    secret = int.from_bytes(payload[1:33], "big")
+    if not 0 < secret < int(_CURVE_ORDER):
+        raise ValueError("secret out of range")
+    return secret
+
+
+def pubkey_from_secret(secret: int) -> bytes:
+    """Compressed SEC pubkey (33 bytes) of a secret scalar."""
+    return _ser_pubkey(secret)

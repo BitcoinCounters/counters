@@ -22,8 +22,9 @@ best-effort, never a guarantee. Nothing here can undo a CONFIRMED transaction.
 
 Only wallet-funded transactions can be cancelled: replacing one means re-signing
 its inputs. An inscription's reveal is not cancellable on its own — its input is
-the commit's envelope output, signed with an ephemeral key Counterparty Core
-holds, not this wallet. Cancel the commit instead; the reveal dies with it.
+the commit's envelope output, a tapscript spend Bitcoin Core's wallet cannot
+re-sign (revealsign.py signs it with the exported source key, and only for a
+fresh inscription). Cancel the commit instead; the reveal dies with it.
 """
 
 from __future__ import annotations
@@ -239,9 +240,9 @@ def _replace(btc, wallet: str, tx: dict, fee_rate: float | None,
     if not probe.get("complete"):
         print(f"cannot re-sign {tx['txid']}: this wallet does not hold the keys for "
               f"all of its inputs.", file=sys.stderr)
-        print("hint: an inscription's reveal is signed with Counterparty's ephemeral "
-              "envelope key. Cancel its commit instead — the reveal dies with it.",
-              file=sys.stderr)
+        print("hint: an inscription's reveal spends the commit's envelope output, which "
+              "Bitcoin Core cannot re-sign. Cancel its commit instead — the reveal dies "
+              "with it.", file=sys.stderr)
         return 1
     vsize = btc._call("decoderawtransaction", [probe["hex"]])["vsize"]
 

@@ -168,8 +168,8 @@ def cmd_lock_description(config: Config, wallet: str, asset: str,
     # A description lock is a zero-quantity issuance whose description is the
     # literal "LOCK_DESCRIPTION": Counterparty keeps the CURRENT description and
     # sets description_locked, so the image/metadata reference can never change.
-    # (The asset API doesn't expose description_locked, so a double-lock is left
-    # for Counterparty to reject — "Cannot update a locked description".)
+    # (A double-lock is left for Counterparty to reject — "Cannot update a
+    # locked description".)
     divisible = bool(info.get("divisible"))
     fund = ensure_funded(btc, cp, wallet, owner, fee_rate=fee_rate,
                          fund_from=fund_from, no_fund=no_fund, dry_run=dry_run)

@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import sys
 import time
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from typing import Callable, NamedTuple
 
 from ..bitcoind import COIN, BitcoindClient, BitcoindError
@@ -49,6 +49,8 @@ TYPICAL_VSIZE = 250
 # mines below it happily, and the inscription itself never goes through the
 # wallet builder — Counterparty composes it and we broadcast the raw hex. Only
 # the top-up is built by the wallet, so only the top-up is bound by the floor.
+_CHANGE_VSIZE = 43         # a taproot output, the largest change we would add
+_CHANGE_MIN_SAT = 546      # not worth a change output below this
 _FEE_FLOOR_RE = re.compile(
     r"lower than the minimum fee rate setting \(([0-9]*\.?[0-9]+) sat/vB\)")
 
@@ -58,6 +60,83 @@ def _wallet_fee_floor(error: object) -> float | None:
     off its error message; None when the failure was something else."""
     match = _FEE_FLOOR_RE.search(str(error))
     return float(match.group(1)) if match else None
+
+
+def send_under_floor(btc: BitcoindClient, wallet: str, outputs: dict,
+                     fee_rate: float, floor: float, options: dict | None = None,
+                     broadcast: bool = True) -> dict | None:
+    """Pay `outputs` at `fee_rate` sat/vB when the wallet builder insists on
+    `floor`.
+
+    The floor (-mintxfee) binds only the wallet's transaction *builder*; its
+    signer and the node's relay take whatever they are handed. So let the
+    wallet pick coins and lay the transaction out at the floor, give the fee
+    it would have overpaid back to the change output, then sign and broadcast
+    the result as a raw transaction. Relay still enforces -minrelaytxfee, and
+    says so if `fee_rate` is under it.
+
+    Returns {"txid": ...} when broadcast, {"hex": ...} when not, shaped like
+    the `send` RPC's answer — or None when the transaction is not one we know
+    how to rebuild, so the caller can decide what to do.
+    `options` are `send` options; the ones the builder shares are passed on.
+    """
+    opts = {k: v for k, v in (options or {}).items()
+            if k in ("add_inputs", "change_type", "include_unsafe")}
+    opts["fee_rate"] = floor
+    inputs = (options or {}).get("inputs") or []
+    built = btc.wallet_call(wallet, "walletcreatefundedpsbt",
+                            [inputs, [outputs], 0, opts])
+    change_pos = built.get("changepos", -1)
+    has_change = change_pos is not None and change_pos >= 0
+    tx = btc._call("decodepsbt", [built["psbt"]])["tx"]
+
+    floor_fee = int((Decimal(str(built["fee"])) * COIN).to_integral_value())
+    rate = Decimal(str(fee_rate))
+    want_fee = int((Decimal(floor_fee) * rate
+                    / Decimal(str(floor))).to_integral_value(rounding=ROUND_CEILING))
+    refund = floor_fee - want_fee
+
+    vouts = []
+    for i, out in enumerate(tx["vout"]):
+        address = (out.get("scriptPubKey") or {}).get("address")
+        if not address:
+            return None                       # not a layout we know how to rebuild
+        sats = int((Decimal(str(out["value"])) * COIN).to_integral_value())
+        if has_change and i == change_pos:
+            sats += refund
+        vouts.append({address: format(Decimal(sats) / COIN, "f")})
+
+    if not has_change:
+        # The wallet found coins that fit without change and left the remainder
+        # to the fee. Give ourselves a change output if what comes back is
+        # worth one; otherwise the transaction goes as laid out.
+        refund -= int((_CHANGE_VSIZE * rate).to_integral_value(rounding=ROUND_CEILING))
+        address = None
+        if refund >= _CHANGE_MIN_SAT:
+            try:
+                address = btc.wallet_call(
+                    wallet, "getrawchangeaddress",
+                    [opts["change_type"]] if opts.get("change_type") else [])
+            except BitcoindError:
+                address = None
+        if address:
+            vouts.append({address: format(Decimal(refund) / COIN, "f")})
+        else:
+            print(f"  bitcoind's wallet will not build a transaction under {floor} sat/vB "
+                  f"(-mintxfee) and the coins it chose leave no change worth making, "
+                  f"so this one pays {floor_fee} sat rather than about {want_fee}.")
+
+    vins = [{"txid": i["txid"], "vout": i["vout"], "sequence": i["sequence"]}
+            for i in tx["vin"]]
+    raw = btc._call("createrawtransaction", [vins, vouts, tx.get("locktime", 0)])
+
+    signed = btc.wallet_call(wallet, "signrawtransactionwithwallet", [raw])
+    if not signed.get("complete"):
+        raise BitcoindError(f"the wallet could not sign the transaction: "
+                            f"{signed.get('errors')}")
+    if not broadcast:
+        return {"complete": True, "hex": signed["hex"]}
+    return {"complete": True, "txid": btc._call("sendrawtransaction", [signed["hex"]])}
 
 
 def unsafe_sats(btc: BitcoindClient, wallet: str) -> int:
@@ -95,15 +174,15 @@ def _relax_send(error: object, params: list, options: dict, btc: BitcoindClient,
     message = str(error)
 
     # 1. Fee floor: -mintxfee (default 1 sat/vB) is wallet policy, not a relay
-    #    rule, and binds only this transaction — the message being paid for
-    #    keeps the rate the user asked for.
+    #    rule. _fund_source goes under it first (send_under_floor); this is
+    #    what is left when that cannot be done — pay the floor on the top-up
+    #    alone, the message being paid for keeps the rate the user asked for.
     floor = _wallet_fee_floor(error)
     if floor is not None and fee_rate is not None and floor > fee_rate and params[3] != floor:
         print(f"  bitcoind's wallet will not build a transaction under {floor} sat/vB "
               f"(-mintxfee, wallet policy — not a relay rule), so the {amount} sat "
               f"top-up goes at {floor} instead of {fee_rate}. Everything after it "
-              f"still goes at {fee_rate} sat/vB. Set mintxfee in bitcoin.conf to "
-              f"fund at the lower rate too.")
+              f"still goes at {fee_rate} sat/vB.")
         params[3] = floor
         return True
 
@@ -197,14 +276,36 @@ def _fund_source(btc: BitcoindClient, wallet: str, source: str, amount: int,
     # (see _relax_send), announced; two at most, since there are two rules.
     params = [{source: _fmt_btc(Decimal(amount) / COIN)}, None, "unset", fee_rate, options]
     result = None
-    for _ in range(3):
+    under = False                 # already tried building beneath the floor
+    for _ in range(4):
         try:
             result = btc.wallet_call(wallet, "send", params)
             break
         except BitcoindError as e:
+            floor = _wallet_fee_floor(e)
+            if (not under and floor is not None and fee_rate is not None
+                    and fee_rate < floor):
+                # The wallet's builder will not go under -mintxfee; build at
+                # the floor and return the difference to change instead.
+                under = True
+                try:
+                    result = send_under_floor(btc, wallet, params[0], fee_rate,
+                                              floor, options)
+                except BitcoindError as e2:
+                    result = None
+                    # A refusal with its own answer (untrusted coins) gets it;
+                    # anything else falls back to paying the floor.
+                    if _relax_send(e2, params, options, btc, wallet, amount, fee_rate):
+                        under = False
+                        continue
+                else:
+                    if result is not None:
+                        break
             if not _relax_send(e, params, options, btc, wallet, amount, fee_rate):
                 print(f"funding the source failed: {e}", file=sys.stderr)
                 return None
+            if _wallet_fee_floor(e) is None:
+                under = False     # a different rule gave way: the floor gets its try again
     if result is None:
         print("funding the source failed: bitcoind kept refusing the transaction",
               file=sys.stderr)
