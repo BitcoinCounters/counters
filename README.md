@@ -560,6 +560,7 @@ What `og:image` points at depends on the content:
 | a JPEG, PNG or GIF under 300 KB, and either 600 px or more on its short side or animated | `/content/<n>` (or `/stamp/<n>` for a stamp): the file itself, untouched, so animated GIFs keep animating |
 | any other raster image or stamp: too big, too small, or WebP | `/social/<n>.png`: the same picture, shrunk to fit 1200 px and 300 KB (PNG, or JPEG when a photo needs it), or scaled up by whole pixels past 600 px so chat apps use their full-width layout and pixel art stays sharp |
 | an SVG | `/social/<n>.png`: the SVG rendered with its long side at 1200 px, unless it runs scripts, embeds HTML or points outside itself |
+| an HTML page up to 1 MB that carries a picture inline as a base64 `data:` URI: a `<video poster>`, else the first `<img>` at least 200 px on its short side | `/social/<n>.png`: that picture, handled like any other raster image, so a film or a player previews as its poster frame rather than as source code |
 | anything else, including an SVG that won't render that way | `/social/<n>.png`: a rendered 1200x630 card |
 
 The card carries what the detail page shows: the content itself on the left

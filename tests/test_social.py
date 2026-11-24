@@ -271,6 +271,10 @@ STAMP_TEXT = b"STAMP:" + __import__("base64").b64encode(SMALL_GIF)
 ANIM_GIF = _animated_gif(40, 40)
 BIG_STAMP = b"STAMP:" + __import__("base64").b64encode(ANIM_GIF)
 FIT_JPEG = _image("JPEG", 700, 700)
+POSTER_JPEG = _image("JPEG", 720, 600)
+HTML_POSTER = (
+    b'<!doctype html><title>film</title><video controls poster="data:image/jpeg;base64,'
+    + __import__("base64").b64encode(POSTER_JPEG) + b'"></video>')
 
 
 def _seed(data_dir: str) -> Config:
@@ -288,6 +292,8 @@ def _seed(data_dir: str) -> Config:
         ("ANIMGIF", "image/gif", ANIM_GIF, False),
         ("FITJPEG", "image/jpeg", FIT_JPEG, False),
         ("ANIMSTAMP", "text/plain", BIG_STAMP, False),
+        ("HTMLPOSTER", "text/html", HTML_POSTER, False),
+        ("HTMLPLAIN", "text/html", b"<!doctype html><p>hello</p>", False),
     ]
     for n, (asset, ctype, content, pointer) in enumerate(rows):
         sha = store.store_blob(content)
@@ -497,3 +503,63 @@ def test_card_badges_name_the_envelope():
             "is_pointer_like": False, "original": True, "supply": 1,
             "divisible": False, "sha256": "00" * 32, "body": "hi"}
     assert _decode(card.render(info))[:2] == (card.WIDTH, card.HEIGHT)
+
+
+# --- the picture an HTML counter carries inline ---------------------------
+
+def _data_uri(blob: bytes, mime: str) -> str:
+    import base64
+    return f"data:{mime};base64,{base64.b64encode(blob).decode()}"
+
+
+def test_html_video_poster_is_its_picture():
+    poster = _image("JPEG", 720, 600)
+    icon = _image("PNG", 32, 32)
+    html = (f'<!doctype html><title>t</title><img src="{_data_uri(icon, "image/png")}">'
+            f'<video id="v" controls poster="{_data_uri(poster, "image/jpeg")}">'
+            f'</video>').encode()
+    assert picture.embedded(html) == (poster, "image/jpeg")
+
+
+def test_html_falls_back_to_a_sizeable_img():
+    icon = _image("PNG", 32, 32)
+    art = _image("PNG", 300, 240)
+    html = (f"<img src='{_data_uri(icon, 'image/png')}'>"
+            f"<IMG alt=x SRC='{_data_uri(art, 'image/png')}'>").encode()
+    assert picture.embedded(html) == (art, "image/png")
+
+
+def test_html_without_a_usable_picture_has_none():
+    icon = _image("PNG", 32, 32)
+    for html in (
+        b"<!doctype html><p>hello</p>",
+        f'<img src="{_data_uri(icon, "image/png")}">'.encode(),
+        b'<img src="https://example.com/a.png"><video poster="/content/1">',
+        b'<img src="data:image/png;base64,AAAA">',
+        b'<img src="data:image/svg+xml;base64,PHN2Zy8+">',
+    ):
+        assert picture.embedded(html) is None
+    big = b"<p>" + b"x" * picture.MAX_HTML_BYTES + \
+        f'<img src="{_data_uri(_image("PNG", 300, 300), "image/png")}">'.encode()
+    assert picture.embedded(big) is None
+
+
+def test_html_counter_previews_as_its_inline_picture():
+    httpd, cfg, base = _run_server()
+    try:
+        tags = _og(base, 9)             # HTML with a video poster
+        assert _path(tags["og:image"]) == "/social/9.png"
+        # Its size depends on the picture, so the card's is not claimed.
+        assert "og:image:width" not in tags
+        status, ctype, body = _get(base, "/social/9.png")
+        assert status == 200 and ctype in ("image/png", "image/jpeg")
+        assert _decode(body)[:2] == (720, 600)
+        assert len(body) <= picture.MAX_BYTES
+
+        tags = _og(base, 10)            # HTML with no picture: the card
+        assert tags["og:image:width"] == str(card.WIDTH)
+        status, ctype, body = _get(base, "/social/10.png")
+        assert status == 200 and _decode(body)[:2] == (card.WIDTH, card.HEIGHT)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -556,16 +556,30 @@ def _card_info(store: Store, row: sqlite3.Row) -> dict:
 
 
 def _picture_source(store: Store, row: sqlite3.Row) -> tuple[bytes, str] | None:
-    """(bytes, type) of the picture a counter is — a raster image, an SVG, or
-    a stamp's decoded image — or None when its content is not a picture."""
+    """(bytes, type) of the picture a counter is — a raster image, an SVG, a
+    stamp's decoded image, or the picture an HTML page carries inline — or
+    None when its content has no picture."""
     stamp = _stamp_payload(store, row)
     if stamp:
         return stamp
     ct = _served_type(store, row)
+    if picture.is_html(ct):
+        return _embedded_picture(store, row, ct)
     if not (_is_raster(ct) or picture.is_svg(ct)):
         return None
     blob = store.read_blob(row["content_sha256"])
     return (blob, ct) if blob is not None else None
+
+
+def _embedded_picture(store: Store, row: sqlite3.Row,
+                      ct: str) -> tuple[bytes, str] | None:
+    """(bytes, type) of the picture an HTML counter carries inline (a video
+    poster or an <img>, as a `data:` URI), or None. The size check comes
+    first so a large page is never read off disk just to be searched."""
+    if not picture.is_html(ct) or row["content_length"] > picture.MAX_HTML_BYTES:
+        return None
+    blob = store.read_blob(row["content_sha256"])
+    return picture.embedded(blob) if blob is not None else None
 
 
 def render_social(store: Store, row: sqlite3.Row) -> bytes:
@@ -1241,6 +1255,10 @@ class Handler(BaseHTTPRequestHandler):
                         image = f"{base}/social/{n}.png"
                 elif picture.is_svg(ct):
                     # Rasterized there, or a card if it scripts its own art.
+                    image = f"{base}/social/{n}.png"
+                elif _embedded_picture(store, eff, ct):
+                    # An HTML page with its picture inline (a player's
+                    # poster frame): /social serves that picture.
                     image = f"{base}/social/{n}.png"
                 else:
                     # Text, pointers, HTML, audio, binary: a rendered card
