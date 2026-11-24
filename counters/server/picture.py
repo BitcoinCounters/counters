@@ -16,11 +16,13 @@ a request.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import re
 
 # Bump on any change that alters the output, so cached images are rebuilt.
-VERSION = 1
+VERSION = 2
 
 # WhatsApp is the strictest mainstream crawler about bytes.
 MAX_BYTES = 300 * 1024
@@ -51,6 +53,50 @@ _HREF_RE = re.compile(rb"""href\s*=\s*(["'])(.*?)\1""", re.IGNORECASE | re.DOTAL
 # would render an empty frame or a loading screen instead of the picture.
 # An entity could build an href this check never sees.
 _SVG_DECLINE_RE = re.compile(rb"<\s*(?:script|foreignObject)\b|<!ENTITY", re.IGNORECASE)
+
+
+# An HTML counter often carries its own picture inline: a player's poster
+# frame, or the image the page is built around. A crawler can't run the page,
+# but it can be handed that picture. HTML past this size is not searched (the
+# counter gets its card), which also bounds what a page view has to read.
+MAX_HTML_BYTES = 1024 * 1024
+# Smaller than this on its short side, an inline image is an icon or a
+# bullet, not what the page is about.
+EMBEDDED_MIN = 200
+_DATA_IMAGE = (rb"""\s*=\s*(["'])\s*data:(image/(?:jpeg|png|gif|webp))"""
+               rb""";base64,([A-Za-z0-9+/=\s]+)\1""")
+# A <video poster> is the frame the author chose to stand for the page, so it
+# is preferred over any <img>.
+_EMBEDDED_RES = (
+    re.compile(rb"<video\b[^>]*?\bposter" + _DATA_IMAGE, re.IGNORECASE),
+    re.compile(rb"<img\b[^>]*?\bsrc" + _DATA_IMAGE, re.IGNORECASE),
+)
+
+
+def is_html(ctype: str) -> bool:
+    return ctype.split(";")[0].strip().lower() == "text/html"
+
+
+def embedded(blob: bytes) -> tuple[bytes, str] | None:
+    """(bytes, type) of the picture an HTML document carries inline as a
+    base64 `data:` URI — a video's poster, else the first sizeable <img> — or
+    None when it has none. Only the document's own bytes are read: nothing is
+    fetched, and no script is run."""
+    if len(blob) > MAX_HTML_BYTES:
+        return None
+    for pattern in _EMBEDDED_RES:
+        for m in pattern.finditer(blob):
+            try:
+                data = base64.b64decode(m.group(3), validate=False)
+            except (binascii.Error, ValueError):
+                continue
+            dims = dimensions(data)
+            if dims is None or min(dims[0], dims[1]) < EMBEDDED_MIN:
+                continue
+            if dims[0] * dims[1] > MAX_PIXELS:
+                continue
+            return data, m.group(2).decode("ascii").lower()
+    return None
 
 
 def is_svg(ctype: str) -> bool:
